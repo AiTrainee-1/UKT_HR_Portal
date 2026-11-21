@@ -23,6 +23,22 @@ export type KindKey =
   | "resignation"
   | "advance";
 
+/** Every kind the page knows, for checking a `?kind=` from the address before it is sent to the server. */
+export const KIND_KEYS = [
+  "leave",
+  "permission",
+  "casual_leave",
+  "missing_punch",
+  "on_duty",
+  "on_duty_punch",
+  "outpass",
+  "request",
+  "attendance_correction",
+  "holiday_work",
+  "resignation",
+  "advance",
+] as const satisfies readonly KindKey[];
+
 /** quick: Approve / Reject here. notes: HR sets a status and notes here. link: the decision needs its own page. */
 export type DecideMode = "quick" | "notes" | "link";
 export type Access = "view" | "edit";
@@ -49,6 +65,16 @@ export type HubDecision = {
   comment: string | null;
 };
 
+/** The date (or range) a request is FOR (2026-11-21): `label` says what it is ("Requested date", "Last working day",
+ *  "Deduct from" ...), `note` adds the time or part of the day, `precision` "month" for an advance's deduction month. */
+export type HubRequested = {
+  from: string;
+  to: string | null;
+  note: string | null;
+  label: string;
+  precision: "day" | "month";
+};
+
 export type HubItem = {
   key: string;
   kind: KindKey;
@@ -57,6 +83,10 @@ export type HubItem = {
   label: string;
   summary: string;
   reason: string | null;
+  /** What the reason is called on this kind ("Reason", "Description", "Purpose"); an older server sends none. */
+  reasonLabel?: string;
+  /** The date(s) the request is for; null when it is not for a date (a general request), absent on an older server. */
+  requested?: HubRequested | null;
   date: string | null;
   details: { label: string; value: string }[];
   status: RequestStatus;
@@ -109,9 +139,17 @@ export type HubOptions = {
 export type HubResponse = {
   kinds: HubKind[];
   stats: HubStats;
+  /** One page of the list (the server filters, sorts and pages it since 2026-11-21). */
   items: HubItem[];
   limit: number;
   options: HubOptions;
+  page: number;
+  pageSize: number;
+  /** Every request that matches the tab, the filters and the search, over all pages. */
+  total: number;
+  pages: number;
+  /** The request a link asked to open (`focus=`), whatever page or filter it is on; null when none or not found. */
+  focusItem: HubItem | null;
 };
 
 export const EMPTY_STATS: HubStats = {
@@ -140,12 +178,18 @@ const withDeepLink = (kind: HubKind): HubKind => {
 
 /** The response with every list present, whatever an older or partial backend left out. */
 export function normalizeHub(raw: Partial<HubResponse> | null | undefined): HubResponse {
+  const items = raw?.items ?? [];
   return {
     kinds: (raw?.kinds ?? []).map(withDeepLink),
     stats: { ...EMPTY_STATS, ...(raw?.stats ?? {}) },
-    items: raw?.items ?? [],
+    items,
     limit: raw?.limit ?? 0,
     options: { branches: raw?.options?.branches ?? [], departments: raw?.options?.departments ?? [] },
+    page: raw?.page ?? 1,
+    pageSize: raw?.pageSize ?? items.length,
+    total: raw?.total ?? items.length,
+    pages: raw?.pages ?? 1,
+    focusItem: raw?.focusItem ?? null,
   };
 }
 
@@ -246,10 +290,26 @@ export function periodRange(period: Period, now: Date, from = "", to = ""): { si
   return {};
 }
 
-/** The query string the server filters on. Search, the tab, the order and "waiting for HR / HOD" are the page's own. */
-export function serverParams(f: Filters, now: Date): Record<string, string> {
-  const params: Record<string, string> = { kind: "all" };
-  if (f.status === "waiting" || f.status === "waiting_hr" || f.status === "waiting_hod") params.status = "waiting";
+/** Which page of which tab the list shows (2026-11-21: the server pages the list). */
+export type PageView = { tab: string; page: number; pageSize: number };
+
+/** Rows per page HR can pick, and the first one. */
+export const PAGE_SIZES = [25, 50, 100] as const;
+export const DEFAULT_PAGE_SIZE = 25;
+
+/** The most one export asks the server for (backend EXPORT_MAX). */
+export const EXPORT_MAX = 5000;
+
+/**
+ * The query string the server filters on. With a `view` (the page since 2026-11-21) the server also searches, narrows to
+ * the tab and to "waiting for HR / HOD", sorts and pages; without one it returns the whole period as before.
+ */
+export function serverParams(f: Filters, now: Date, view?: PageView): Record<string, string> {
+  const params: Record<string, string> = { kind: view && view.tab !== "all" ? view.tab : "all" };
+  if (view) {
+    if (f.status !== "any") params.status = f.status;
+  } else if (f.status === "waiting" || f.status === "waiting_hr" || f.status === "waiting_hod")
+    params.status = "waiting";
   else if (f.status !== "any") params.status = f.status;
   const { since, until } = periodRange(f.period, now, f.from, f.to);
   if (since) params.since = since;
@@ -257,7 +317,94 @@ export function serverParams(f: Filters, now: Date): Record<string, string> {
   if (f.branch !== "all") params.branchId = f.branch;
   if (f.department !== "all") params.departmentId = f.department;
   if (f.type !== "all") params.employeeType = f.type;
+  if (view) {
+    const q = f.query.trim().replace(/\s+/g, " ");
+    if (q) params.q = q;
+    if (view.tab === "request" && f.requestType !== "all") params.requestType = f.requestType;
+    params.sort = f.sort;
+    params.page = String(Math.max(1, view.page));
+    params.pageSize = String(view.pageSize);
+  }
   return params;
+}
+
+/** The same filters for an export: every matching request in one call (up to EXPORT_MAX), not one page. */
+export function exportParams(params: Record<string, string>): Record<string, string> {
+  const { focus: _focus, ...rest } = params;
+  return { ...rest, page: "1", pageSize: String(EXPORT_MAX), export: "1" };
+}
+
+/** "Showing 26-50 of 212": the first and last row number of this page (0-0 when there is nothing). */
+export function pageRange(page: number, pageSize: number, total: number): { first: number; last: number } {
+  if (total <= 0) return { first: 0, last: 0 };
+  const first = (Math.max(1, page) - 1) * pageSize + 1;
+  return { first: Math.min(first, total), last: Math.min(total, first + pageSize - 1) };
+}
+
+/** The page buttons to draw: the first, the last and the ones around the current page, "gap" where pages are skipped. */
+export function pageButtons(page: number, pages: number): (number | "gap")[] {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const wanted = new Set([1, pages, page - 1, page, page + 1]);
+  if (page <= 3) [2, 3, 4].forEach((n) => wanted.add(n));
+  if (page >= pages - 2) [pages - 3, pages - 2, pages - 1].forEach((n) => wanted.add(n));
+  const sorted = [...wanted].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+  const out: (number | "gap")[] = [];
+  sorted.forEach((n, i) => {
+    if (i > 0 && n - sorted[i - 1] > 1) out.push("gap");
+    out.push(n);
+  });
+  return out;
+}
+
+// ─── request date, requested date(s), reason, timestamp (owner brief 2026-11-21) ──────────────────────────────────
+
+const DAY_FORMAT: Intl.DateTimeFormatOptions = { day: "numeric", month: "short", year: "numeric" };
+
+/** A YYYY-MM-DD date as "20 Nov 2026" (read as a local day, never shifted by the time zone). */
+export function dayText(ymd: string | null | undefined): string {
+  if (!ymd) return "";
+  const [y, m, d] = ymd.slice(0, 10).split("-").map(Number);
+  if (!y || !m || !d) return ymd;
+  return new Date(y, m - 1, d).toLocaleDateString("en-IN", DAY_FORMAT);
+}
+
+/** The date(s) the request is for, as the page shows them: "20 Nov 2026 to 22 Nov 2026 · 3 days", "Nov 2026". */
+export function requestedText(item: Pick<HubItem, "requested">): string | null {
+  const r = item.requested;
+  if (!r?.from) return null;
+  if (r.precision === "month") {
+    const [y, m] = r.from.split("-").map(Number);
+    return new Date(y, (m || 1) - 1, 1).toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+  }
+  const span = r.to && r.to !== r.from ? `${dayText(r.from)} to ${dayText(r.to)}` : dayText(r.from);
+  return r.note ? `${span} · ${r.note}` : span;
+}
+
+/** What the requested date is called on this request ("Requested date", "Last working day", "Deduct from" ...). */
+export const requestedLabel = (item: Pick<HubItem, "requested">): string => item.requested?.label ?? "Requested date";
+
+/** The day the employee submitted the request: "21 Nov 2026". */
+export const requestDayText = (iso: string | null | undefined): string =>
+  iso ? new Date(iso).toLocaleDateString("en-IN", DAY_FORMAT) : "";
+
+/** The exact moment it was submitted: "21 Nov 2026, 9:50:08 am". */
+export const submittedText = (iso: string | null | undefined): string =>
+  iso
+    ? new Date(iso).toLocaleString("en-IN", {
+        ...DAY_FORMAT,
+        hour: "numeric",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: true,
+      })
+    : "";
+
+/** What the reason is called, and a plain line when the request type has none. */
+export const reasonLabel = (item: Pick<HubItem, "reasonLabel">): string => item.reasonLabel || "Reason";
+export function reasonMissingText(item: Pick<HubItem, "kind">): string {
+  return item.kind === "on_duty" || item.kind === "on_duty_punch"
+    ? "Not asked on this type of request"
+    : "The employee gave no reason";
 }
 
 /** A custom range that ends before it starts is not a range: the page says so instead of showing an empty list. */
@@ -484,9 +631,11 @@ export const EXPORT_HEADERS = [
   "Department",
   "Branch",
   "Employee type",
+  "Request date",
+  "Requested date(s)",
   "Details",
   "Reason",
-  "Submitted",
+  "Submitted at",
   "Status",
   "Waiting for",
   "Decided by",
@@ -494,7 +643,23 @@ export const EXPORT_HEADERS = [
   "Decision note",
 ];
 
-const stamp = (iso: string | null | undefined) => (iso ? iso.slice(0, 16).replace("T", " ") : "");
+/** A moment as local "YYYY-MM-DD HH:MM" (`seconds`: ":SS" too); the server sends UTC, HR reads factory time. */
+function stamp(iso: string | null | undefined, seconds = false): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const time = `${two(d.getHours())}:${two(d.getMinutes())}${seconds ? `:${two(d.getSeconds())}` : ""}`;
+  return `${dayStamp(d)} ${time}`;
+}
+
+/** The requested date(s) for a sheet: "2026-11-20 to 2026-11-22 · 3 days", "2026-11" for a month. */
+function requestedCell(item: HubItem): string {
+  const r = item.requested;
+  if (!r?.from) return "";
+  if (r.precision === "month") return r.from.slice(0, 7);
+  const span = r.to && r.to !== r.from ? `${r.from} to ${r.to}` : r.from;
+  return r.note ? `${span} · ${r.note}` : span;
+}
 
 /** One row per request, in the columns above, as plain text (so a CSV and a sheet agree). */
 export function exportRows(items: HubItem[], kindLabels: Record<string, string> = {}): string[][] {
@@ -506,9 +671,11 @@ export function exportRows(items: HubItem[], kindLabels: Record<string, string> 
     i.employee.department ?? "",
     i.employee.branch ?? "",
     i.employee.type === "production" ? "Production" : "Staff",
+    i.submittedAt ? stamp(i.submittedAt).slice(0, 10) : "",
+    requestedCell(i),
     i.summary,
     i.reason ?? "",
-    stamp(i.submittedAt),
+    stamp(i.submittedAt, true),
     statusChip(i).label,
     waitingLine(i) ?? "",
     i.decided?.by ?? "",

@@ -71,6 +71,7 @@ MODULES = {
     "approvals": "Approvals",
     "hod": "Department Heads",
     "geo": "Geo Attendance",
+    "geo_alerts": "On-Duty tracking alerts",
     "visitors": "Visitors",
     "outpass": "Outpass & Gate",
     "other": "Other",
@@ -120,6 +121,7 @@ _KIND_OF_MODULE = {
     "approvals": KIND_REQUESTED,
     "hod": KIND_AUTOMATIC,
     "geo": KIND_REQUESTED,
+    "geo_alerts": KIND_AUTOMATIC,
     "visitors": KIND_AUTOMATIC,
     "outpass": KIND_AUTOMATIC,
 }
@@ -166,6 +168,9 @@ class MessageType:
     meta_template: str = ""
     meta_header: str = ""
     meta_category: str = "UTILITY"
+    # The Department Head copy of another type (the On-Duty tracking alerts, 2026-11-21): it follows that type's switch
+    # (`switch` names the same column) and is never a switch of its own on WhatsApp Control.
+    escalation_of: str = ""
 
     @property
     def variable_names(self) -> list[str]:
@@ -756,6 +761,287 @@ _add(
     ),
 )
 
+# ── On-Duty tracking alerts (2026-11-21, geo_tracking/alerts.py) ───────────────
+# Raised by the geo-tracking watchdog while an On-Duty track records: the employee is told what to fix, and when it is
+# still not fixed after the grace period (Geo Attendance -> Settings) their Department Head is told too (the *_hod copy,
+# which follows the same switch). Each kind has ONE switch here, off until HR turns it on (its two Meta templates must be
+# approved first). The phone notification of the same alert is Phone Notify Control's own.
+
+_add(
+    key="geo_location_off",
+    label="Location Turned Off Alert",
+    module="geo_alerts",
+    switch="geo_location_off_enabled",
+    fresh_minutes=30,
+    description=(
+        "Tells an employee on On-Duty that their phone's location was turned off, so their route is not recorded. Their "
+        "Department Head is told too when it stays off past the grace period."
+    ),
+    body=(
+        "*Location Turned Off*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your phone's location was turned off at {{since}} while you are On-Duty ({{destination}}).\n"
+        "Please turn Location back on now so that your On-Duty route is recorded.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("since", "When location went off", "10:05 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+        V("date", "Today's date", "21 Nov 2026"),
+    ),
+)
+_add(
+    key="geo_location_off_hod",
+    label="Location Turned Off (to Department Head)",
+    module="geo_alerts",
+    switch="geo_location_off_enabled",
+    escalation_of="geo_location_off",
+    fresh_minutes=60,
+    description="Tells the employee's Department Head that location is still off after the employee was alerted.",
+    body=(
+        "*On-Duty Alert: Location Off*\n\n"
+        "Dear {{hod_name}},\n"
+        "The phone location of {{employee_name}} ({{employee_code}}) has been off since {{since}} during On-Duty "
+        "({{destination}}).\n"
+        "They were alerted at {{alerted_at}} and have not turned it back on yet.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "The employee on duty", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("since", "When location went off", "10:05 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+        V("alerted_at", "When the employee was alerted", "10:08 AM"),
+    ),
+)
+_add(
+    key="geo_permission_restricted",
+    label="Background Location Permission Alert",
+    module="geo_alerts",
+    switch="geo_permission_restricted_enabled",
+    fresh_minutes=30,
+    description=(
+        "Tells an employee on On-Duty that the app's location permission is not 'Allow all the time', so the route "
+        "cannot be recorded in the background. Their Department Head is told too when it is not fixed in time."
+    ),
+    body=(
+        "*Allow Location All the Time*\n\n"
+        "Dear {{employee_name}},\n"
+        'The location permission of the UK Textiles app on your phone is "{{permission}}", so your On-Duty route '
+        "cannot be recorded in the background.\n"
+        'Please open Settings > Apps > UK Textiles > Permissions > Location and choose "Allow all the time".\n\n'
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("permission", "The permission the phone has now", "Only while using the app"),
+        V("since", "When it was noticed", "10:05 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+    ),
+)
+_add(
+    key="geo_permission_restricted_hod",
+    label="Background Location Permission (to Department Head)",
+    module="geo_alerts",
+    switch="geo_permission_restricted_enabled",
+    escalation_of="geo_permission_restricted",
+    fresh_minutes=60,
+    description="Tells the employee's Department Head that the location permission is still restricted.",
+    body=(
+        "*On-Duty Alert: Location Permission*\n\n"
+        "Dear {{hod_name}},\n"
+        "The UK Textiles app on the phone of {{employee_name}} ({{employee_code}}) has the location permission "
+        '"{{permission}}" instead of "Allow all the time" since {{since}}, so their On-Duty route is not fully '
+        "recorded.\n"
+        "They were alerted at {{alerted_at}} and have not changed it yet.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "The employee on duty", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("permission", "The permission the phone has now", "Only while using the app"),
+        V("since", "When it was noticed", "10:05 AM"),
+        V("alerted_at", "When the employee was alerted", "10:08 AM"),
+    ),
+)
+_add(
+    key="geo_background_restricted",
+    label="Background App Restriction Alert",
+    module="geo_alerts",
+    switch="geo_background_restricted_enabled",
+    fresh_minutes=30,
+    description=(
+        "Tells an employee on On-Duty that their phone restricts the app in the background (background use restricted, "
+        "or battery optimisation on), so the route may stop recording. Their Department Head is told too when it is "
+        "not fixed in time."
+    ),
+    body=(
+        "*Let the App Run in the Background*\n\n"
+        "Dear {{employee_name}},\n"
+        "Your phone is limiting the UK Textiles app in the background ({{restriction}}), so your On-Duty route may stop "
+        "recording.\n"
+        'Please open Settings > Apps > UK Textiles > Battery and choose "Unrestricted" (no battery optimisation).\n\n'
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("restriction", "What the phone restricts", "battery optimisation is on"),
+        V("since", "When it was noticed", "10:05 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+    ),
+)
+_add(
+    key="geo_background_restricted_hod",
+    label="Background App Restriction (to Department Head)",
+    module="geo_alerts",
+    switch="geo_background_restricted_enabled",
+    escalation_of="geo_background_restricted",
+    fresh_minutes=60,
+    description="Tells the employee's Department Head that the phone still restricts the app in the background.",
+    body=(
+        "*On-Duty Alert: App Restricted*\n\n"
+        "Dear {{hod_name}},\n"
+        "The phone of {{employee_name}} ({{employee_code}}) has been limiting the UK Textiles app in the background "
+        "({{restriction}}) since {{since}}, so their On-Duty route may not be recorded.\n"
+        "They were alerted at {{alerted_at}} and have not changed it yet.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "The employee on duty", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("restriction", "What the phone restricts", "battery optimisation is on"),
+        V("since", "When it was noticed", "10:05 AM"),
+        V("alerted_at", "When the employee was alerted", "10:08 AM"),
+    ),
+)
+_add(
+    key="geo_missing_punch",
+    label="Missing Geo-Punch Alert",
+    module="geo_alerts",
+    switch="geo_missing_punch_enabled",
+    fresh_minutes=60,
+    description=(
+        "Tells an employee on On-Duty that a Geo-Punch is missing: none since the duty started (after the set wait), or "
+        "fewer than the day's 4 punches at the end of the duty day. Their Department Head is told too when it is still "
+        "missing after the grace period."
+    ),
+    body=(
+        "*Geo-Punch Missing*\n\n"
+        "Dear {{employee_name}},\n"
+        "On-Duty punch check for {{date}}: {{punch_status}}.\n"
+        "Please record the missing Geo-Punch in the UK Textiles app, or raise a Missing Punch request if your duty has "
+        "ended.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("date", "The duty day", "21 Nov 2026"),
+        V("punch_status", "What is missing", "only 2 of the day's 4 punches are recorded"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+    ),
+)
+_add(
+    key="geo_missing_punch_hod",
+    label="Missing Geo-Punch (to Department Head)",
+    module="geo_alerts",
+    switch="geo_missing_punch_enabled",
+    escalation_of="geo_missing_punch",
+    fresh_minutes=60,
+    description="Tells the employee's Department Head that the Geo-Punch is still missing after the employee was alerted.",
+    body=(
+        "*On-Duty Alert: Geo-Punch Missing*\n\n"
+        "Dear {{hod_name}},\n"
+        "On-Duty punch check for {{employee_name}} ({{employee_code}}) on {{date}}: {{punch_status}}.\n"
+        "They were alerted at {{alerted_at}} and it is still not recorded.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "The employee on duty", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("date", "The duty day", "21 Nov 2026"),
+        V("punch_status", "What is missing", "only 2 of the day's 4 punches are recorded"),
+        V("alerted_at", "When the employee was alerted", "6:32 PM"),
+    ),
+)
+_add(
+    key="geo_punch_reminder",
+    label="Geo-Punch Reminder",
+    module="geo_alerts",
+    switch="geo_punch_reminder_enabled",
+    fresh_minutes=30,
+    description=(
+        "A friendly reminder to an employee on On-Duty who has made no Geo-Punch for the set time (Geo Attendance -> "
+        "Settings), while a punch of the day is still free. One reminder per wait; never to the Department Head."
+    ),
+    body=(
+        "*Geo-Punch Reminder*\n\n"
+        "Dear {{employee_name}},\n"
+        "No Geo-Punch has been recorded for {{waited}} (since {{since_text}}) while you are On-Duty ({{destination}}).\n"
+        "If your next punch is due, please record it in the UK Textiles app.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("waited", "How long since the last punch", "3 hours"),
+        V("since_text", "What the wait counts from", "your punch at 9:30 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+        V("punches", "Punches recorded today", "1 of 4"),
+    ),
+)
+_add(
+    key="geo_tracking_failure",
+    label="On-Duty Tracking Failure Alert",
+    module="geo_alerts",
+    switch="geo_tracking_failure_enabled",
+    fresh_minutes=30,
+    description=(
+        "Tells an employee on On-Duty that their phone has sent no location for the signal-lost time (the app was "
+        "closed, the phone is off or offline). Their Department Head is told too when nothing arrives within the grace "
+        "period."
+    ),
+    body=(
+        "*On-Duty Tracking Stopped*\n\n"
+        "Dear {{employee_name}},\n"
+        "We have not received your On-Duty location since {{last_heard}}.\n"
+        "Please open the UK Textiles app, stay signed in, and check that Location and mobile data are on.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("employee_name", "Employee name", "Asha Kumar"),
+        V("last_heard", "When the phone last sent its location", "10:05 AM"),
+        V("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+    ),
+)
+_add(
+    key="geo_tracking_failure_hod",
+    label="On-Duty Tracking Failure (to Department Head)",
+    module="geo_alerts",
+    switch="geo_tracking_failure_enabled",
+    escalation_of="geo_tracking_failure",
+    fresh_minutes=60,
+    description="Tells the employee's Department Head that the phone is still sending no location.",
+    body=(
+        "*On-Duty Alert: Tracking Stopped*\n\n"
+        "Dear {{hod_name}},\n"
+        "No On-Duty location has been received from {{employee_name}} ({{employee_code}}) since {{last_heard}}. The "
+        "app may have been closed, or the phone is off or offline.\n"
+        "They were alerted at {{alerted_at}}.\n\n"
+        f"{SIGN}"
+    ),
+    variables=(
+        V("hod_name", "The Department Head's name", "Suresh Kumar"),
+        V("employee_name", "The employee on duty", "Asha Kumar"),
+        V("employee_code", "Their employee code", "30012"),
+        V("last_heard", "When the phone last sent its location", "10:05 AM"),
+        V("alerted_at", "When the employee was alerted", "10:17 AM"),
+    ),
+)
+
 # ── Visitors ───────────────────────────────────────────────────────────────────
 
 _add(
@@ -919,9 +1205,10 @@ def individually_switched() -> tuple[str, ...]:
     four Geo decisions)."""
     shared: dict[str, int] = {}
     for t in _TYPES:
-        if t.switch:
+        if t.switch and not t.escalation_of:
             shared[t.switch] = shared.get(t.switch, 0) + 1
-    return tuple(t.key for t in _TYPES if not t.switch or shared[t.switch] > 1)
+    # a Department Head copy follows its type's switch (escalation_of): never a switch of its own
+    return tuple(t.key for t in _TYPES if not t.escalation_of and (not t.switch or shared[t.switch] > 1))
 
 
 def variable_help(key: str) -> str:

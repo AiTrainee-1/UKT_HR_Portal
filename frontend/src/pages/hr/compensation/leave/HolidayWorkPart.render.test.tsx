@@ -593,6 +593,9 @@ describe("the drawer of a claim", () => {
     await waitFor(() => !!q("claim-drawer-claim"), "the drawer");
     expect(text(q("claim-drawer"))).toContain("Chitra Devi");
     expect(text(q("claim-drawer"))).toContain("OT shift credit (Type 2) · Mon, 5 Oct 2026");
+    // when it was sent: the date and the exact time (06:00 UTC = 11:30 in India)
+    expect(text(q("claim-drawer-claim"))).toContain("Submitted on");
+    expect(text(q("claim-drawer-claim"))).toContain("12 Oct 2026, 11:30");
     const source = text(q("claim-drawer-source"));
     expect(source).toContain("Shift end17:30");
     expect(source).toContain("Last punch02:10 (next day)");

@@ -265,6 +265,22 @@ export type GeoTrackingSettings = {
   noticeVersion: number;
   noticeText: string;
   reverseGeocodeProvider: GeoReverseProvider;
+  /** The automatic tracking alerts (backend geo_tracking/alerts.py): the whole automation on / off. */
+  alertsEnabled: boolean;
+  /** Minutes a phone problem (location off, permission, background restriction) must last before the employee is alerted. */
+  alertDebounceMinutes: number;
+  /** Tell the employee's Department Head when it is not fixed in time. */
+  alertHodEnabled: boolean;
+  /** Minutes after the employee's alert before the Department Head is told. */
+  alertHodGraceMinutes: number;
+  /** The same problem back within this many minutes of its end is the same episode (no second alert). */
+  alertCooldownMinutes: number;
+  /** Missing Geo-Punch: no punch at all this many minutes after the track started. */
+  missingFirstPunchMinutes: number;
+  /** HH:MM (India time): the day's punches are checked at this time while the duty still records. */
+  punchCheckTime: string;
+  /** Geo-Punch reminder: no punch for this many minutes while on duty. */
+  punchReminderMinutes: number;
   updatedBy: string | null;
   updatedAt: string | null;
 };
@@ -294,6 +310,14 @@ export const DEFAULT_GEO_SETTINGS: GeoTrackingSettings = {
   noticeVersion: 1,
   noticeText: "",
   reverseGeocodeProvider: "off",
+  alertsEnabled: true,
+  alertDebounceMinutes: 2,
+  alertHodEnabled: true,
+  alertHodGraceMinutes: 15,
+  alertCooldownMinutes: 30,
+  missingFirstPunchMinutes: 30,
+  punchCheckTime: "19:00",
+  punchReminderMinutes: 180,
   updatedBy: null,
   updatedAt: null,
 };
@@ -312,6 +336,7 @@ export const getJourneyPointsQueryKey = (id: number, after: number, limit: numbe
 export const getJourneyTrailQueryKey = (id: number) => [`${PATH}/journeys`, "trail", id] as const;
 export const getLiveTracksQueryKey = () => [`${PATH}/live`] as const;
 export const getGeoSettingsQueryKey = () => [`${PATH}/settings`] as const;
+export const getTrackingAlertsQueryKey = (params: TrackingAlertParams) => [`${PATH}/live/alerts`, params] as const;
 
 // ── reading what the server sends, tolerantly ─────────────────────────────────────────────────────────────────────
 
@@ -713,6 +738,14 @@ export function readGeoSettings(raw: unknown): GeoTrackingSettings {
     reverseGeocodeProvider: REVERSE.includes(r.reverseGeocodeProvider as GeoReverseProvider)
       ? (r.reverseGeocodeProvider as GeoReverseProvider)
       : "off",
+    alertsEnabled: typeof r.alertsEnabled === "boolean" ? r.alertsEnabled : d.alertsEnabled,
+    alertDebounceMinutes: num(r.alertDebounceMinutes, d.alertDebounceMinutes),
+    alertHodEnabled: typeof r.alertHodEnabled === "boolean" ? r.alertHodEnabled : d.alertHodEnabled,
+    alertHodGraceMinutes: num(r.alertHodGraceMinutes, d.alertHodGraceMinutes),
+    alertCooldownMinutes: num(r.alertCooldownMinutes, d.alertCooldownMinutes),
+    missingFirstPunchMinutes: num(r.missingFirstPunchMinutes, d.missingFirstPunchMinutes),
+    punchCheckTime: hhmm(r.punchCheckTime, d.punchCheckTime),
+    punchReminderMinutes: num(r.punchReminderMinutes, d.punchReminderMinutes),
     updatedBy: strOrNull(r.updatedBy),
     updatedAt: timeOrNull(r.updatedAt),
   };
@@ -861,6 +894,164 @@ export const useUpdateGeoTrackingSettings = () => {
     },
   });
 };
+
+// ── the automatic tracking alerts' log (GET /api/tracking/live/alerts) ──────────────────────────────────────────────
+
+export type TrackingAlertKind =
+  | "location_off"
+  | "permission_restricted"
+  | "background_restricted"
+  | "tracking_failure"
+  | "missing_punch"
+  | "punch_reminder";
+
+/** What one channel did with one stage: the outcome when it was handed over, then what became of it. */
+export type TrackingAlertChannel = {
+  /** made | queued | off | master_off | not_recipient | not_configured | not_sent | duplicate | no_head | error */
+  outcome: string | null;
+  label: string;
+  /** Phone: waiting | sent | delivered | failed | no_device | off. WhatsApp: queued | sending | sent | failed | skipped | expired. */
+  status: string | null;
+  error: string | null;
+};
+
+export type TrackingAlertStage = {
+  stage: "employee" | "hod";
+  recipientName: string | null;
+  sentAt: string | null;
+  push: TrackingAlertChannel;
+  whatsapp: TrackingAlertChannel;
+};
+
+export type TrackingAlert = {
+  id: number;
+  kind: TrackingAlertKind;
+  kindLabel: string;
+  summary: string;
+  trackId: number;
+  sessionId: number | null;
+  destination: string;
+  employeeId: number;
+  employeeName: string;
+  employeeCode: string;
+  department: string | null;
+  detectedAt: string | null;
+  lastSeenAt: string | null;
+  resolvedAt: string | null;
+  resolution: string | null;
+  resolutionLabel: string | null;
+  open: boolean;
+  /** Seen, but the employee is not told yet (the short wait before an alert). */
+  waiting: boolean;
+  escalates: boolean;
+  /** When the Department Head will be told if it is still not fixed. */
+  hodDueAt: string | null;
+  stages: TrackingAlertStage[];
+};
+
+export type TrackingAlertParams = {
+  status: "open" | "all";
+  days?: number;
+  kind?: string;
+  page?: number;
+  pageSize?: number;
+};
+
+export type TrackingAlertsPage = {
+  results: TrackingAlert[];
+  total: number;
+  page: number;
+  pageSize: number;
+  open: number;
+  openByKind: Record<string, number>;
+  kinds: { key: string; label: string }[];
+  settings: { alertsEnabled: boolean; hodEnabled: boolean; hodGraceMinutes: number; debounceMinutes: number };
+};
+
+function readChannel(raw: unknown): TrackingAlertChannel {
+  const r = isObj(raw) ? raw : {};
+  return { outcome: strOrNull(r.outcome), label: str(r.label), status: strOrNull(r.status), error: strOrNull(r.error) };
+}
+
+export function readTrackingAlerts(raw: unknown): TrackingAlertsPage {
+  const r = isObj(raw) ? raw : {};
+  const s = isObj(r.settings) ? r.settings : {};
+  const results = list(r, "results").map((row): TrackingAlert => {
+    const a = isObj(row) ? row : {};
+    return {
+      id: num(a.id),
+      kind: str(a.kind) as TrackingAlertKind,
+      kindLabel: str(a.kindLabel, str(a.kind)),
+      summary: str(a.summary),
+      trackId: num(a.trackId),
+      sessionId: numOrNull(a.sessionId),
+      destination: str(a.destination),
+      employeeId: num(a.employeeId),
+      employeeName: str(a.employeeName),
+      employeeCode: str(a.employeeCode),
+      department: strOrNull(a.department),
+      detectedAt: timeOrNull(a.detectedAt),
+      lastSeenAt: timeOrNull(a.lastSeenAt),
+      resolvedAt: timeOrNull(a.resolvedAt),
+      resolution: strOrNull(a.resolution),
+      resolutionLabel: strOrNull(a.resolutionLabel),
+      open: a.open === true,
+      waiting: a.waiting === true,
+      escalates: a.escalates === true,
+      hodDueAt: timeOrNull(a.hodDueAt),
+      stages: list(a.stages).map((st): TrackingAlertStage => {
+        const x = isObj(st) ? st : {};
+        return {
+          stage: x.stage === "hod" ? "hod" : "employee",
+          recipientName: strOrNull(x.recipientName),
+          sentAt: timeOrNull(x.sentAt),
+          push: readChannel(x.push),
+          whatsapp: readChannel(x.whatsapp),
+        };
+      }),
+    };
+  });
+  const openByKind: Record<string, number> = {};
+  if (isObj(r.openByKind)) for (const [k, v] of Object.entries(r.openByKind)) openByKind[k] = num(v);
+  return {
+    results,
+    total: num(r.total, results.length),
+    page: num(r.page, 1),
+    pageSize: num(r.pageSize, 25),
+    open: num(r.open),
+    openByKind,
+    kinds: list(r.kinds).flatMap((k) => (isObj(k) ? [{ key: str(k.key), label: str(k.label) }] : [])),
+    settings: {
+      alertsEnabled: s.alertsEnabled !== false,
+      hodEnabled: s.hodEnabled !== false,
+      hodGraceMinutes: num(s.hodGraceMinutes, DEFAULT_GEO_SETTINGS.alertHodGraceMinutes),
+      debounceMinutes: num(s.debounceMinutes, DEFAULT_GEO_SETTINGS.alertDebounceMinutes),
+    },
+  };
+}
+
+/** The log of the automatic tracking alerts. Read again every minute while it is on screen (the watchdog runs every 2). */
+export const useTrackingAlerts = (params: TrackingAlertParams, enabled = true) =>
+  useQuery<TrackingAlertsPage>({
+    queryKey: getTrackingAlertsQueryKey(params),
+    queryFn: async () =>
+      readTrackingAlerts(
+        await customFetch<unknown>(
+          `${PATH}/live/alerts${toQuery({
+            status: params.status,
+            days: params.days,
+            kind: params.kind,
+            page: params.page,
+            pageSize: params.pageSize,
+          })}`,
+        ),
+      ),
+    placeholderData: keepPreviousData,
+    refetchInterval: 60_000,
+    refetchIntervalInBackground: false,
+    retry: false,
+    enabled,
+  });
 
 /** The file name a download response asks for (Content-Disposition), or null. */
 export function fileNameOf(disposition: string | null): string | null {

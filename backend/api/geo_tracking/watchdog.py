@@ -1,8 +1,10 @@
 """The scheduler's tracking jobs (api/geo_tracking_scheduler.py calls these; tests call them directly).
 
 run_watchdog   every 2 minutes: end orphan tracks, write ONE SIGNAL_LOST interval event for each recording track that has
-               been silent for signal_lost_seconds (the next batch closes it), refresh every recording track's state, then
-               let the reverse-geocode worker fill a few addresses (a no-op while the provider is 'off')
+               been silent for signal_lost_seconds (the next batch closes it), refresh every recording track's state, run
+               the automatic tracking alerts (alerts.run_alerts: location off, permission / background restrictions, silent
+               phones, missing Geo-Punches, reminders; after the states, so they see this run's SIGNAL_LOST), then let the
+               reverse-geocode worker fill a few addresses (a no-op while the provider is 'off')
 purge_old      daily: delete raw points and events older than retention_days (segments and the summary are kept, and the
                track is flagged so a rebuild can never wipe its history)
 """
@@ -16,7 +18,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from ..models import DutyTrack, DutyTrackEvent, DutyTrackPoint
-from . import geocode, live, sessions
+from . import alerts, geocode, live, sessions
 from . import settings as geo_settings
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ PURGE_BATCH = 5000
 def run_watchdog(now: datetime | None = None) -> dict:
     now = now or timezone.now()
     s = geo_settings.get()
-    result = {"orphansEnded": 0, "signalLost": 0, "statesRefreshed": 0, "geocode": None}
+    result = {"orphansEnded": 0, "signalLost": 0, "statesRefreshed": 0, "alerts": None, "geocode": None}
     try:
         result["orphansEnded"] = sessions.reconcile_orphan_tracks(now=now)
     except Exception:
@@ -40,6 +42,10 @@ def run_watchdog(now: datetime | None = None) -> dict:
             result["statesRefreshed"] += 1
         except Exception:
             logger.exception("Geo-tracking watchdog failed for track %s", track.pk)
+    try:
+        result["alerts"] = alerts.run_alerts(now)
+    except Exception:
+        logger.exception("Geo-tracking alerts failed")
     try:
         result["geocode"] = geocode.run_geocode_worker()
     except Exception:

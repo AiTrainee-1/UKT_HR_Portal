@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { waitingText } from "@/lib/approval-workflow";
+import { REJECT_REMARK_MAX, cleanRejectRemark, rejectRemarkProblem } from "@/lib/reject-remark";
+import { cn } from "@/lib/utils";
 import { InitialsAvatar } from "../settlement/parts";
 import { formatDate, formatDateTime } from "../settlement/shared";
 import { StatusChip } from "./RequestCard";
@@ -15,7 +17,7 @@ type Props = {
   row: MissingRow | null;
   busy: boolean;
   onClose: () => void;
-  /** The comment is optional and goes to the employee's record of the decision. */
+  /** The comment goes to the employee's record of the decision: optional to approve, the required reason to reject. */
   onDecide: (row: MissingRow, status: "approved" | "rejected", comment: string) => void;
 };
 
@@ -28,11 +30,14 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** One request in full: the employee, the punch, the pipeline so far, every decision, and HR's decision with a note. */
+/** One request in full: the employee, the punch, the pipeline so far, every decision, and HR's decision with a note
+ *  (a rejection is not sent without one: owner brief 2026-11-21). */
 export default function DetailSheet({ row, busy, onClose, onDecide }: Props) {
   const [comment, setComment] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
   const close = () => {
     setComment("");
+    setProblem(null);
     onClose();
   };
   const canApprove = row ? hrDecides(row) : false;
@@ -75,7 +80,7 @@ export default function DetailSheet({ row, busy, onClose, onDecide }: Props) {
               </Line>
               <Line label="Punch">{punchLabel(row)}</Line>
               <Line label="Time">{formatPunchTime(row.punchTime)}</Line>
-              <Line label="Requested">{formatDateTime(row.createdAt)}</Line>
+              <Line label="Submitted on">{formatDateTime(row.createdAt)}</Line>
             </dl>
 
             <div className="space-y-1">
@@ -119,17 +124,32 @@ export default function DetailSheet({ row, busy, onClose, onDecide }: Props) {
             {(canApprove || canReject) && (
               <div className="space-y-2 rounded-xl border p-3">
                 <label htmlFor="mp-comment" className="text-xs font-bold uppercase tracking-wider text-gray-400">
-                  Note (optional)
+                  Note{" "}
+                  <span className="font-normal normal-case tracking-normal">
+                    {canReject ? "(optional to approve, required to reject)" : "(optional)"}
+                  </span>
                 </label>
                 <Textarea
                   id="mp-comment"
                   value={comment}
-                  onChange={(e) => setComment(e.target.value)}
-                  maxLength={300}
+                  onChange={(e) => {
+                    setComment(e.target.value);
+                    setProblem(null);
+                  }}
+                  maxLength={REJECT_REMARK_MAX}
                   rows={2}
-                  placeholder="Added to the record of your decision"
+                  placeholder={
+                    canReject ? "Why it is rejected, or a note for an approval" : "Added to the record of your decision"
+                  }
+                  aria-invalid={problem ? true : undefined}
+                  className={cn(problem && "border-red-400 focus-visible:ring-red-300")}
                   data-testid="mp-comment"
                 />
+                {problem && (
+                  <p className="text-xs text-red-600" role="alert" data-testid="mp-comment-problem">
+                    {problem}
+                  </p>
+                )}
                 <div className="flex gap-2">
                   {canApprove && (
                     <Button
@@ -152,7 +172,12 @@ export default function DetailSheet({ row, busy, onClose, onDecide }: Props) {
                       className="h-9 flex-1 gap-1.5"
                       disabled={busy}
                       onClick={() => {
-                        onDecide(row, "rejected", comment.trim());
+                        const why = rejectRemarkProblem(comment);
+                        if (why) {
+                          setProblem(why);
+                          return;
+                        }
+                        onDecide(row, "rejected", cleanRejectRemark(comment));
                         close();
                       }}
                       data-testid="mp-detail-reject"

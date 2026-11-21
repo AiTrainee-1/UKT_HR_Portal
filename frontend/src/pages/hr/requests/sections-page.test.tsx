@@ -116,6 +116,11 @@ const HUB: HubResponse = {
   items: [leave(1, "Asha Kumar"), leave(2, "Bala Murugan")],
   limit: 200,
   options: { branches: [], departments: [] },
+  page: 1,
+  pageSize: 25,
+  total: 2,
+  pages: 1,
+  focusItem: null,
 };
 
 let root: Root | null = null;

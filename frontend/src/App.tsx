@@ -60,6 +60,7 @@ const MdApprovals = lazy(() => import("@/pages/md/MdApprovals"));
 
 // HR pages
 const HrDashboard = lazy(() => import("@/pages/hr/Dashboard"));
+const HrAnalytics = lazy(() => import("@/pages/hr/Analytics"));
 const Employees = lazy(() => import("@/pages/hr/Employees"));
 const NewEmployee = lazy(() => import("@/pages/hr/NewEmployee"));
 const BulkUploadEmployees = lazy(() => import("@/pages/hr/BulkUploadEmployees"));
@@ -339,6 +340,7 @@ function Router() {
 
         {/* ── HR Routes ─────────────────────────────────────────── */}
         <Route path="/hr/dashboard">{() => <ProtectedRoute component={HrDashboard} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/analytics">{() => <ProtectedRoute component={HrAnalytics} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/employees/new">{() => <ProtectedRoute component={NewEmployee} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/employees/bulk-upload">
           {() => <ProtectedRoute component={BulkUploadEmployees} allowedRoles={["hr"]} />}

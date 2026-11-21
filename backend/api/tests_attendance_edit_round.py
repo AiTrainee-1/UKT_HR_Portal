@@ -562,7 +562,7 @@ class CasualLeaveOptionTests(RoundBase):
         self.fill_balance(11)
         pk = self.propose(self.D, "casual_leave", choice="full").json()["request"]["id"]
         self.assertEqual(self.post_cl(date(2026, 11, 23)).status_code, 400)
-        self.hod_says(pk, "rejected")
+        self.hod_says(pk, "rejected", "Not needed now")
         self.assertEqual(self.post_cl(date(2026, 11, 23)).status_code, 201)
         self.assertFalse(CasualLeaveRequest.objects.filter(date=self.D).exists())
 

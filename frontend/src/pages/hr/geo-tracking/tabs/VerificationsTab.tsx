@@ -197,7 +197,8 @@ export default function VerificationsTab() {
     } catch (err: unknown) {
       toast({
         title: "Failed to update punch",
-        description: err instanceof Error ? err.message : undefined,
+        description:
+          (err as { data?: { error?: string } })?.data?.error ?? (err instanceof Error ? err.message : undefined),
         variant: "destructive",
       });
     }
@@ -213,7 +214,8 @@ export default function VerificationsTab() {
     } catch (err: unknown) {
       toast({
         title: "Failed to update punches",
-        description: err instanceof Error ? err.message : undefined,
+        description:
+          (err as { data?: { error?: string } })?.data?.error ?? (err instanceof Error ? err.message : undefined),
         variant: "destructive",
       });
     }
@@ -346,6 +348,7 @@ export default function VerificationsTab() {
               : "Approve punch"
         }
         withComment
+        requireComment={asking?.status === "rejected"}
         description={asking ? <ConfirmText asking={asking} /> : null}
         onConfirm={(comment) => {
           if (asking?.kind === "all") void handleBulk(asking.head, asking.status, comment);

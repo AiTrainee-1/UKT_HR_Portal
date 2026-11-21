@@ -12,7 +12,7 @@ import { ApprovalTrail } from "@/components/ApprovalTrail";
 import { hrCanAct, hrCanReject } from "@/lib/approval-workflow";
 import type { PermissionItem, PermissionType } from "@/lib/api-client";
 import { PERMISSION_MINUTES, PERMISSION_TYPES, permissionOutcome } from "@/lib/late-detection";
-import { longDate } from "./logic";
+import { longDate, submittedOn } from "./logic";
 
 function Field({ icon, label, children }: { icon?: ReactNode; label: string; children: ReactNode }) {
   return (
@@ -217,6 +217,11 @@ export function PermissionDetailDialog({
                 <Badge className={`border text-xs ${outcome.className}`}>{outcome.label}</Badge>
               </Field>
               <Field label="Duration">{p.durationMinutes ?? PERMISSION_MINUTES} minutes</Field>
+              <div className="col-span-2">
+                <Field label="Submitted on">
+                  <span data-testid="permission-submitted-on">{submittedOn(p.createdAt)}</span>
+                </Field>
+              </div>
               {p.monthlyUsed != null && (
                 <div className="col-span-2">
                   <p className="text-xs text-gray-400">Monthly Usage</p>
@@ -306,9 +311,6 @@ export function PermissionDetailDialog({
                 {p.approverRole === "dept_head" ? " (Department Head)" : " (HR)"}
               </p>
             )}
-            <p className="text-xs text-gray-300">
-              Submitted: {p.createdAt ? new Date(p.createdAt).toLocaleString("en-IN") : "-"}
-            </p>
           </div>
 
           {p.approval && (

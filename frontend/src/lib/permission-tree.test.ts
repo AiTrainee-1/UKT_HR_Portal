@@ -52,6 +52,8 @@ const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/salary": "salary",
   "/hr/salary-slip": "salary_slip",
   "/hr/settlement": "settlement",
+  // Analytics (2026-11-21) is a new page whose key inherits attendance: whoever could open Attendance opens it the same way
+  "/hr/analytics": "attendance",
   "/hr/reports": "reports",
   "/hr/user-management": "user_management",
   "/hr/activity-logs": "activity_logs",

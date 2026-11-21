@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Inbox, XCircle } from "lucide-react";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -29,6 +30,7 @@ const PASS_TYPE: Record<string, string> = {
  * the order the server gives. HR decides only what the approval pipeline gives it (User Management -> Approval Workflow
  * Control): hrCanAct / hrCanReject decide whether Approve / Reject are drawn at all, and they also keep the MD portal's
  * view-only copy of this page from deciding anything. A View-only role sees the buttons locked (the page-wide lock).
+ * Approve is one click; Reject asks for the reason first (required, the employee sees it) and sends it as the comment.
  */
 export function OutpassRequestsSection() {
   const { toast } = useToast();
@@ -40,6 +42,9 @@ export function OutpassRequestsSection() {
   const pageCount = Math.max(1, Math.ceil(pending.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pageCount);
   const pageItems = pending.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
+  // the request whose Reject was pressed, waiting for its reason, and the server's refusal of it
+  const [rejecting, setRejecting] = useState<RequestRow | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   // What HR may decide follows the approval pipeline; an older backend sends none and HR then decides any pending
   // request, as it always did.
@@ -47,19 +52,36 @@ export function OutpassRequestsSection() {
   const hrRejects = (r: OutpassRequestItem) => hrCanReject(r.approval, true);
   const forHr = pending.filter(hrDecides).length;
 
-  const act = async (r: OutpassRequestItem, status: "approved" | "rejected") => {
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
+    queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey("pending") });
+  };
+  const serverWords = (err: unknown) =>
+    (err as { data?: { error?: string } } | null)?.data?.error ??
+    (err instanceof Error ? err.message : "Try again in a minute.");
+
+  const approve = async (r: OutpassRequestItem) => {
     try {
-      await updateStatus.mutateAsync({ id: r.id, data: { status } });
-      toast({ title: status === "approved" ? "Gate pass approved" : "Gate pass rejected" });
-      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey() });
-      queryClient.invalidateQueries({ queryKey: getListOutpassRequestsQueryKey("pending") });
+      await updateStatus.mutateAsync({ id: r.id, data: { status: "approved" } });
+      toast({ title: "Gate pass approved" });
+      refresh();
     } catch (err) {
-      toast({
-        title: "Could not update the request",
-        description: err instanceof Error ? err.message : "Try again in a minute.",
-        variant: "destructive",
-      });
+      toast({ title: "Could not update the request", description: serverWords(err), variant: "destructive" });
     }
+  };
+
+  // the dialog stays open while it saves, and shows the server's refusal inside
+  const reject = async (r: OutpassRequestItem, reason: string) => {
+    setRejectError(null);
+    try {
+      await updateStatus.mutateAsync({ id: r.id, data: { status: "rejected", comment: reason } });
+    } catch (err) {
+      setRejectError(serverWords(err));
+      return;
+    }
+    setRejecting(null);
+    toast({ title: "Gate pass rejected" });
+    refresh();
   };
 
   const columns: DataColumn<RequestRow>[] = [
@@ -123,7 +145,7 @@ export function OutpassRequestsSection() {
               size="sm"
               variant="outline"
               className="h-11 gap-1 border-teal-200 text-teal-700 hover:bg-teal-50 sm:h-8"
-              onClick={() => act(r, "approved")}
+              onClick={() => approve(r)}
               disabled={updateStatus.isPending}
             >
               <CheckCircle2 size={14} /> Approve
@@ -134,7 +156,10 @@ export function OutpassRequestsSection() {
               size="sm"
               variant="outline"
               className="h-11 gap-1 border-rose-200 text-rose-700 hover:bg-rose-50 sm:h-8"
-              onClick={() => act(r, "rejected")}
+              onClick={() => {
+                setRejectError(null);
+                setRejecting(r);
+              }}
               disabled={updateStatus.isPending}
             >
               <XCircle size={14} /> Reject
@@ -169,6 +194,25 @@ export function OutpassRequestsSection() {
         pagination={{ page: pageSafe, pageSize: PAGE_SIZE, total: pending.length, onPageChange: setPage }}
         caption="Gate pass requests waiting for a decision"
         testId="outpass-requests-table"
+      />
+      <RejectReasonDialog
+        open={rejecting !== null}
+        title="Reject this gate pass?"
+        description={
+          rejecting
+            ? `${rejecting.employee?.name ?? `Employee #${rejecting.employeeId}`} · ${rejecting.destination}.`
+            : undefined
+        }
+        busy={updateStatus.isPending}
+        error={rejectError}
+        onCancel={() => {
+          setRejecting(null);
+          setRejectError(null);
+        }}
+        onConfirm={(reason) => {
+          if (rejecting) void reject(rejecting, reason);
+        }}
+        testIdPrefix="outpass-reject"
       />
     </div>
   );

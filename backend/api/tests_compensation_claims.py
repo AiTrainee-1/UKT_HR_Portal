@@ -218,6 +218,8 @@ class ClaimsBase(TestCase):
         return self.client.post("/api/compensation/use", body, content_type="application/json", **(who or self.admin))
 
     def decide(self, claim_id, decision="approved", comment=None, who=None):
+        if decision == "rejected" and not comment:
+            comment = "Not approved this time"  # a rejection needs its reason (2026-11-21)
         body = {"status": decision}
         if comment:
             body["comment"] = comment

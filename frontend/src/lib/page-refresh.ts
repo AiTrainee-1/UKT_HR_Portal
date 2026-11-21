@@ -45,6 +45,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   // Compensation is five pages (CTC Breakdown, OT Detection, Compensation Leave, History, Reports) with subtabs in the path
   /^\/hr\/compensation(\/|$)/,
   "/hr/settlement",
+  // Analytics puts the Refresh button in its title row, beside Export
+  "/hr/analytics",
   // Salary Slip puts the Refresh button in its title row, beside the month
   "/hr/salary-slip",
   "/hr/account-management",

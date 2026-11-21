@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
 import {
   AlertTriangle,
+  BellRing,
   CalendarClock,
   Camera,
   ChevronDown,
@@ -313,6 +314,63 @@ export default function TrackingRulesCard() {
             {number("sampleStillSeconds", "rule-sample-still")}
             {number("uploadBatchPoints", "rule-upload-batch")}
             {number("uploadIntervalSeconds", "rule-upload-interval")}
+          </div>
+        </Section>
+
+        <Section
+          title="Automatic alerts"
+          intro="While an employee is On-Duty the server watches the track every 2 minutes and alerts the employee (then their Department Head) on its own."
+          icon={BellRing}
+          testId="rules-alerts"
+        >
+          <ToggleField
+            id="geo-alerts-enabled"
+            checked={form.alertsEnabled}
+            onChange={(v) => set("alertsEnabled", v)}
+            onLabel="Tracking alerts are on"
+            offLabel="Tracking alerts are off"
+            disabled={disabled}
+          >
+            Location turned off, the location permission not set to &ldquo;all the time&rdquo;, the app restricted in
+            the background, no location received (after &ldquo;Signal lost after&rdquo;), a missing Geo-Punch, and a
+            Geo-Punch reminder. Whether each goes as a phone notification or a WhatsApp message is switched on Phone
+            Notify Control and on WhatsApp Control.
+          </ToggleField>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {number("alertDebounceMinutes", "rule-alert-debounce")}
+            {number("alertCooldownMinutes", "rule-alert-cooldown")}
+            {number("missingFirstPunchMinutes", "rule-missing-first-punch")}
+            <Field
+              label="Day's punch check (India time)"
+              htmlFor="rule-punch-check"
+              hint="If the duty is still recorded at this time with fewer than the day's 4 punches, the employee is alerted (also when they mark the duty Done with punches missing). Default 19:00."
+              error={errors.punchCheckTime}
+            >
+              <Input
+                id="rule-punch-check"
+                type="time"
+                value={form.punchCheckTime}
+                disabled={disabled}
+                aria-invalid={errors.punchCheckTime ? true : undefined}
+                onChange={(e) => set("punchCheckTime", e.target.value)}
+                className="h-9 text-sm"
+              />
+            </Field>
+            {number("punchReminderMinutes", "rule-punch-reminder")}
+          </div>
+          <ToggleField
+            id="geo-alerts-hod"
+            checked={form.alertHodEnabled}
+            onChange={(v) => set("alertHodEnabled", v)}
+            onLabel="The Department Head is told when it is not fixed"
+            offLabel="Only the employee is alerted"
+            disabled={disabled}
+          >
+            The employee&apos;s Department Head (the one who approves their On-Duty requests) is told when the problem
+            is still there after the time below. Reminders always go to the employee only.
+          </ToggleField>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {number("alertHodGraceMinutes", "rule-alert-hod-grace")}
           </div>
         </Section>
 

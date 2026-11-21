@@ -208,6 +208,93 @@ APP_SPECS: dict[str, Spec] = {
         Var("reason", "HR's reason, when given", "Deepavali"),
     ),
 }
+
+# The On-Duty tracking alerts (geo_tracking/alerts.py, 2026-11-21). One wording per kind serves both people it goes to: the
+# built-in {{headline}} / {{message}} are written for whoever receives it (the employee is told what to fix; their Department
+# Head who it is about and since when), so HR's own wording can wrap them, or use the details below.
+_DUTY_NOTE = (
+    "The built-in title and sentence differ for the employee (what to fix) and for their Department Head (who it is "
+    "about and since when); {{recipient}} says which one this is."
+)
+_DUTY_VARS = (
+    Var("employee_name", "The employee on duty", "Asha Kumar"),
+    Var("employee_code", "Their employee code", "30012"),
+    Var("recipient", "Who receives it: employee or Department Head", "employee"),
+    Var("recipient_name", "The name of the person who receives it", "Asha Kumar"),
+    Var("destination", "The On-Duty destination", "Tirupur Dyeing Unit"),
+)
+APP_SPECS.update(
+    {
+        "geo_location_off": _app(
+            "{{headline}}",
+            "{{message}}",
+            _DUTY_NOTE,
+            "Location is turned off",
+            "Your phone's location was turned off at 10:05 AM while you are On-Duty (Tirupur Dyeing Unit). Please turn "
+            "Location back on so that your On-Duty route is recorded.",
+            *_DUTY_VARS,
+            Var("since", "When location went off", "10:05 AM"),
+        ),
+        "geo_permission_restricted": _app(
+            "{{headline}}",
+            "{{message}}",
+            _DUTY_NOTE,
+            "Allow location all the time",
+            "The UK Textiles app's location permission is 'Only while using the app', so your On-Duty route cannot be "
+            "recorded in the background. Open Settings > Apps > UK Textiles > Permissions > Location and choose 'Allow "
+            "all the time'.",
+            *_DUTY_VARS,
+            Var("permission", "The permission the phone has now", "Only while using the app"),
+            Var("since", "When it was noticed", "10:05 AM"),
+        ),
+        "geo_background_restricted": _app(
+            "{{headline}}",
+            "{{message}}",
+            _DUTY_NOTE,
+            "Let the app run in the background",
+            "Your phone is limiting the UK Textiles app in the background (battery optimisation is on), so your On-Duty "
+            "route may stop recording. Open Settings > Apps > UK Textiles > Battery and choose 'Unrestricted'.",
+            *_DUTY_VARS,
+            Var("restriction", "What the phone restricts", "battery optimisation is on"),
+            Var("since", "When it was noticed", "10:05 AM"),
+        ),
+        "geo_missing_punch": _app(
+            "{{headline}}",
+            "{{message}}",
+            _DUTY_NOTE,
+            "Geo-Punch missing",
+            "Only 2 of today's 4 punches are recorded for your On-Duty day. Please record the missing Geo-Punch in the "
+            "app, or raise a Missing Punch request if your duty has ended.",
+            *_DUTY_VARS,
+            Var("punch_status", "What is missing", "only 2 of the day's 4 punches are recorded"),
+            Var("punches", "Punches recorded today", "2 of 4"),
+            Var("date", "The duty day", "21 Nov 2026"),
+        ),
+        "geo_punch_reminder": _app(
+            "{{headline}}",
+            "{{message}}",
+            "The built-in sentence says how long it has been since the last Geo-Punch (or the On-Duty start).",
+            "Geo-Punch reminder",
+            "No Geo-Punch for 3 hours (since your punch at 9:30 AM). If your next punch is due, please record it in the "
+            "app.",
+            *_DUTY_VARS[:3],
+            _DUTY_VARS[4],
+            Var("waited", "How long since the last punch", "3 hours"),
+            Var("since_text", "What the wait counts from", "your punch at 9:30 AM"),
+            Var("punches", "Punches recorded today", "1 of 4"),
+        ),
+        "geo_tracking_failure": _app(
+            "{{headline}}",
+            "{{message}}",
+            _DUTY_NOTE,
+            "On-Duty tracking stopped",
+            "We have not received your On-Duty location since 10:05 AM. Please open the UK Textiles app, stay signed "
+            "in, and check that Location and mobile data are on.",
+            *_DUTY_VARS,
+            Var("last_heard", "When the phone last sent its location", "10:05 AM"),
+        ),
+    }
+)
 # Not wording HR can template: written by HR at send time.
 NOT_TEMPLATABLE = frozenset({"manual", "hr_notice"})
 

@@ -4,6 +4,7 @@ import { useLocation } from "wouter";
 import { CalendarDays, CalendarRange, Clock, Gift, Scale, Sunrise } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -22,7 +23,7 @@ import HolidaysTab from "./leave/HolidaysTab";
 import LeaveDetailDialog from "./leave/LeaveDetailDialog";
 import LeaveRequestsTab from "./leave/LeaveRequestsTab";
 import PermissionsTab from "./leave/PermissionsTab";
-import { longDate, type LeaveRow } from "./leave/logic";
+import { longDate, serverError, shortDate, type LeaveRow } from "./leave/logic";
 
 const TABS = ["leaves", "halfDay", "permissions", "calendar", "holidays", "balances"] as const;
 type Tab = (typeof TABS)[number];
@@ -47,6 +48,12 @@ const localToday = () => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
+
+/** "leave on Mon, 5 Oct 2026" / "leave from 5 Oct 2026 to 7 Oct 2026": what a rejection is about. */
+const leaveSpan = (l: LeaveRow) =>
+  l.startDate === l.endDate || l.isHalfDay
+    ? `${l.isHalfDay ? "half-day leave" : "leave"} on ${longDate(l.startDate)}`
+    : `leave from ${shortDate(l.startDate)} to ${shortDate(l.endDate)}`;
 
 export default function LeaveHoliday() {
   const { toast } = useToast();
@@ -78,6 +85,9 @@ export default function LeaveHoliday() {
   }, [tab]);
   const [selected, setSelected] = useState<LeaveRow | null>(null);
   const [toDelete, setToDelete] = useState<LeaveRow | null>(null);
+  // the request HR pressed Reject on: nothing is sent until a reason is written (owner brief 2026-11-21)
+  const [rejecting, setRejecting] = useState<LeaveRow | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const today = useMemo(localToday, []);
 
   // Polled: this page has no other live-update mechanism, and a mobile HOD approval writes straight to the DB with no
@@ -94,7 +104,13 @@ export default function LeaveHoliday() {
   const deleteMutation = useDeleteLeaveRequest();
   const busy = updateMutation.isPending || deleteMutation.isPending;
 
+  // Approving needs no remark; Reject first asks for the reason (see `reject`).
   const decide = async (leave: LeaveRow, status: "approved" | "rejected") => {
+    if (status === "rejected") {
+      setRejectError(null);
+      setRejecting(leave);
+      return;
+    }
     try {
       await updateMutation.mutateAsync({ id: leave.id, data: { status } });
     } catch (err) {
@@ -106,6 +122,22 @@ export default function LeaveHoliday() {
       return;
     }
     toast({ title: `Leave request ${status}` });
+    queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
+  };
+
+  // The reason goes to the employee as HR's comment; a refusal keeps the dialog open with the server's words.
+  const reject = async (reason: string) => {
+    const leave = rejecting;
+    if (!leave) return;
+    setRejectError(null);
+    try {
+      await updateMutation.mutateAsync({ id: leave.id, data: { status: "rejected", hrComment: reason } });
+    } catch (err) {
+      setRejectError(serverError(err, "Failed to reject the leave request"));
+      return;
+    }
+    setRejecting(null);
+    toast({ title: "Leave request rejected" });
     queryClient.invalidateQueries({ queryKey: getListLeaveRequestsQueryKey() });
   };
 
@@ -199,6 +231,18 @@ export default function LeaveHoliday() {
         </div>
 
         <LeaveDetailDialog leave={selected} onClose={() => setSelected(null)} onDecide={decide} busy={busy} />
+        <RejectReasonDialog
+          open={rejecting !== null}
+          title={rejecting?.isHalfDay ? "Reject this half-day leave?" : "Reject this leave request?"}
+          description={
+            rejecting ? `${rejecting.employeeName ?? "This employee"}'s ${leaveSpan(rejecting)}.` : undefined
+          }
+          busy={updateMutation.isPending}
+          error={rejectError}
+          onCancel={() => setRejecting(null)}
+          onConfirm={(reason) => void reject(reason)}
+          testIdPrefix="leave-reject"
+        />
         <ConfirmDialog
           open={toDelete !== null}
           title="Delete this leave request?"

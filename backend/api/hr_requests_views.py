@@ -4,6 +4,12 @@ Requests hub: one list of every request an employee (or HR) raises and somebody 
     GET /api/hr-requests?kind=all|leave,permission,...&status=any|waiting|decided|approved|rejected
                        &since=YYYY-MM-DD&until=YYYY-MM-DD&branchId=&departmentId=&employeeType=&limit=
 
+    Paged (the HR portal since 2026-11-21): add &page=1&pageSize=25 and, optionally, &q= (every word must match the
+    employee or the request's own text), &status=waiting_hr|waiting_hod, &requestType= (Other requests), &sort=latest|
+    oldest|waiting|employee|kind, &focus=<kind>-<id> (that request is returned as `focusItem` whatever the filters), and
+    &export=1 (one page of up to EXPORT_MAX rows, for the Excel / CSV export). The response then also carries `page`,
+    `pageSize`, `total` and `pages`; `items` is that page only, already filtered and sorted by the server.
+
 The HR portal's Requests page used to merge three of the lists the HRMS keeps (leave, permission, manual outpass). This is
 the same thing for every kind in approval_workflow.DEFINITIONS plus the general employee requests: ONE response with, per
 kind, how many are waiting and who for, the request rows themselves (employee, what was asked, where it stands in its
@@ -41,7 +47,15 @@ from .permission_registry import effective_permissions, resolve_permission
 DEFAULT_LIMIT = 200
 MAX_LIMIT = 1000
 
+# The paged list (2026-11-21): rows per page the page may ask for, and the most one export call returns.
+PAGE_SIZE_DEFAULT = 25
+PAGE_SIZE_MAX = 100
+EXPORT_MAX = 5000
+
 STATUS_CHOICES = ("any", "waiting", "decided", "approved", "rejected")
+# only with page=: waiting for HR / for the Department Head right now (worked out from each row's approval pipeline)
+PAGED_STATUS_CHOICES = STATUS_CHOICES + ("waiting_hr", "waiting_hod")
+SORT_CHOICES = ("latest", "oldest", "waiting", "employee", "kind")
 
 # "Approved / rejected this month" counts decisions made this month. A request carries no single "decided at" column across
 # kinds, so decisions are read from rows submitted since the start of the PREVIOUS month: nobody waits longer than that for a
@@ -65,13 +79,25 @@ class Kind:
     scope_field: str = "employee__branch_id"
     extra_filter: dict = field(default_factory=dict)
     select: tuple[str, ...] = ("employee__department", "employee__designation", "employee__branch")
+    # the request's own text columns the paged search looks in (besides the employee's name, code, department ...)
+    search: tuple[str, ...] = ("reason",)
 
 
 # The Compensation claims list (the Sunday / holiday work section's Claims tab lists every claim kind).
 COMPENSATION_CLAIMS_PATH = "/hr/compensation/compensation-leave/holiday-work/claims"
 
 KINDS: tuple[Kind, ...] = (
-    Kind("leave", "Leave", "leave", "LeaveRequest", "quick", "/hr/leave?tab=leaves", "Leave & Holiday", ("pending",)),
+    Kind(
+        "leave",
+        "Leave",
+        "leave",
+        "LeaveRequest",
+        "quick",
+        "/hr/leave?tab=leaves",
+        "Leave & Holiday",
+        ("pending",),
+        search=("reason", "type"),
+    ),
     Kind(
         "permission",
         "Permission",
@@ -113,6 +139,7 @@ KINDS: tuple[Kind, ...] = (
         ("pending_hod", "pending_hr"),
         scope_field="branch_id",
         select=("employee__department", "employee__designation", "employee__branch", "branch"),
+        search=("destination",),
     ),
     Kind(
         "on_duty_punch",
@@ -125,6 +152,7 @@ KINDS: tuple[Kind, ...] = (
         "Geo Attendance",
         ("pending",),
         select=("employee__department", "employee__designation", "employee__branch", "session"),
+        search=("session__destination",),
     ),
     Kind(
         "outpass",
@@ -137,6 +165,7 @@ KINDS: tuple[Kind, ...] = (
         ("pending",),
         extra_filter={"source": "manual"},
         select=("employee__department", "employee__designation", "employee__branch", "exit_gate"),
+        search=("destination", "reason"),
     ),
     Kind(
         "request",
@@ -147,6 +176,7 @@ KINDS: tuple[Kind, ...] = (
         None,
         None,
         ("pending", "in_review", "more_info"),
+        search=("subject", "description", "hr_notes"),
     ),
     Kind(
         "attendance_correction",
@@ -190,6 +220,7 @@ KINDS: tuple[Kind, ...] = (
         "/hr/settlement",
         "Settlement",
         ("pending",),
+        search=("purpose",),
     ),
 )
 BY_KEY = {k.key: k for k in KINDS}
@@ -225,6 +256,16 @@ def _hhmm(value) -> str | None:
 
 def _money(value) -> str:
     return f"Rs. {float(value):,.0f}"
+
+
+def _requested(day, to=None, note: str | None = None, *, label: str = "Requested date", precision: str = "day"):
+    """The date (or range) a request is FOR, as the page shows it beside when it was submitted (owner brief 2026-11-21):
+    {"from", "to" (a range only), "note" (time, part of day ...), "label" (what the date is), "precision" (day | month)}.
+    None when there is no date to show."""
+    if not day:
+        return None
+    text = lambda v: v if isinstance(v, str) else v.isoformat()  # noqa: E731
+    return {"from": text(day), "to": text(to) if to else None, "note": note, "label": label, "precision": precision}
 
 
 def _employee_json(emp, photos: dict | None = None) -> dict:
@@ -300,6 +341,12 @@ def _leave(r):
         "label": label,
         "summary": f"{span} · {days:g} day{'' if days == 1 else 's'}",
         "reason": r.reason,
+        "requested": _requested(
+            r.start_date,
+            r.end_date if r.end_date != r.start_date else None,
+            f"{days:g} day{'' if days == 1 else 's'}",
+            label="Requested dates" if r.end_date and r.end_date != r.start_date else "Requested date",
+        ),
         "date": r.start_date,
         "details": details,
         "decision": (r.approved_by, _role(r.approver_role), None, r.hr_comment),
@@ -313,6 +360,7 @@ def _permission(r, extra):
         "label": f"Permission · {perm['typeLabel'] or 'Type not set'}",
         "summary": f"{perm['date']}" + (f" at {time_text}" if time_text else ""),
         "reason": r.reason,
+        "requested": _requested(perm["date"], note=f"at {time_text}" if time_text else None),
         "date": perm["date"],
         "details": [
             ("Date", perm["date"]),
@@ -339,6 +387,7 @@ def _casual(r):
         "label": f"Casual Leave · Half day ({portion.lower()})" if portion else "Casual Leave",
         "summary": f"{r.date} · {portion.lower()}" if portion else str(r.date),
         "reason": r.reason,
+        "requested": _requested(r.date, note=f"half day ({portion.lower()})" if portion else "full day"),
         "date": str(r.date),
         "details": [("Date", str(r.date)), ("Day part", f"Half day ({portion.lower()})" if portion else "Full day")],
         "decision": (r.reviewed_by, _role(r.reviewer_role), r.reviewed_at, r.review_comment),
@@ -351,6 +400,9 @@ def _missing_punch(r):
         "label": f"Missing Punch · {slot}",
         "summary": f"{r.date} at {_hhmm(r.punch_time)} · {slot}",
         "reason": r.reason,
+        "requested": _requested(
+            r.date, note=f"{slot.lower()} at {_hhmm(r.punch_time)}" if r.punch_time else slot.lower()
+        ),
         "date": str(r.date),
         "details": [("Date", str(r.date)), ("Punch time", _hhmm(r.punch_time) or ""), ("Punch", slot)],
         "decision": (
@@ -377,6 +429,12 @@ def _on_duty(r):
         "label": "On-Duty",
         "summary": r.destination,
         "reason": None,
+        # the day the employee went on duty (the day they started it, else the day they asked)
+        "requested": _requested(
+            (r.started_at or r.created_at).astimezone(FACTORY_TZ).date() if (r.started_at or r.created_at) else None,
+            note=f"at {r.destination}" if r.destination else None,
+            label="On-Duty day",
+        ),
         "date": _iso(r.created_at.astimezone(FACTORY_TZ).date()) if r.created_at else None,
         "details": details,
         "decision": (
@@ -395,6 +453,7 @@ def _on_duty_punch(r):
         "label": f"On-Duty punch {r.punch_number} ({punch})",
         "summary": f"{r.punch_date} {_hhmm(r.punch_time)} · {r.session.destination}",
         "reason": None,
+        "requested": _requested(r.punch_date, note=f"punch at {_hhmm(r.punch_time)}" if r.punch_time else None),
         "date": str(r.punch_date),
         "details": [
             ("Date", str(r.punch_date)),
@@ -417,6 +476,16 @@ def _outpass(r):
         "label": f"Outpass · {_cap(r.pass_type)}" if r.pass_type else "Outpass",
         "summary": r.destination,
         "reason": r.reason,
+        # an outpass is for the day it was asked for (going out now), back by the expected time when one was given
+        "requested": _requested(
+            r.created_at.astimezone(FACTORY_TZ).date() if r.created_at else None,
+            note=(
+                f"back by {r.expected_return_at.astimezone(FACTORY_TZ).strftime('%H:%M')}"
+                if r.expected_return_at
+                else None
+            ),
+            label="Going out on",
+        ),
         "date": _iso(r.created_at.astimezone(FACTORY_TZ).date()) if r.created_at else None,
         "details": details,
         "decision": (r.approved_by, _role(r.approver_role), r.approved_at, r.review_comment),
@@ -429,6 +498,8 @@ def _request(r):
         "label": type_label,
         "summary": r.subject,
         "reason": r.description,
+        "reasonLabel": "Description",
+        "requested": None,  # a general request is not for a date
         "date": _iso(r.created_at.astimezone(FACTORY_TZ).date()) if r.created_at else None,
         "details": [("Type", type_label), ("Subject", r.subject), ("Handled", _cap(r.status))],
         "decision": (r.handled_by, "hr" if r.handled_by else None, r.handled_at, r.hr_notes),
@@ -459,6 +530,7 @@ def _correction(r):
         "label": "Attendance correction",
         "summary": f"{r.date} · {was} → {proposed}",
         "reason": r.reason,
+        "requested": _requested(r.date, note=f"{was} → {proposed}"),
         "date": str(r.date),
         "details": details,
         "decision": (r.reviewed_by, "hr" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
@@ -494,6 +566,9 @@ def _holiday_work(r):
         "label": label,
         "summary": summary,
         "reason": r.reason,
+        "requested": _requested(
+            r.work_date, note=summary.split(" · ", 1)[1] if " · " in summary else None, label=details[0][0]
+        ),
         "date": str(r.work_date),
         "details": details,
         "decision": (r.reviewed_by, "hod" if r.reviewed_by else None, r.reviewed_at, r.review_comment),
@@ -516,6 +591,7 @@ def _resignation(r):
         "label": "Resignation",
         "summary": f"Last working day {r.last_working_date}" if r.last_working_date else "Last working day not given",
         "reason": r.reason,
+        "requested": _requested(r.last_working_date, label="Last working day"),
         "date": _iso(r.last_working_date),
         "details": details,
         "decision": (
@@ -536,6 +612,13 @@ def _advance(r):
         "label": f"Advance · {kind_label}",
         "summary": f"{_money(r.amount)} · {kind_label}",
         "reason": r.purpose,
+        "reasonLabel": "Purpose",
+        # an advance is for the month its deduction starts in
+        "requested": (
+            _requested(date(r.repayment_start_year, r.repayment_start_month, 1), label="Deduct from", precision="month")
+            if r.repayment_start_year and r.repayment_start_month
+            else None
+        ),
         "date": _iso(r.created_at.astimezone(FACTORY_TZ).date()) if r.created_at else None,
         "details": details,
         "decision": (r.approved_by, "hr" if r.approved_by else None, r.approved_at, None),
@@ -584,6 +667,9 @@ def _item(kind: Kind, obj, cfg, extra: dict, photos: dict | None = None) -> dict
         "label": parts["label"],
         "summary": parts["summary"],
         "reason": parts.get("reason"),
+        # added 2026-11-21: what the reason is called on this kind, and the date(s) the request is for
+        "reasonLabel": parts.get("reasonLabel") or "Reason",
+        "requested": parts.get("requested"),
         "date": parts.get("date"),
         "details": [{"label": a, "value": b} for a, b in parts["details"]],
         "status": status,
@@ -622,7 +708,7 @@ def _filtered_qs(kind: Kind, request: Request, params: dict):
     qs = _with_related(kind, request)
     status = params["status"]
     waiting = Q(status__in=kind.waiting)
-    if status == "waiting":
+    if status in ("waiting", "waiting_hr", "waiting_hod"):
         qs = qs.filter(waiting)
     elif status == "decided":
         qs = qs.exclude(waiting)
@@ -649,10 +735,16 @@ def _day_start(day: date) -> datetime:
 
 def _parse_params(request: Request) -> tuple[dict | None, str | None]:
     q = request.query_params
+    paged = bool(q.get("page"))
     status = (q.get("status") or "any").lower()
-    if status not in STATUS_CHOICES:
-        return None, f"status must be one of: {', '.join(STATUS_CHOICES)}"
+    choices = PAGED_STATUS_CHOICES if paged else STATUS_CHOICES
+    if status not in choices:
+        return None, f"status must be one of: {', '.join(choices)}"
     out: dict = {"status": status, "since": None, "until": None}
+    page, error = _parse_paging(q) if paged else (None, None)
+    if error:
+        return None, error
+    out["paging"] = page
     try:
         if q.get("since"):
             out["since"] = _day_start(date.fromisoformat(q["since"]))
@@ -672,6 +764,35 @@ def _parse_params(request: Request) -> tuple[dict | None, str | None]:
         return None, f"unknown kind: {', '.join(unknown)}"
     out["kinds"] = wanted
     return out, None
+
+
+def _parse_paging(q) -> tuple[dict | None, str | None]:
+    """page / pageSize / q / sort / requestType / focus / export of the paged list (2026-11-21)."""
+    try:
+        page = max(1, int(q.get("page") or 1))
+        size = int(q.get("pageSize") or PAGE_SIZE_DEFAULT)
+    except (TypeError, ValueError):
+        return None, "page and pageSize must be numbers"
+    export = q.get("export") in ("1", "true")
+    size = max(1, min(EXPORT_MAX if export else PAGE_SIZE_MAX, size))
+    sort = (q.get("sort") or "latest").lower()
+    if sort not in SORT_CHOICES:
+        return None, f"sort must be one of: {', '.join(SORT_CHOICES)}"
+    focus = None
+    raw_focus = (q.get("focus") or "").strip()
+    if raw_focus:
+        key, _, pk = raw_focus.rpartition("-")
+        if key not in BY_KEY or not pk.isdigit():
+            return None, "focus must be <kind>-<id>, e.g. leave-12"
+        focus = (key, int(pk))
+    return {
+        "page": page,
+        "size": size,
+        "words": [w for w in str(q.get("q") or "")[:200].lower().split() if w],
+        "sort": sort,
+        "request_type": (q.get("requestType") or "").strip() or None,
+        "focus": focus,
+    }, None
 
 
 def _access_by_kind(request: Request) -> tuple[dict[str, str], dict[str, bool]]:
@@ -774,6 +895,134 @@ def _filter_options(request: Request) -> dict:
     }
 
 
+# ───────────────────────────── the paged list (2026-11-21) ─────────────────────────────
+
+# the employee columns every word of the search may match (the request's own text is Kind.search)
+EMPLOYEE_SEARCH = (
+    "employee__first_name",
+    "employee__last_name",
+    "employee__employee_code",
+    "employee__department__name",
+    "employee__designation__title",
+    "employee__branch__name",
+)
+
+
+def _search_q(kind: Kind, words: list[str]) -> Q:
+    """Every word must appear in the employee's name / code / department / designation / branch or in the request's own
+    text; a word that is part of the kind's name ("leave", "outpass") matches every request of that kind."""
+    query = Q()
+    label = kind.label.lower()
+    for word in words:
+        if word in label:
+            continue
+        any_column = Q()
+        for column in EMPLOYEE_SEARCH + kind.search:
+            any_column |= Q(**{f"{column}__icontains": word})
+        query &= any_column
+    return query
+
+
+@dataclass(frozen=True)
+class _Row:
+    """What the order of the whole list needs of one request, read without building it."""
+
+    kind: Kind
+    id: int
+    at: float  # submitted, as a timestamp (0 when unknown)
+    waiting: bool
+    name: str
+
+
+def _sorted(rows: list[_Row], sort: str) -> list[_Row]:
+    newest = sorted(rows, key=lambda r: (r.at, r.kind.key, r.id), reverse=True)
+    if sort == "oldest":
+        return newest[::-1]
+    if sort == "waiting":
+        # waiting requests first, the longest waiting on top; decided ones after, newest first
+        return [r for r in newest if r.waiting][::-1] + [r for r in newest if not r.waiting]
+    if sort == "employee":
+        return sorted(newest, key=lambda r: r.name)  # stable: newest first within one employee
+    if sort == "kind":
+        return sorted(newest, key=lambda r: r.kind.label.lower())
+    return newest
+
+
+def _matching_rows(kind: Kind, request: Request, params: dict) -> list[_Row]:
+    paging = params["paging"]
+    qs = _filtered_qs(kind, request, params)
+    if paging["words"]:
+        qs = qs.filter(_search_q(kind, paging["words"]))
+    if paging["request_type"] and kind.key == "request":
+        qs = qs.filter(request_type=paging["request_type"])
+    keep = None
+    queue = {"waiting_hr": "hr", "waiting_hod": "hod"}.get(params["status"])
+    if queue:
+        # who a request waits for comes from its pipeline, not a column: worked out for the (few) waiting rows only
+        cfg = approval.get_config(kind.key)
+        keep = {obj.id for obj in qs if (_queue(approval.progress(kind.key, obj, cfg)) or "other") == queue}
+    rows = []
+    light = qs.values_list("id", "created_at", "status", "employee__first_name", "employee__last_name")
+    for pk, created, status, first, last in light:
+        if keep is not None and pk not in keep:
+            continue
+        name = f"{first or ''} {last or ''}".strip().lower()
+        rows.append(_Row(kind, pk, created.timestamp() if created else 0.0, status in kind.waiting, name))
+    return rows
+
+
+def _build(pairs: list[tuple[Kind, int]], request: Request, extra: dict) -> list[dict]:
+    """The full rows of one page, in the page's order (one query per kind on the page, one for the photos)."""
+    ids_by_kind: dict[str, list[int]] = {}
+    for kind, pk in pairs:
+        ids_by_kind.setdefault(kind.key, []).append(pk)
+    objs = {}
+    for key, ids in ids_by_kind.items():
+        for obj in _with_related(BY_KEY[key], request).filter(pk__in=ids):
+            objs[(key, obj.id)] = obj
+    photos = photo_links(obj.employee_id for obj in objs.values())
+    cfgs: dict[str, approval.Config] = {}
+    items = []
+    for kind, pk in pairs:
+        obj = objs.get((kind.key, pk))
+        if obj is not None:
+            cfg = cfgs.setdefault(kind.key, approval.get_config(kind.key))
+            items.append(_item(kind, obj, cfg, extra, photos))
+    return items
+
+
+def _paged(request: Request, params: dict, wanted: list[Kind], allowed: list[Kind], extra: dict) -> dict:
+    paging = params["paging"]
+    rows: list[_Row] = []
+    matched: dict[str, int] = {}
+    for kind in wanted:
+        found = _matching_rows(kind, request, params)
+        matched[kind.key] = len(found)
+        rows.extend(found)
+    rows = _sorted(rows, paging["sort"])
+    total = len(rows)
+    size = paging["size"]
+    pages = max(1, -(-total // size))
+    page = min(paging["page"], pages)
+    chunk = rows[(page - 1) * size : page * size]
+    items = _build([(r.kind, r.id) for r in chunk], request, extra)
+    focus_item = None
+    if paging["focus"]:
+        key, pk = paging["focus"]
+        if any(k.key == key for k in allowed):
+            found = _build([(BY_KEY[key], pk)], request, extra)
+            focus_item = found[0] if found else None
+    return {
+        "items": items,
+        "matched": matched,
+        "page": page,
+        "pageSize": size,
+        "total": total,
+        "pages": pages,
+        "focusItem": focus_item,
+    }
+
+
 def _permission_row_builder():
     """The permission list's own serializer (with the monthly-cap lookups it needs), shared across the rows of one call."""
     from .leave_views import _CapStatusCache, _permission_json
@@ -799,18 +1048,22 @@ def hr_requests(request: Request) -> Response:
 
     wanted = [k for k in allowed if not params["kinds"] or k.key in params["kinds"]]
     extra = {"permission": _permission_row_builder()}
+    paged = _paged(request, params, wanted, allowed, extra) if params["paging"] else None
     items: list[dict] = []
     matched: dict[str, int] = {}
-    listed: list[tuple[Kind, list]] = []
-    for kind in wanted:
-        qs = _filtered_qs(kind, request, params)
-        matched[kind.key] = qs.count()
-        listed.append((kind, list(qs[: params["limit"]])))
-    photos = photo_links(obj.employee_id for _kind, rows in listed for obj in rows)
-    for kind, rows in listed:
-        cfg = approval.get_config(kind.key)
-        items.extend(_item(kind, obj, cfg, extra, photos) for obj in rows)
-    items.sort(key=lambda i: (i["submittedAt"] or "", i["id"]), reverse=True)
+    if paged:
+        items, matched = paged["items"], paged["matched"]
+    else:
+        listed: list[tuple[Kind, list]] = []
+        for kind in wanted:
+            qs = _filtered_qs(kind, request, params)
+            matched[kind.key] = qs.count()
+            listed.append((kind, list(qs[: params["limit"]])))
+        photos = photo_links(obj.employee_id for _kind, rows in listed for obj in rows)
+        for kind, rows in listed:
+            cfg = approval.get_config(kind.key)
+            items.extend(_item(kind, obj, cfg, extra, photos) for obj in rows)
+        items.sort(key=lambda i: (i["submittedAt"] or "", i["id"]), reverse=True)
 
     kinds_json = []
     for kind in allowed:
@@ -834,15 +1087,17 @@ def hr_requests(request: Request) -> Response:
                 "waitingHr": waiting["hr"],
                 "waitingHod": waiting["hod"],
                 "matched": matched.get(kind.key),
-                "truncated": matched.get(kind.key, 0) > params["limit"],
+                # a paged list is never cut short: every matching request is on one of its pages
+                "truncated": not paged and matched.get(kind.key, 0) > params["limit"],
             }
         )
-    return Response(
-        {
-            "kinds": kinds_json,
-            "stats": totals,
-            "items": items,
-            "limit": params["limit"],
-            "options": _filter_options(request),
-        }
-    )
+    body = {
+        "kinds": kinds_json,
+        "stats": totals,
+        "items": items,
+        "limit": paged["pageSize"] if paged else params["limit"],
+        "options": _filter_options(request),
+    }
+    if paged:
+        body.update({k: paged[k] for k in ("page", "pageSize", "total", "pages", "focusItem")})
+    return Response(body)

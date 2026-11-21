@@ -23,7 +23,20 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { WaitingChip, ApprovalTrailLine } from "@/components/ApprovalTrail";
 import { explainsWaiting } from "@/lib/approval-workflow";
 import { cn } from "@/lib/utils";
-import { decisionsHere, roleText, statusChip, waitingDays, type HubItem, type HubKind, type KindKey } from "./logic";
+import {
+  decisionsHere,
+  reasonLabel,
+  requestDayText,
+  requestedLabel,
+  requestedText,
+  roleText,
+  statusChip,
+  submittedText,
+  waitingDays,
+  type HubItem,
+  type HubKind,
+  type KindKey,
+} from "./logic";
 import { reminderOf, reminderText } from "./reminders";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
@@ -137,16 +150,29 @@ export function EmployeeCell({ item, size = 34 }: { item: HubItem; size?: number
   );
 }
 
-/** What was asked, in one or two lines. */
+/** What was asked: the request, the date(s) it is for and the employee's reason (owner brief 2026-11-21). */
 export function RequestCell({ item }: { item: HubItem }) {
+  const requested = requestedText(item);
   return (
     <div className="flex min-w-0 items-start gap-2.5">
       <KindIcon kind={item.kind} />
-      <div className="min-w-0">
+      <div className="min-w-0 space-y-0.5">
         <p className="text-sm font-semibold text-gray-900">{item.label}</p>
-        <p className="line-clamp-2 text-xs text-gray-600">{item.summary}</p>
+        {requested ? (
+          <p className="text-xs text-gray-700" data-testid={`requested-${item.key}`}>
+            <span className="font-semibold text-gray-500">{requestedLabel(item)}:</span> {requested}
+          </p>
+        ) : (
+          <p className="line-clamp-2 text-xs text-gray-600">{item.summary}</p>
+        )}
+        {/* the summary adds what the date line does not say (a destination, an amount); a date repeated is left out */}
+        {requested && item.summary && !item.summary.includes(item.requested?.from ?? "") && (
+          <p className="line-clamp-1 text-xs text-gray-500">{item.summary}</p>
+        )}
         {item.reason && item.reason !== item.summary && (
-          <p className="line-clamp-1 text-xs italic text-gray-400">{item.reason}</p>
+          <p className="line-clamp-2 text-xs text-gray-500" data-testid={`reason-${item.key}`}>
+            <span className="font-semibold">{reasonLabel(item)}:</span> <span className="italic">{item.reason}</span>
+          </p>
         )}
       </div>
     </div>
@@ -190,11 +216,16 @@ export function ReminderLine({ item }: { item: HubItem }) {
   );
 }
 
+/** The request date and the time it was sent; the exact moment (to the second) on hover and in the details. */
 export function SubmittedCell({ item }: { item: HubItem }) {
   return (
-    <div className="whitespace-nowrap text-xs text-gray-500" title={dateTimeLong(item.submittedAt)}>
-      <p className="font-semibold text-gray-700">{dateShort(item.submittedAt)}</p>
-      <p>{timeShort(item.submittedAt)}</p>
+    <div
+      className="whitespace-nowrap text-xs text-gray-500"
+      title={item.submittedAt ? `Submitted ${submittedText(item.submittedAt)}` : undefined}
+      data-testid={`submitted-${item.key}`}
+    >
+      <p className="font-semibold text-gray-700">{requestDayText(item.submittedAt)}</p>
+      <p className="tabular-nums">{timeShort(item.submittedAt)}</p>
     </div>
   );
 }

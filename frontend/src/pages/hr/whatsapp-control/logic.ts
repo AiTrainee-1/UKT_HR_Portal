@@ -405,6 +405,13 @@ export const OWN_SWITCH_TYPE: Readonly<Record<string, string>> = {
   lateAlertEnabled: "late_alert",
   missingPunchAlertEnabled: "missing_punch_alert",
   hodRequestWaitingEnabled: "hod_request_waiting",
+  // the On-Duty tracking alerts (2026-11-21): one switch each, covering the Department Head's copy too
+  geoLocationOffEnabled: "geo_location_off",
+  geoPermissionRestrictedEnabled: "geo_permission_restricted",
+  geoBackgroundRestrictedEnabled: "geo_background_restricted",
+  geoMissingPunchEnabled: "geo_missing_punch",
+  geoPunchReminderEnabled: "geo_punch_reminder",
+  geoTrackingFailureEnabled: "geo_tracking_failure",
 };
 
 /** The message type a switch turns on and off, or null for a module / workflow switch. */

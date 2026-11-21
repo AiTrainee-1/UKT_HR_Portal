@@ -371,13 +371,27 @@ describe("DetailDialog and DecisionDialog", () => {
     expect(h.calls).toEqual(["reject:leave-1"]);
   });
 
-  it("the reject dialog asks for an optional reason and confirms with it", () => {
+  it("a rejection cannot be confirmed without its reason (owner brief 2026-11-21)", () => {
     const onConfirm = vi.fn();
     mount(createElement(DecisionDialog, { item: make({}), mode: "reject", busy: false, onClose: () => {}, onConfirm }));
     const note = document.body.querySelector('[data-testid="decision-note"]') as HTMLTextAreaElement;
-    expect(note.placeholder).toContain("optional");
+    expect(note.placeholder).toContain("required");
     const confirm = document.body.querySelector('[data-testid="decision-confirm"]') as HTMLButtonElement;
     expect(confirm.textContent).toContain("Confirm reject");
+    expect(confirm.disabled).toBe(true);
+    click(confirm);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("the approval dialog (On-Duty) needs no note", () => {
+    const onConfirm = vi.fn();
+    mount(
+      createElement(DecisionDialog, { item: make({}), mode: "approve", busy: false, onClose: () => {}, onConfirm }),
+    );
+    const note = document.body.querySelector('[data-testid="decision-note"]') as HTMLTextAreaElement;
+    expect(note.placeholder).toContain("optional");
+    const confirm = document.body.querySelector('[data-testid="decision-confirm"]') as HTMLButtonElement;
+    expect(confirm.disabled).toBe(false);
     click(confirm);
     expect(onConfirm).toHaveBeenCalledWith("");
   });
@@ -399,14 +413,13 @@ describe("Toolbar", () => {
           departments: [],
         },
         showRequestType: false,
-        shown: 2,
-        total: 9,
+        matching: 2,
         canExport: true,
         onExport,
       }),
     );
     const count = document.body.querySelector('[data-testid="requests-count"]')!;
-    expect(count.textContent).toContain("Showing 2 of 9 requests");
+    expect(count.textContent).toContain("2 requests match");
     expect(count.textContent).toContain("1 filter on");
     click(document.body.querySelector('[data-testid="requests-clear-filters"]'));
     expect(onFilters).toHaveBeenCalledWith({ ...NO_FILTERS });

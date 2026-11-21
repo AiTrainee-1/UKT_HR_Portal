@@ -45,7 +45,10 @@ class LifecycleBase(GeoBase):
 
     def decide(self, session, status="approved", user=None):
         return self.as_hr(
-            user or self.hr_super, "patch", f"/api/on-duty-sessions/{session.pk}/status", {"status": status}
+            user or self.hr_super,
+            "patch",
+            f"/api/on-duty-sessions/{session.pk}/status",
+            {"status": status, "comment": "Not approved this time"} if status == "rejected" else {"status": status},
         )
 
     def snapshot(self, track):
@@ -242,7 +245,10 @@ class EndTests(LifecycleBase):
         ManagerEmployeeAssignment.objects.create(manager=manager, employee=self.asha)
         session = self.submit()
         r = self.as_employee(
-            boss, "patch", f"/api/manager/on-duty-sessions/{session.pk}/status", {"status": "rejected"}
+            boss,
+            "patch",
+            f"/api/manager/on-duty-sessions/{session.pk}/status",
+            {"status": "rejected", "comment": "Not on duty"},
         )
         self.assertEqual(r.status_code, 200, r.content)
         self.assertEqual((self.track_of(session).status, self.track_of(session).end_reason), ("ended", "rejected"))

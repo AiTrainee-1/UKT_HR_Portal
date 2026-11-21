@@ -1659,7 +1659,7 @@ class GeoApprovalTests(TestCase):
             longitude="77.3",
             photo="on_duty_punch_verifications/q.jpg",
         )
-        resolve_on_duty_session_hr(self.session, "rejected", "Priya", None)
+        resolve_on_duty_session_hr(self.session, "rejected", "Priya", "Not on duty")
         self.assertIn("1 punch(es)", self.texts()[0])
 
     def test_the_department_head_rejecting_is_final_and_says_who(self):
@@ -1678,7 +1678,7 @@ class GeoApprovalTests(TestCase):
 
     def test_the_switch_covers_rejections_too(self):
         WhatsAppSettings.objects.filter(pk=1).update(geo_approval_enabled=False)
-        resolve_on_duty_session_hr(self.session, "rejected", "Priya", None)
+        resolve_on_duty_session_hr(self.session, "rejected", "Priya", "Not on duty")
         self.assertEqual(self.meta.sent, [])
 
     def test_the_switch_off_sends_nothing_but_the_approval_still_happens(self):

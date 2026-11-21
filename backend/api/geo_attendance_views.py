@@ -1260,6 +1260,9 @@ def on_duty_punch_verification_hr_status(request: Request, pk: int) -> Response:
         return _error("status must be 'approved' or 'rejected'")
     if refused := hr_access.approval_refusal(request, "on_duty_punch"):  # the approval right, not the edit right
         return refused
+    # rejecting needs the reason the employee reads, approving never does (2026-11-21)
+    if refused := approval.reject_remark_refusal(status_val, request.data.get("comment")):
+        return refused
 
     # The invariant that makes provisional on-duty safe: a punch cannot
     # become real attendance before its session is approved. Without this,
@@ -1303,6 +1306,9 @@ def on_duty_session_punches_hr_status(request: Request, pk: int) -> Response:
     if status_val not in ("approved", "rejected"):
         return _error("status must be 'approved' or 'rejected'")
     if refused := hr_access.approval_refusal(request, "on_duty_punch"):  # the approval right, not the edit right
+        return refused
+    # rejecting needs the reason the employee reads, approving never does (2026-11-21)
+    if refused := approval.reject_remark_refusal(status_val, request.data.get("comment")):
         return refused
 
     # Same invariant as the single-punch endpoint: nothing becomes attendance

@@ -239,6 +239,7 @@ export const GROUP_ORDER: readonly string[] = [
   "attendance",
   "approvals",
   "geo",
+  "tracking",
   "visitors",
   "outpass",
   "other",
@@ -288,6 +289,7 @@ export const AUDIENCE_LABEL: Record<PushAudience, string> = {
   employee: "To the employee",
   approver: "To the approver",
   hr: "To HR",
+  employee_hod: "To the employee, then the Department Head",
 };
 
 export const audienceLabel = (a: string | undefined): string =>
@@ -363,12 +365,21 @@ export function categoryChange(
   return Object.fromEntries(keys.filter((k) => known.get(k) !== on).map((k) => [k, on]));
 }
 
-export const AUDIENCE_SHORT: Record<PushAudience, string> = { employee: "Employees", approver: "Approvers", hr: "HR" };
+export const AUDIENCE_SHORT: Record<PushAudience, string> = {
+  employee: "Employees",
+  approver: "Approvers",
+  hr: "HR",
+  employee_hod: "Employees",
+};
 
 /** Who receives a category, in words ("Employees", "Approvers"); nothing known: the employees. */
 export function audienceNames(audience: readonly string[] | undefined): string[] {
   const list = audience && audience.length ? audience : ["employee"];
-  return list.map((a) => AUDIENCE_SHORT[a as PushAudience] ?? a);
+  // "the employee, then the Department Head" names both (each once)
+  const names = list.flatMap((a) =>
+    a === "employee_hod" ? ["Employees", "Approvers"] : [AUDIENCE_SHORT[a as PushAudience] ?? a],
+  );
+  return [...new Set(names)];
 }
 
 export type SegmentId = "delivered" | "sent" | "failed" | "off" | "noDevice" | "waiting";

@@ -169,7 +169,12 @@ class LegacyAccountsUnchanged(Matrix):
         mp.refresh_from_db()
         self.assertEqual(mp.status, "approved")
         lv = self.leave()
-        r = self.call(self.admin, "patch", f"/api/leave-requests/{lv.id}/status", {"status": "rejected"})
+        r = self.call(
+            self.admin,
+            "patch",
+            f"/api/leave-requests/{lv.id}/status",
+            {"status": "rejected", "hrComment": "Not needed"},
+        )
         self.assertEqual(r.status_code, 200, r.content)
 
     def test_admin_with_view_only_is_refused_by_the_module_check_as_before(self):
@@ -204,7 +209,12 @@ class LegacyAccountsUnchanged(Matrix):
     def test_super_admin_approves_everything(self):
         self.assertTrue(all(hr_access.effective_approvals(self.super_admin).values()))
         corr = self.correction()
-        r = self.call(self.super_admin, "patch", f"/api/attendance/override-requests/{corr.id}", {"status": "rejected"})
+        r = self.call(
+            self.super_admin,
+            "patch",
+            f"/api/attendance/override-requests/{corr.id}",
+            {"status": "rejected", "comment": "Not needed"},
+        )
         self.assertEqual(r.status_code, 200, r.content)
         me = self.call(self.super_admin, "get", "/api/auth/me").json()
         self.assertEqual((me["displayCategory"], me["categoryLabel"]), ("super_admin", "Super Admin"))
@@ -233,7 +243,12 @@ class AssistantRules(Matrix):
             self.assertIn("HR Assistants can't approve missing-punch", r.json()["error"])
             mp.refresh_from_db()
             self.assertEqual(mp.status, "pending_hr")
-            r = self.call(user, "patch", f"/api/missing-punch-requests/{mp.id}/status", {"status": "rejected"})
+            r = self.call(
+                user,
+                "patch",
+                f"/api/missing-punch-requests/{mp.id}/status",
+                {"status": "rejected", "comment": "Not needed"},
+            )
             self.assert_refused(r)
         self.assertFalse(hr_access.effective_approvals(self.assistant_generous)["missing_punch"])
 
@@ -466,7 +481,12 @@ class ManagerScope(Matrix):
         r = self.call(self.manager, "patch", f"/api/missing-punch-requests/{mp.id}/status", {"status": "approved"})
         self.assertEqual(r.status_code, 200, r.content)
         corr = self.correction()
-        r = self.call(self.manager, "patch", f"/api/attendance/override-requests/{corr.id}", {"status": "rejected"})
+        r = self.call(
+            self.manager,
+            "patch",
+            f"/api/attendance/override-requests/{corr.id}",
+            {"status": "rejected", "comment": "Not needed"},
+        )
         self.assertEqual(r.status_code, 200, r.content)
 
     def test_manager_cannot_decide_another_branchs_requests(self):

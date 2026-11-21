@@ -5,7 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Separator } from "@/components/ui/separator";
 import { ApprovalTrail } from "@/components/ApprovalTrail";
 import { hrCanAct, hrCanReject } from "@/lib/approval-workflow";
-import { HALF_DAY_LABEL, decidedByLine, fmtDays, leaveDays, longDate, type LeaveRow } from "./logic";
+import { HALF_DAY_LABEL, decidedByLine, fmtDays, leaveDays, longDate, submittedOn, type LeaveRow } from "./logic";
 import { StatusChip } from "./parts";
 
 function Field({ icon, label, children }: { icon?: ReactNode; label: string; children: ReactNode }) {
@@ -107,6 +107,9 @@ export default function LeaveDetailDialog({
               <Field label="Working Days">
                 {fmtDays(days)} day{days === 1 ? "" : "s"}
               </Field>
+              <Field label="Submitted on">
+                <span data-testid="leave-submitted-on">{submittedOn(leave.createdAt)}</span>
+              </Field>
             </div>
             {leave.reason && (
               <div>
@@ -123,9 +126,6 @@ export default function LeaveDetailDialog({
               </div>
             )}
             {by && <p className="text-xs text-gray-500">{by}</p>}
-            <p className="text-xs text-gray-300">
-              Submitted: {leave.createdAt ? new Date(leave.createdAt).toLocaleString("en-IN") : "-"}
-            </p>
           </div>
 
           {leave.approval && (

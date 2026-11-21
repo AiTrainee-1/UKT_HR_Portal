@@ -1,6 +1,6 @@
 """On-Duty Geo-Tracking: our own location tracking for employees working off-site.
 
-Seven tables (all new; the only change to an existing table is OnDutyPunchVerification.photo2, in attendance.py):
+Eight tables (all new; the only change to an existing table is OnDutyPunchVerification.photo2, in attendance.py):
   GeoTrackingSettings   singleton (pk=1): the thresholds of the journey pipeline, the upload cadence the apps follow,
                         retention, the day-end time, how many photos an on-duty punch takes, the privacy notice
   DutyTrack             ONE tracking session per On-Duty request (OneToOne to OnDutySession). Starts when the request is
@@ -12,6 +12,9 @@ Seven tables (all new; the only change to an existing table is OnDutyPunchVerifi
                         The "stationary / waiting periods" are the kind='stop' rows. Kept after the raw rows are purged
   TrackingDevice        the phone an employee tracks from: model, app version, permission level, health, last seen
   TrackingConsent       a record that the employee saw and accepted the tracking notice
+  GeoTrackingAlert      one episode of an automatic tracking alert (location off, a restricted permission, a silent phone,
+                        a missing punch, a punch reminder): when it was detected, what the employee and their Department
+                        Head were sent on each channel, and when it ended (geo_tracking/alerts.py, 2026-11-21)
 
 Every time column is a timezone-aware UTC instant. Coordinates are DecimalField(9, 6) like every other geo table here.
 The behaviour lives in api/geo_tracking/ (settings, sessions, ingest, journey pipeline, live state, views, scheduler job).
@@ -24,9 +27,10 @@ from django.db.models import Q
 from django.db.models.functions import Now
 from django.utils import timezone
 
-from .accounts import HRUser
+from .accounts import HRUser, Notification
 from .attendance import OnDutySession
 from .core import Branch, Employee
+from .whatsapp import WhatsAppMessageLog
 
 DEFAULT_NOTICE_TEXT = (
     "While you are on On-Duty work, the UKTextiles app records your location in the background: the route you take, "
@@ -83,6 +87,27 @@ class GeoTrackingSettings(models.Model):
     reverse_geocode_provider = models.CharField(
         max_length=12, choices=REVERSE_GEOCODE_CHOICES, default=REVERSE_GEOCODE_OFF, db_default=REVERSE_GEOCODE_OFF
     )
+
+    # ── automatic tracking alerts (geo_tracking/alerts.py, 2026-11-21) ──
+    # WHEN a problem counts and who is told is a rule of geo tracking, so it lives here. Whether a phone notification or a
+    # WhatsApp message carries it is each channel module's own switch (Phone Notify Control, WhatsApp Control).
+    #: the whole automation: detect location off, permission / background restrictions, silent phones, missing punches
+    alerts_enabled = models.BooleanField(default=True, db_default=True)
+    #: a problem must last this long before the employee is alerted (a 30-second blip never alerts)
+    alert_debounce_minutes = models.PositiveSmallIntegerField(default=2, db_default=2)
+    #: tell the employee's Department Head when the employee has not fixed it this long after their alert
+    alert_hod_enabled = models.BooleanField(default=True, db_default=True)
+    alert_hod_grace_minutes = models.PositiveSmallIntegerField(default=15, db_default=15)
+    #: the same problem coming back this soon after it was fixed is the same episode (no second alert)
+    alert_cooldown_minutes = models.PositiveSmallIntegerField(default=30, db_default=30)
+    #: Missing Geo-Punch: no punch at all this long after the On-Duty track started
+    missing_first_punch_minutes = models.PositiveSmallIntegerField(default=30, db_default=30)
+    #: Missing Geo-Punch: the day's punches are checked at this time (IST) while the duty is still recorded (and when the
+    #: employee marks the duty Done)
+    punch_check_time = models.TimeField(default=time(19, 0), db_default=time(19, 0))
+    #: Geo-Punch reminder: no punch for this long while on duty (one reminder per wait)
+    punch_reminder_minutes = models.PositiveSmallIntegerField(default=180, db_default=180)
+
     updated_by = models.ForeignKey(HRUser, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     updated_at = models.DateTimeField(null=True, blank=True)
 
@@ -411,3 +436,101 @@ class TrackingConsent(models.Model):
         indexes = [
             models.Index(fields=["employee", "notice_version"], name="tracking_consent_emp_ver"),
         ]
+
+
+class GeoTrackingAlert(models.Model):
+    """One EPISODE of an automatic On-Duty tracking alert (geo_tracking/alerts.py): a problem seen on a recording track, from
+    the moment it was first seen until it ended. The row is the dedupe record (one open episode per track, kind and key: a
+    partial unique index), the log HR reads on Geo Attendance, and the per-channel outcome of each stage:
+
+      employee stage   the employee is told what to fix (after the debounce for the phone-state kinds)
+      hod stage        their Department Head is told when it is still not fixed after the grace period (not for reminders)
+
+    `key` separates the episodes of one kind that are about different things: the Missing Geo-Punch "first" (no punch since
+    the track started) and "day" (fewer than 4 punches at the end of the duty day), and a reminder's wait (the punch, or the
+    track start, it counts from). An episode never alerted (it cleared during the debounce) is deleted, not kept."""
+
+    KIND_LOCATION_OFF = "location_off"
+    KIND_PERMISSION = "permission_restricted"
+    KIND_BACKGROUND = "background_restricted"
+    KIND_TRACKING_FAILURE = "tracking_failure"
+    KIND_MISSING_PUNCH = "missing_punch"
+    KIND_PUNCH_REMINDER = "punch_reminder"
+    KIND_CHOICES = (
+        (KIND_LOCATION_OFF, "Location turned off"),
+        (KIND_PERMISSION, "Background location permission restricted"),
+        (KIND_BACKGROUND, "Background app restriction"),
+        (KIND_TRACKING_FAILURE, "On-Duty tracking failure"),
+        (KIND_MISSING_PUNCH, "Missing Geo-Punch"),
+        (KIND_PUNCH_REMINDER, "Geo-Punch reminder"),
+    )
+
+    RESOLVED_FIXED = "fixed"
+    RESOLVED_TRACK_ENDED = "track_ended"
+    RESOLVED_DAY_OVER = "day_over"
+    RESOLVED_ALERTS_OFF = "alerts_off"
+    RESOLUTION_CHOICES = (
+        (RESOLVED_FIXED, "Fixed"),
+        (RESOLVED_TRACK_ENDED, "On-Duty ended"),
+        (RESOLVED_DAY_OVER, "Day over"),
+        (RESOLVED_ALERTS_OFF, "Alerts switched off"),
+    )
+
+    track = models.ForeignKey(DutyTrack, on_delete=models.CASCADE, related_name="alerts")
+    #: the employee the problem is about (the track's)
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name="+")
+    kind = models.CharField(max_length=24, choices=KIND_CHOICES)
+    key = models.CharField(max_length=40, blank=True, default="", db_default="")
+    #: when the problem started (the GPS-off event, the end of the silence, the punch window) or was first seen
+    detected_at = models.DateTimeField()
+    #: the last watchdog run that still saw it
+    last_seen_at = models.DateTimeField()
+    #: the facts behind it, for the log and the wording ({"since": ..., "permission": "while_using", "punches": 2, ...})
+    detail = models.JSONField(default=dict, blank=True)
+
+    # ── the employee ──
+    employee_sent_at = models.DateTimeField(null=True, blank=True)
+    #: outcome codes (alerts.OUTCOMES): made | off | master_off | not_recipient | duplicate | error ...
+    employee_push = models.CharField(max_length=20, blank=True, default="", db_default="")
+    employee_notification = models.ForeignKey(
+        Notification, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    #: queued | off | not_configured | not_sent | error ...
+    employee_whatsapp = models.CharField(max_length=20, blank=True, default="", db_default="")
+    employee_whatsapp_log = models.ForeignKey(
+        WhatsAppMessageLog, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    # ── the Department Head ──
+    hod = models.ForeignKey(Employee, null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
+    #: when the Department Head stage ran (also when there was nobody to tell: outcome no_head)
+    hod_sent_at = models.DateTimeField(null=True, blank=True)
+    hod_push = models.CharField(max_length=20, blank=True, default="", db_default="")
+    hod_notification = models.ForeignKey(
+        Notification, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    hod_whatsapp = models.CharField(max_length=20, blank=True, default="", db_default="")
+    hod_whatsapp_log = models.ForeignKey(
+        WhatsAppMessageLog, null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    resolution = models.CharField(max_length=16, choices=RESOLUTION_CHOICES, blank=True, default="", db_default="")
+    created_at = models.DateTimeField(default=timezone.now, db_default=Now())
+
+    class Meta:
+        db_table = "geo_tracking_alerts"
+        constraints = [
+            # never two open episodes of the same problem: a second watchdog run (or process) cannot alert twice
+            models.UniqueConstraint(
+                fields=["track", "kind", "key"], condition=Q(resolved_at__isnull=True), name="uniq_open_geo_alert"
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["-detected_at"], name="geo_alert_detected"),
+            models.Index(fields=["employee", "-detected_at"], name="geo_alert_emp_detected"),
+            models.Index(fields=["track", "kind"], name="geo_alert_track_kind"),
+        ]
+
+    def __str__(self) -> str:
+        return f"geo alert {self.pk} ({self.kind}, track {self.track_id})"

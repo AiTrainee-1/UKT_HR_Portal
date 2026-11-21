@@ -220,7 +220,12 @@ test("Missing Punch: HR decides only on its turn; a request waiting for the HOD 
   await expect(page.getByTestId("pipeline-note-missing_punch")).toContainText("Employee → HR");
   await expect(row).toContainText("Awaiting HR");
   await expect(buttons(row, "Approve")).toBeVisible();
+  // Reject asks for the reason first: nothing is sent without one
   await buttons(row, "Reject").click();
+  await page.getByTestId("mp-reject-confirm").click();
+  await expect(page.getByTestId("mp-reject-dialog")).toContainText("Write the reason for rejecting");
+  await page.getByTestId("mp-reject-text").fill("e2e: not on the gate log");
+  await page.getByTestId("mp-reject-confirm").click();
   await expect(page.getByText("Missing Punch rejected").first()).toBeVisible();
   await expect(row).toHaveCount(0); // it left the Pending list
 });
@@ -275,7 +280,8 @@ test("Resignations: the stepper follows the pipeline, HR may always reject, and 
   await page.reload();
   await expect(row.getByTestId("approval-trail")).toContainText(/SubmittedHODPendingHRNot reached/);
   await buttons(row, "Reject").click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "Yes, Reject" }).click();
+  await page.getByTestId("resignation-reject-text").fill("e2e: rejected out of turn");
+  await page.getByTestId("resignation-reject-confirm").click();
   await expect(page.getByText("Resignation Rejected").first()).toBeVisible();
   await expect(row).toHaveCount(0); // it left the Active tab
 });

@@ -174,7 +174,7 @@ describe("On-Duty Approvals", () => {
     expect(first).toContain("E1");
     expect(first).toContain("Stitching · Head Office");
     expect(first).toContain("Buyer 1");
-    expect(first).toContain("Requested 28 Oct, 09:00");
+    expect(first).toContain("Submitted 28 Oct, 09:00");
     expect(cards()[0].dataset.status).toBe("pending_hr");
     expect(text(q("approvals-count"))).toBe("2 pending requests");
   });
@@ -196,10 +196,76 @@ describe("On-Duty Approvals", () => {
     click(buttonNamed("Reject"));
     await waitFor(() => q("approval-confirm") !== null, "the second confirmation");
     expect(text(q("approval-confirm"))).toContain("2 punches recorded under it are voided");
-    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, "Not a client visit");
+    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, "  Not a   client visit ");
     clickId("approval-confirm-confirm");
     await waitFor(() => patches.length === 2, "the second decision");
     expect(patches[1].body).toEqual({ status: "rejected", comment: "Not a client visit" });
+  });
+
+  it("approves with no note at all: the note is optional on an approval", async () => {
+    sessions.pending = [session(1, { approval: approval() })];
+    await open();
+    await waitFor(() => cards().length === 1, "the request");
+    click(buttonNamed("Approve"));
+    await waitFor(() => q("approval-confirm") !== null, "the confirmation");
+    expect(text(q("approval-confirm"))).toContain("Note for the employee (optional)");
+    expect(q("approval-confirm-problem")).toBeNull();
+    clickId("approval-confirm-confirm");
+    await waitFor(() => patches.length === 1, "the decision");
+    expect(patches[0].body).toEqual({ status: "approved" });
+  });
+
+  it("a rejection needs the reason: without one (or a too short one) nothing is sent and the dialog says why", async () => {
+    sessions.pending = [session(1, { approval: approval() })];
+    await open();
+    await waitFor(() => cards().length === 1, "the request");
+    click(buttonNamed("Reject"));
+    await waitFor(() => q("approval-confirm") !== null, "the confirmation");
+    expect(text(q("approval-confirm"))).toContain("Reason for rejecting (required)");
+    clickId("approval-confirm-confirm");
+    await settle(10);
+    expect(patches).toHaveLength(0);
+    expect(q("approval-confirm")).not.toBeNull(); // still open
+    expect(text(q("approval-confirm-problem"))).toBe("Write the reason for rejecting (at least 3 characters).");
+    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, " no ");
+    clickId("approval-confirm-confirm");
+    await settle(10);
+    expect(patches).toHaveLength(0);
+    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, "Duplicate request");
+    clickId("approval-confirm-confirm");
+    await waitFor(() => patches.length === 1, "the rejection");
+    expect(patches[0]).toEqual({
+      url: "/api/on-duty-sessions/1/status",
+      body: { status: "rejected", comment: "Duplicate request" },
+    });
+  });
+
+  it("shows the server's words when it refuses a rejection", async () => {
+    sessions.pending = [session(1, { approval: approval() })];
+    const base = h.fetch.getMockImplementation()!;
+    h.fetch.mockImplementation(async (url: string, options?: RequestInit) => {
+      if ((options?.method ?? "GET").toUpperCase() === "PATCH") {
+        throw apiError(400, {
+          error: "Write the reason for rejecting (at least 3 characters).",
+          code: "remark_required",
+        });
+      }
+      return base(url, options);
+    });
+    await open();
+    await waitFor(() => cards().length === 1, "the request");
+    click(buttonNamed("Reject"));
+    await waitFor(() => q("approval-confirm") !== null, "the confirmation");
+    typeInto(q("approval-confirm-comment") as HTMLTextAreaElement, "Not needed");
+    clickId("approval-confirm-confirm");
+    await waitFor(() => h.toast.mock.calls.length > 0, "the toast");
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Failed to update session",
+        description: "Write the reason for rejecting (at least 3 characters).",
+        variant: "destructive",
+      }),
+    );
   });
 
   it("sends nothing when the confirmation is cancelled", async () => {
@@ -329,9 +395,18 @@ describe("Punch Verifications", () => {
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "2 punches approved" }));
     click(buttonNamed("Reject all"));
     await waitFor(() => q("punch-confirm") !== null, "the second confirmation");
+    // one reason for the whole batch: without it nothing is sent
+    clickId("punch-confirm-confirm");
+    await settle(10);
+    expect(patches).toHaveLength(1);
+    expect(text(q("punch-confirm-problem"))).toBe("Write the reason for rejecting (at least 3 characters).");
+    typeInto(q("punch-confirm-comment") as HTMLTextAreaElement, "Photos are of the office");
     clickId("punch-confirm-confirm");
     await waitFor(() => patches.length === 2, "the rejection");
-    expect(patches[1].body).toEqual({ status: "rejected" });
+    expect(patches[1]).toEqual({
+      url: "/api/on-duty-sessions/50/punches",
+      body: { status: "rejected", comment: "Photos are of the office" },
+    });
   });
 
   it("decides one punch when only that one is wrong", async () => {
@@ -343,8 +418,15 @@ describe("Punch Verifications", () => {
     await waitFor(() => q("punch-confirm") !== null, "the confirmation");
     expect(text(q("punch-confirm"))).toContain("Reject this punch?");
     clickId("punch-confirm-confirm");
+    await settle(10);
+    expect(patches).toHaveLength(0); // the reason is required
+    typeInto(q("punch-confirm-comment") as HTMLTextAreaElement, "Far from the site");
+    clickId("punch-confirm-confirm");
     await waitFor(() => patches.length === 1, "the decision");
-    expect(patches[0]).toEqual({ url: "/api/on-duty-punch-verifications/2/status", body: { status: "rejected" } });
+    expect(patches[0]).toEqual({
+      url: "/api/on-duty-punch-verifications/2/status",
+      body: { status: "rejected", comment: "Far from the site" },
+    });
   });
 
   it("cannot approve a punch whose request is still waiting, and says why; rejecting stays possible", async () => {

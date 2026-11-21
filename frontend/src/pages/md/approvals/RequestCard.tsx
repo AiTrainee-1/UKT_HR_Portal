@@ -2,9 +2,10 @@ import { useId, useState } from "react";
 import { AlertTriangle, Check, ChevronRight, Lock, X } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
+import { cleanRejectRemark, rejectRemarkProblem } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
 import { useDecide } from "./api";
-import { agoText, approvalWarning, stateTone, stepName, whenText } from "./logic";
+import { agoText, approvalWarning, stateTone, stepName, submittedText, whenText } from "./logic";
 import type { ApprovalItem, Decision, Hod } from "./types";
 
 const GROUP_CHIP: Record<ApprovalItem["group"], string> = {
@@ -59,22 +60,36 @@ function Steps({ steps }: { steps: ApprovalItem["steps"] }) {
 }
 
 /** One request submitted to the Department Head: who, what, when, why, where it stands, and (when it is the head's turn)
- *  Approve / Reject with a confirm step that takes an optional comment. */
+ *  Approve / Reject with a confirm step. The comment is optional on an approval; a rejection needs the reason (owner brief
+ *  2026-11-21, lib/reject-remark): nothing is sent until it is written. */
 export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Hod }) {
   const [asking, setAsking] = useState<Decision | null>(null);
   const [comment, setComment] = useState("");
+  const [tried, setTried] = useState(false);
   const decide = useDecide();
   const commentId = useId();
   const who = item.employee.name || item.employee.code || "the employee";
   const warning = asking === "approved" ? approvalWarning(item) : null;
   const when = whenText(item);
   const ago = agoText(item.submittedAt);
+  const submitted = submittedText(item.submittedAt);
+  const rejecting = asking === "rejected";
+  const problem = rejecting ? rejectRemarkProblem(comment) : null;
+  const showProblem = tried && !!problem;
+
+  const ask = (decision: Decision) => {
+    setTried(false);
+    setAsking(decision);
+  };
 
   const send = () => {
     if (!asking) return;
     const decision = asking;
+    setTried(true);
+    if (problem) return; // a rejection without its reason: nothing is sent
+    const note = decision === "rejected" ? cleanRejectRemark(comment) : comment.trim();
     decide.mutate(
-      { managerId: hod.id, kind: item.kind, id: item.id, decision, comment: comment.trim() || undefined },
+      { managerId: hod.id, kind: item.kind, id: item.id, decision, comment: note || undefined },
       {
         onSuccess: (res) => {
           setAsking(null);
@@ -125,7 +140,12 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
           <span className={STATE_CHIP[stateTone(item.state)]} data-testid="md-approval-state">
             {item.statusLabel}
           </span>
-          {ago && <span className="text-[11px] text-md-ink-soft">Sent {ago}</span>}
+          {submitted && (
+            <span className="text-[11px] text-md-ink-soft" data-testid="md-approval-submitted">
+              Submitted {submitted}
+              {ago && ` · ${ago}`}
+            </span>
+          )}
         </div>
       </div>
 
@@ -137,7 +157,7 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
               <button
                 type="button"
                 className="md-btn md-btn-danger md-btn-sm"
-                onClick={() => setAsking("rejected")}
+                onClick={() => ask("rejected")}
                 data-testid="md-approval-reject"
               >
                 <X size={14} aria-hidden="true" /> Reject
@@ -147,7 +167,7 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
               <button
                 type="button"
                 className="md-btn md-btn-primary md-btn-sm"
-                onClick={() => setAsking("approved")}
+                onClick={() => ask("approved")}
                 data-testid="md-approval-approve"
               >
                 <Check size={14} aria-hidden="true" /> Approve
@@ -187,7 +207,16 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
             </p>
           )}
           <label htmlFor={commentId} className="mt-3 block text-xs font-bold text-md-ink">
-            Comment <span className="font-medium text-md-ink-soft">(optional, the employee sees it)</span>
+            {rejecting ? (
+              <>
+                Reason for rejecting{" "}
+                <span className="font-medium text-md-danger-700">(required, the employee sees it)</span>
+              </>
+            ) : (
+              <>
+                Comment <span className="font-medium text-md-ink-soft">(optional, the employee sees it)</span>
+              </>
+            )}
           </label>
           <textarea
             id={commentId}
@@ -195,9 +224,18 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
             onChange={(e) => setComment(e.target.value)}
             maxLength={500}
             rows={2}
-            className="mt-1 w-full resize-y rounded-lg border border-md-ink/15 bg-white/80 px-3 py-2 text-sm text-md-ink outline-none focus-visible:border-md-wine focus-visible:ring-2 focus-visible:ring-md-wine/20"
+            aria-invalid={showProblem || undefined}
+            className={cn(
+              "mt-1 w-full resize-y rounded-lg border border-md-ink/15 bg-white/80 px-3 py-2 text-sm text-md-ink outline-none focus-visible:border-md-wine focus-visible:ring-2 focus-visible:ring-md-wine/20",
+              showProblem && "border-md-danger-600",
+            )}
             data-testid="md-approval-comment"
           />
+          {showProblem && (
+            <p role="alert" className="mt-1 text-xs font-semibold text-md-danger-700" data-testid="md-approval-problem">
+              {problem}
+            </p>
+          )}
           {decide.isError && (
             <p role="alert" className="mt-2 text-xs font-semibold text-md-danger-700" data-testid="md-approval-error">
               {describeMdError(decide.error)}
@@ -209,6 +247,7 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
               className="md-btn md-btn-ghost md-btn-sm"
               onClick={() => {
                 setAsking(null);
+                setTried(false);
                 decide.reset();
               }}
               disabled={decide.isPending}

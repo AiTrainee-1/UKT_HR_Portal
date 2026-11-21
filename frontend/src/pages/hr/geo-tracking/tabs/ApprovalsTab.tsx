@@ -82,7 +82,7 @@ function SessionCard({
             </p>
             {session.createdAt && (
               <p className="mt-1 flex items-center gap-1 text-[11px] text-gray-500">
-                <CalendarClock size={11} /> Requested {fmtDateTime(session.createdAt)}
+                <CalendarClock size={11} /> Submitted {fmtDateTime(session.createdAt)}
               </p>
             )}
           </div>
@@ -216,7 +216,8 @@ export default function ApprovalsTab() {
     } catch (err: unknown) {
       toast({
         title: "Failed to update session",
-        description: err instanceof Error ? err.message : undefined,
+        description:
+          (err as { data?: { error?: string } })?.data?.error ?? (err instanceof Error ? err.message : undefined),
         variant: "destructive",
       });
     }
@@ -273,6 +274,7 @@ export default function ApprovalsTab() {
         title={asking?.status === "rejected" ? "Reject this On-Duty request?" : "Approve this On-Duty request?"}
         confirmLabel={asking?.status === "rejected" ? "Reject request" : "Approve request"}
         withComment
+        requireComment={asking?.status === "rejected"}
         description={asking ? <DecisionText session={asking.session} status={asking.status} /> : null}
         onConfirm={(comment) => {
           if (asking) void handleDecision(asking.session, asking.status, comment);

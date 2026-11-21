@@ -43,6 +43,11 @@ const hub = (items: HubItem[]): HubResponse => ({
   items,
   limit: 200,
   options: { branches: [], departments: [] },
+  page: 1,
+  pageSize: 25,
+  total: items.length,
+  pages: 1,
+  focusItem: null,
 });
 
 describe("HR reminders on the Requests hub", () => {

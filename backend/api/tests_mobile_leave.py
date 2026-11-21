@@ -218,7 +218,10 @@ class HalfCasualLeaveDayTests(_Staff):
 class HalfCasualLeaveDecisionTests(_Staff):
     def decide(self, cl, status):
         r = self.client.patch(
-            f"/api/casual-leaves/{cl.id}", {"status": status}, content_type="application/json", **self.hr
+            f"/api/casual-leaves/{cl.id}",
+            {"status": status, "comment": "Not approved this time"} if status == "rejected" else {"status": status},
+            content_type="application/json",
+            **self.hr,
         )
         self.assertEqual(r.status_code, 200, r.content)
         return r.json()

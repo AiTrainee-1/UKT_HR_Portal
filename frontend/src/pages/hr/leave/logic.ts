@@ -118,6 +118,15 @@ export function longDate(iso: string | null | undefined): string {
   return `${WEEKDAYS_SHORT[weekdayIndex(d)]}, ${day} ${MONTHS_SHORT[m - 1]} ${y}`;
 }
 
+/** "Mon, 5 Oct 2026, 9:05 am": the moment a request was sent (a time-stamped value, in this browser's time), or "-". */
+export function submittedOn(value: string | null | undefined): string {
+  const d = value ? new Date(value) : null;
+  if (!d || Number.isNaN(d.getTime())) return "-";
+  const h = d.getHours();
+  const time = `${h % 12 || 12}:${pad(d.getMinutes())} ${h < 12 ? "am" : "pm"}`;
+  return `${longDate(isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate()))}, ${time}`;
+}
+
 /** "5 Oct" (same year as `ref`) or "5 Oct 2026". */
 export function shortDate(iso: string | null | undefined, refYear?: number): string {
   const d = dateOnly(iso);
@@ -320,6 +329,13 @@ export function decidedByLine(
   if (!l.approvedBy) return null;
   const role = l.approverRole === "dept_head" ? (long ? "Department Head" : "Dept Head") : "HR";
   return `${l.status === "rejected" ? "Rejected" : "Approved"} by ${l.approvedBy} (${role})`;
+}
+
+/** The words a refused request came back with: the server's own `error` first, else the error's message, else `fallback`. */
+export function serverError(err: unknown, fallback: string): string {
+  const data = (err as { data?: { error?: unknown } } | null)?.data;
+  if (typeof data?.error === "string" && data.error.trim()) return data.error;
+  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 // ─── Permissions ───

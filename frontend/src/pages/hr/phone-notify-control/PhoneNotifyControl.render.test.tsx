@@ -2018,3 +2018,41 @@ describe("Phone Notify Control stands on its own", () => {
     expect(everything()).not.toMatch(/whatsapp/i);
   });
 });
+
+describe("the overview's On-Duty tracking alerts", () => {
+  const tracking = () => [
+    control("geo_location_off", "Location turned off alert", "tracking", "On-Duty tracking alerts", {
+      audience: "employee_hod",
+      category: "on_duty",
+      categoryLabel: "On-Duty & Geo",
+    }),
+    control("geo_punch_reminder", "Geo-Punch reminder", "tracking", "On-Duty tracking alerts", {
+      enabled: false,
+      category: "on_duty",
+      categoryLabel: "On-Duty & Geo",
+    }),
+  ];
+
+  it("lists each alert with its own switch, and a press changes only that one", async () => {
+    world.controls = [...CONTROLS(), ...tracking()] as typeof world.controls;
+    await open(`${BASE}/overview`, "pn-overview");
+    await waitFor(() => !!q("pn-tracking-alerts"), "the tracking alerts card");
+    expect(text(must("pn-tracking-count"))).toBe("1 of 2 alerts on");
+    expect(text(must("pn-tracking-geo_location_off"))).toContain("To the employee, then the Department Head");
+    expect((must("pn-tracking-toggle-geo_location_off") as HTMLButtonElement).getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    await click(must("pn-tracking-toggle-geo_punch_reminder"));
+    await waitFor(() => changes("PUT").length === 1, "the change");
+    expect(changes("PUT")).toEqual([
+      { method: "PUT", path: `${API}/controls`, body: { types: { geo_punch_reminder: true } } },
+    ]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Geo-Punch reminder: ON" }));
+  });
+
+  it("is not shown when the server has no tracking alerts", async () => {
+    await open(`${BASE}/overview`, "pn-overview");
+    await waitFor(() => world.gets.some((u) => u.startsWith(`${API}/controls`)), "the switches");
+    expect(q("pn-tracking-alerts")).toBeNull();
+  });
+});

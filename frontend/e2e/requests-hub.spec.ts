@@ -149,7 +149,7 @@ test("search, filters and the two kinds of empty list", async ({ page }) => {
   await search.fill("rqh wedding");
   await expect(row(page, "leave", a)).toBeVisible();
   await expect(row(page, "leave", b)).toHaveCount(0);
-  await expect(page.getByTestId("requests-count")).toContainText("Showing");
+  await expect(page.getByTestId("requests-count")).toContainText("1 request match");
 
   // every word has to match
   await search.fill("wedding funeral");
@@ -180,7 +180,7 @@ test("search, filters and the two kinds of empty list", async ({ page }) => {
   await expect(page.getByRole("option", { name: "Longest waiting first" })).toBeVisible();
 });
 
-test("the details show the approval trail; Reject asks for a reason, and the row then says who decided", async ({
+test("the details show the approval trail; Reject needs a reason, and the row then says who decided", async ({
   page,
 }) => {
   const asha = await employee(page);
@@ -193,13 +193,21 @@ test("the details show the approval trail; Reject asks for a reason, and the row
   await expect(detail.getByTestId("approval-trail")).toBeVisible();
   await expect(detail).toContainText("RQH detail leave");
   await expect(detail.getByRole("button", { name: "Approve", exact: true })).toBeVisible();
+  // the request date, the date asked for, the reason and the exact time it was sent (owner brief 2026-11-21)
+  await expect(detail.getByTestId("request-facts")).toContainText("Request date");
+  await expect(detail.getByTestId("request-requested")).not.toHaveText("Not tied to a date");
+  await expect(detail.getByTestId("request-reason")).toHaveText("RQH detail leave");
+  await expect(detail.getByTestId("request-submitted-at")).toHaveText(/\d{1,2}:\d{2}:\d{2}/);
   await expect(detail.getByRole("button", { name: "Open in Leave & Holiday" })).toBeVisible();
 
   await detail.getByRole("button", { name: "Reject", exact: true }).click();
-  const decision = page.getByTestId("decision-dialog");
+  const decision = page.getByTestId("request-reject-dialog");
   await expect(decision).toBeVisible();
-  await decision.getByTestId("decision-note").fill("RQH not this week");
-  await decision.getByRole("button", { name: "Confirm reject" }).click();
+  // nothing is sent without the reason
+  await decision.getByTestId("request-reject-confirm").click();
+  await expect(decision).toContainText("Write the reason for rejecting (at least 3 characters).");
+  await decision.getByTestId("request-reject-text").fill("RQH not this week");
+  await decision.getByTestId("request-reject-confirm").click();
   await expect(page.getByText("Leave rejected").first()).toBeVisible();
 
   const after = row(page, "leave", id);

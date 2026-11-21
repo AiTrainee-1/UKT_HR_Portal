@@ -26,7 +26,12 @@ export type NumberKey =
   | "retentionDays"
   | "stopAccuracyFactor"
   | "mergeStopGapSeconds"
-  | "distanceFilterM";
+  | "distanceFilterM"
+  | "alertDebounceMinutes"
+  | "alertHodGraceMinutes"
+  | "alertCooldownMinutes"
+  | "missingFirstPunchMinutes"
+  | "punchReminderMinutes";
 
 /** What the form holds: text for every number (so a half-typed value stays as typed) and the choices. */
 export type RulesForm = Record<NumberKey, string> & {
@@ -37,6 +42,10 @@ export type RulesForm = Record<NumberKey, string> & {
   /** Raise the notice version: every employee accepts the notice again before the next track records. */
   reaccept: boolean;
   reverseGeocodeProvider: GeoReverseProvider;
+  /** The automatic tracking alerts: the whole automation, the Department Head step, the day's punch check time. */
+  alertsEnabled: boolean;
+  alertHodEnabled: boolean;
+  punchCheckTime: string;
 };
 
 export type NumberSpec = {
@@ -208,6 +217,62 @@ export const NUMBER_SPECS: NumberSpec[] = [
     factor: 1,
     hint: "The phone records a new position only after moving this far. Default 10.",
   },
+  // the automatic tracking alerts (backend geo_tracking/alerts.py): minutes, as the server keeps them
+  {
+    key: "alertDebounceMinutes",
+    field: "alertDebounceMinutes",
+    label: "Alert the employee after",
+    unit: "minutes",
+    min: 0,
+    max: 30,
+    integer: true,
+    factor: 1,
+    hint: "Location off, a restricted permission or a background restriction must last this long before the employee is alerted, so a short blip never alerts. Default 2.",
+  },
+  {
+    key: "alertHodGraceMinutes",
+    field: "alertHodGraceMinutes",
+    label: "Tell the Department Head after",
+    unit: "minutes",
+    min: 1,
+    max: 240,
+    integer: true,
+    factor: 1,
+    hint: "When the problem is still not fixed this long after the employee's alert, their Department Head is told too. Default 15.",
+  },
+  {
+    key: "alertCooldownMinutes",
+    field: "alertCooldownMinutes",
+    label: "Same problem again within",
+    unit: "minutes",
+    min: 0,
+    max: 720,
+    integer: true,
+    factor: 1,
+    hint: "A problem that comes back this soon after it was fixed counts as the same one: nobody is alerted again. Later, it is a new alert. Default 30.",
+  },
+  {
+    key: "missingFirstPunchMinutes",
+    field: "missingFirstPunchMinutes",
+    label: "First Geo-Punch expected within",
+    unit: "minutes",
+    min: 5,
+    max: 240,
+    integer: true,
+    factor: 1,
+    hint: "No punch at all this long after the On-Duty started is a Missing Geo-Punch alert. Default 30.",
+  },
+  {
+    key: "punchReminderMinutes",
+    field: "punchReminderMinutes",
+    label: "Geo-Punch reminder after",
+    unit: "minutes",
+    min: 30,
+    max: 720,
+    integer: true,
+    factor: 1,
+    hint: "No punch for this long while on duty (since the last punch, or the On-Duty start) sends the employee one friendly reminder. Default 180 (3 hours).",
+  },
 ];
 
 export const SPEC: Record<NumberKey, NumberSpec> = Object.fromEntries(NUMBER_SPECS.map((s) => [s.key, s])) as Record<
@@ -229,6 +294,9 @@ export function toForm(s: GeoTrackingSettings): RulesForm {
     noticeText: s.noticeText,
     reaccept: false,
     reverseGeocodeProvider: s.reverseGeocodeProvider,
+    alertsEnabled: s.alertsEnabled,
+    alertHodEnabled: s.alertHodEnabled,
+    punchCheckTime: s.punchCheckTime,
   };
 }
 
@@ -256,6 +324,11 @@ export function validate(form: RulesForm, saved: GeoTrackingSettings): RuleError
     errors.dayEndTime = "Day end: choose a time of day (for example 23:50).";
   } else if (form.dayEndTime < "12:00") {
     errors.dayEndTime = "Day end: choose a time between 12:00 and 23:59 (it closes the day's duties).";
+  }
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.punchCheckTime)) {
+    errors.punchCheckTime = "Day's punch check: choose a time of day (for example 19:00).";
+  } else if (form.punchCheckTime < "12:00") {
+    errors.punchCheckTime = "Day's punch check: choose a time between 12:00 and 23:59.";
   }
   // a blank notice would leave the consent screen empty: refused when it was changed to blank
   if (form.noticeText.trim() === "" && form.noticeText !== saved.noticeText) {
@@ -285,6 +358,10 @@ export function toPatch(form: RulesForm, saved: GeoTrackingSettings): GeoTrackin
   if (form.reaccept || noticeChanged(form, saved)) patch.noticeVersion = saved.noticeVersion + 1;
   if (form.reverseGeocodeProvider !== saved.reverseGeocodeProvider)
     patch.reverseGeocodeProvider = form.reverseGeocodeProvider;
+  if (form.alertsEnabled !== saved.alertsEnabled) patch.alertsEnabled = form.alertsEnabled;
+  if (form.alertHodEnabled !== saved.alertHodEnabled) patch.alertHodEnabled = form.alertHodEnabled;
+  if (hhmm(form.punchCheckTime, saved.punchCheckTime) !== saved.punchCheckTime)
+    patch.punchCheckTime = hhmm(form.punchCheckTime, saved.punchCheckTime);
   return patch as GeoTrackingSettingsPatch;
 }
 

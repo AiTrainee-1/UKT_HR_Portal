@@ -323,6 +323,9 @@ describe("the categories", () => {
     expect(audienceNames([])).toEqual(["Employees"]);
     expect(audienceNames(undefined)).toEqual(["Employees"]);
     expect(audienceNames(["hr", "board"])).toEqual(["HR", "board"]);
+    // the On-Duty tracking alerts: the employee first, then their Department Head (each named once)
+    expect(audienceNames(["employee", "employee_hod"])).toEqual(["Employees", "Approvers"]);
+    expect(audienceLabel("employee_hod")).toBe("To the employee, then the Department Head");
   });
 
   it("splits a category's 30 days into the parts of one bar, leaving out the empty ones", () => {

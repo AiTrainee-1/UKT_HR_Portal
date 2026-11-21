@@ -137,7 +137,14 @@ test("a role that approves only Salary Enquiry decides those and not a Shift Cor
     const no = await api(page, "PUT", `/api/employee-requests/${shift}/action`, { status: "approved" }, token);
     expect(no.status).toBe(403);
     expect(no.body.code).toBe("approval_not_permitted");
-    const yes = await api(page, "PUT", `/api/employee-requests/${enquiry}/action`, { status: "rejected" }, token);
+    // a rejection carries its reason (hrNotes), or the server refuses it for that alone
+    const yes = await api(
+      page,
+      "PUT",
+      `/api/employee-requests/${enquiry}/action`,
+      { status: "rejected", hrNotes: "PT check" },
+      token,
+    );
     expect(yes.status, JSON.stringify(yes.body)).toBe(200);
   } finally {
     await loginAsHr(page);

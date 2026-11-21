@@ -19,6 +19,8 @@ A Notification has no column naming what it is about, so the target is read off 
 exact evidence first. That also covers every notification made before this module existed.
 
     1. dedupe_key  the event itself: "wa:approval:leave:42:approved" (whatsapp_approvals.notify_decision) -> leave 42,
+                   "geoalert:7:employee:31" (an On-Duty tracking alert, geo_tracking/alerts.py) -> On-Duty session 31
+                   (a Department Head's copy, "...:hod:31", -> Approvals, On-Duty),
                    "wa:late:2026-10-31:7" (whatsapp_alerts) -> attendance on 31 Oct, "wa:gate:out:9" -> gate pass 9,
                    "reminder:5" (mobile_reminder_views) -> the ApprovalReminder, which names the module and request id
     2. source      the WhatsApp catalogue key of a message made by push_messages.announce ("salary_slip", "late_alert" ...)
@@ -403,6 +405,19 @@ def _from_type(n, context: dict) -> dict | None:
     return _self(page, day=_notice_date(text))
 
 
+GEO_ALERT_PREFIX = "geoalert:"
+
+
+def _geo_alert(key: str) -> dict | None:
+    """An On-Duty tracking alert (geo_tracking/alerts.py), key "geoalert:<alert>:<stage>:<On-Duty session>": the employee's
+    own alert opens their On-Duty screen at that session; their Department Head's opens Approvals -> On-Duty at it."""
+    parts = key.split(":")
+    session_id = _int(parts[3]) if len(parts) >= 4 else None
+    if len(parts) >= 3 and parts[2] == "hod":
+        return _approver(APPROVAL_CATEGORY["on_duty"], id=session_id)
+    return _self("on_duty", id=session_id)
+
+
 def _reminder(n, context: dict) -> dict:
     """An employee reminding their Department Head (mobile_reminder_views.remind_approver): Approvals, at that request."""
     key = n.dedupe_key or ""
@@ -430,6 +445,8 @@ def _target(n, context: dict) -> dict | None:
         return _reminder(n, context)
     if HOD_REMINDER_SOURCE in (source, n.type):
         return _approver(None)
+    if key.startswith(GEO_ALERT_PREFIX):
+        return _geo_alert(key)
     if key.startswith("wa:"):
         found = _from_whatsapp_key(n, key[3:])
         if found is not _NO_MATCH:

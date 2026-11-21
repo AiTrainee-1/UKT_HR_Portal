@@ -4,6 +4,7 @@ import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, Repeat2, UserCheck
 import HrLayout from "@/components/HrLayout";
 import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
@@ -18,7 +19,7 @@ import { moduleForPath } from "@/lib/permission-modules";
 import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { ConfirmDialog } from "./leave/ConfirmDialog";
 import { exportSheet } from "./leave/export";
-import { ALL, branchOptions, departmentOptions, longDate, type PersonFilters } from "./leave/logic";
+import { ALL, branchOptions, departmentOptions, longDate, serverError, type PersonFilters } from "./leave/logic";
 import { MonthPicker, StatCard, useVisibleCount } from "./leave/parts";
 import ApplyDialog from "./casual-leave/ApplyDialog";
 import CarryForwardTab from "./casual-leave/CarryForwardTab";
@@ -122,6 +123,9 @@ export default function CasualLeave() {
   const [applyFor, setApplyFor] = useState<{ employeeId: number; name: string } | null>(null);
   const [applyProblem, setApplyProblem] = useState<string | null>(null);
   const [toDelete, setToDelete] = useState<ClRequest | null>(null);
+  // the request HR pressed Reject on: nothing is sent until a reason is written (owner brief 2026-11-21)
+  const [rejecting, setRejecting] = useState<ClRequest | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const [historyFor, setHistoryFor] = useState<{ employeeId: number; name: string } | null>(null);
 
   const boardQuery = useClBoard(month, year);
@@ -164,10 +168,17 @@ export default function CasualLeave() {
   const reqShown = useMemo(() => filterRequests(reqAll, reqF, reqStatus), [reqAll, reqF, reqStatus]);
 
   // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control); the list buttons
-  // ask it per request, so this only carries out a decision.
-  const decide = async (r: ClRequest, status: "approved" | "rejected") => {
+  // ask it per request, so this only carries out a decision. Approving needs no remark; Reject first asks for the reason,
+  // which goes to the employee as the review comment.
+  const decide = async (r: ClRequest, status: "approved" | "rejected", comment?: string) => {
+    if (status === "rejected" && comment === undefined) {
+      setRejectError(null);
+      setRejecting(r);
+      return;
+    }
     try {
-      const result = await decideMutation.mutateAsync({ id: r.id, status });
+      const result = await decideMutation.mutateAsync({ id: r.id, status, comment });
+      if (status === "rejected") setRejecting(null);
       const passedOn = status === "approved" && result != null && result.status === "pending";
       toast({
         title: passedOn ? "Casual leave approved" : `Casual leave ${status}`,
@@ -182,7 +193,9 @@ export default function CasualLeave() {
               : `${r.employeeName}'s attendance for ${r.date} is marked as Leave.`,
       });
     } catch (err: any) {
-      toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
+      // a refused rejection is said inside the reason dialog, which stays open
+      if (status === "rejected") setRejectError(serverError(err, "Failed to reject"));
+      else toast({ title: err?.message ?? "Failed to update", variant: "destructive" });
     }
   };
 
@@ -553,6 +566,20 @@ export default function CasualLeave() {
         onSubmit={submitOnBehalf}
       />
       <HistoryDrawer target={historyFor} year={year} onClose={() => setHistoryFor(null)} />
+      <RejectReasonDialog
+        open={rejecting !== null}
+        title="Reject this Casual Leave?"
+        description={
+          rejecting ? `${rejecting.employeeName}'s Casual Leave for ${longDate(rejecting.date)}.` : undefined
+        }
+        busy={decideMutation.isPending}
+        error={rejectError}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => {
+          if (rejecting) void decide(rejecting, "rejected", reason);
+        }}
+        testIdPrefix="cl-reject"
+      />
       <ConfirmDialog
         open={toDelete !== null}
         title="Delete this record?"

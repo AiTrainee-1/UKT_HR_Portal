@@ -1,6 +1,7 @@
 import { useState } from "react";
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,7 @@ import { useToast } from "@/hooks/use-toast";
 import { whatsappSendToast } from "@/lib/api-client/custom-hooks";
 import { CircleLoader } from "@/components/ui/CircleLoader";
 import { ApprovalTrail, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { formatDateTime } from "@/pages/hr/settlement/shared";
 import {
   explainsWaiting,
   hrCanAct,
@@ -206,6 +208,9 @@ function resignationStatus(r: ResignationRequest) {
 const hrApproves = (r: ResignationRequest) => hrCanAct(r.approval, r.status === "dept_approved");
 const hrRejects = (r: ResignationRequest) =>
   hrCanReject(r.approval, r.status === "pending" || r.status === "dept_approved");
+// Rejecting now overrides an approval someone already gave.
+const overridesApproval = (r: ResignationRequest) =>
+  r.approval ? r.approval.steps.some((s) => s.state === "approved") : r.status === "dept_approved";
 // HR's approval is final unless a mandatory step is still waiting after it.
 const finalForHr = (r?: ResignationRequest | null) => !r?.approval || wouldFinish(r.approval, "hr");
 
@@ -368,9 +373,13 @@ function ResignationTable({
 
 export default function Resignations() {
   const [selected, setSelected] = useState<ResignationRequest | null>(null);
-  const [actionType, setActionType] = useState<"approve" | "reject" | null>(null);
+  // Approve keeps its confirmation (the final approval makes the employee Inactive) with an optional comment; Reject asks
+  // for the reason in its own dialog and sends nothing without it (owner brief 2026-11-21).
+  const [actionType, setActionType] = useState<"approve" | null>(null);
   const [hrComment, setHrComment] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [rejecting, setRejecting] = useState<ResignationRequest | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ResignationRequest | null>(null);
   const [emailLoading, setEmailLoading] = useState<number | null>(null);
   const [whatsappLoading, setWhatsappLoading] = useState<number | null>(null);
@@ -405,25 +414,17 @@ export default function Resignations() {
   const hrCanDecide = active.filter(hrApproves).length;
 
   const handleAction = () => {
-    if (!selected || !actionType) return;
+    if (!selected || actionType !== "approve") return;
     actionMutation.mutate(
-      { id: selected.id, action: actionType, hrComment: hrComment || undefined },
+      { id: selected.id, action: "approve", hrComment: hrComment.trim() || undefined },
       {
         onSuccess: (result) => {
-          const finished = actionType === "approve" && (result?.status ?? "approved") === "approved";
+          const finished = (result?.status ?? "approved") === "approved";
           toast({
-            title:
-              actionType === "approve"
-                ? finished
-                  ? "Resignation Approved"
-                  : "Approval recorded"
-                : "Resignation Rejected",
-            description:
-              actionType === "approve"
-                ? finished
-                  ? `${selected.employeeName}'s account has been deactivated.`
-                  : `${waitingText(result?.approval) ?? "Waiting for the next approval"}: the resignation is final once that is done.`
-                : `${selected.employeeName}'s resignation was rejected.`,
+            title: finished ? "Resignation Approved" : "Approval recorded",
+            description: finished
+              ? `${selected.employeeName}'s account has been deactivated.`
+              : `${waitingText(result?.approval) ?? "Waiting for the next approval"}: the resignation is final once that is done.`,
           });
           setConfirmOpen(false);
           setSelected(null);
@@ -435,6 +436,25 @@ export default function Resignations() {
           toast({ title: "Action failed", description: err?.message, variant: "destructive" });
           setConfirmOpen(false);
         },
+      },
+    );
+  };
+
+  // The reason goes to the employee as HR's comment; a refusal keeps the dialog open with the server's words.
+  const handleReject = (reason: string) => {
+    const target = rejecting;
+    if (!target) return;
+    setRejectError(null);
+    actionMutation.mutate(
+      { id: target.id, action: "reject", hrComment: reason },
+      {
+        onSuccess: () => {
+          toast({ title: "Resignation Rejected", description: `${target.employeeName}'s resignation was rejected.` });
+          setRejecting(null);
+          setSelected(null);
+          refresh();
+        },
+        onError: (err: any) => setRejectError(err?.data?.error ?? err?.message ?? "Could not reject the resignation"),
       },
     );
   };
@@ -511,9 +531,8 @@ export default function Resignations() {
       setConfirmOpen(true);
     },
     onReject: (r: ResignationRequest) => {
-      setSelected(r);
-      setActionType("reject");
-      setConfirmOpen(true);
+      setRejectError(null);
+      setRejecting(r);
     },
     onPdf: handlePdf,
     onEmail: handleEmail,
@@ -652,7 +671,7 @@ export default function Resignations() {
       </div>
 
       {/* ── Detail Dialog ── */}
-      <Dialog open={!!selected && !confirmOpen} onOpenChange={() => setSelected(null)}>
+      <Dialog open={!!selected && !confirmOpen && !rejecting} onOpenChange={() => setSelected(null)}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Resignation Details</DialogTitle>
@@ -689,6 +708,14 @@ export default function Resignations() {
                 <div>
                   <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">Status</p>
                   {resignationStatus(selected)}
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[10px] text-[#006496]/50 uppercase tracking-wider font-semibold mb-0.5">
+                    Submitted on
+                  </p>
+                  <p className="text-sm text-[#1a3a4a]" data-testid="resignation-submitted-on">
+                    {formatDateTime(selected.createdAt)}
+                  </p>
                 </div>
               </div>
 
@@ -773,8 +800,8 @@ export default function Resignations() {
                       variant="destructive"
                       className="flex-1"
                       onClick={() => {
-                        setActionType("reject");
-                        setConfirmOpen(true);
+                        setRejectError(null);
+                        setRejecting(selected);
                       }}
                     >
                       Reject
@@ -832,38 +859,20 @@ export default function Resignations() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {actionType === "approve"
-                ? finalForHr(selected)
-                  ? "Final Approve Resignation?"
-                  : "Approve Resignation?"
-                : "Reject Resignation?"}
+              {finalForHr(selected) ? "Final Approve Resignation?" : "Approve Resignation?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {actionType === "approve" ? (
-                finalForHr(selected) ? (
-                  <>
-                    This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s
-                    resignation. Their account will be set to <strong>Inactive</strong> immediately.
-                  </>
-                ) : (
-                  <>
-                    This records <strong>HR's approval</strong> of <strong>{selected?.employeeName}</strong>'s
-                    resignation. It still needs{" "}
-                    {selected?.approval ? remainingAfter(selected.approval, "hr").map(stepLabel).join(" and ") : "the next approval"}{" "}
-                    before it is final; the account stays Active until then.
-                  </>
-                )
+              {finalForHr(selected) ? (
+                <>
+                  This will give <strong>HR final approval</strong> for <strong>{selected?.employeeName}</strong>'s
+                  resignation. Their account will be set to <strong>Inactive</strong> immediately.
+                </>
               ) : (
                 <>
-                  This will reject <strong>{selected?.employeeName}</strong>'s resignation
-                  {(
-                    selected?.approval
-                      ? selected.approval.steps.some((s) => s.state === "approved")
-                      : selected?.status === "dept_approved"
-                  )
-                    ? " (overriding an approval already given)"
-                    : ""}
-                  .
+                  This records <strong>HR's approval</strong> of <strong>{selected?.employeeName}</strong>'s
+                  resignation. It still needs{" "}
+                  {selected?.approval ? remainingAfter(selected.approval, "hr").map(stepLabel).join(" and ") : "the next approval"}{" "}
+                  before it is final; the account stays Active until then.
                 </>
               )}
             </AlertDialogDescription>
@@ -889,16 +898,30 @@ export default function Resignations() {
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleAction}
-              className={
-                actionType === "approve" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-red-600 hover:bg-red-700"
-              }
+              className="bg-emerald-600 hover:bg-emerald-700"
               disabled={actionMutation.isPending}
             >
-              {actionMutation.isPending ? "Processing…" : actionType === "approve" ? "Yes, Approve" : "Yes, Reject"}
+              {actionMutation.isPending ? "Processing…" : "Yes, Approve"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* ── Reject: the reason is required ── */}
+      <RejectReasonDialog
+        open={rejecting !== null}
+        title="Reject Resignation?"
+        description={
+          rejecting
+            ? `${rejecting.employeeName ?? "This employee"}'s resignation${overridesApproval(rejecting) ? " (overriding an approval already given)" : ""}.`
+            : undefined
+        }
+        busy={actionMutation.isPending}
+        error={rejectError}
+        onCancel={() => setRejecting(null)}
+        onConfirm={handleReject}
+        testIdPrefix="resignation-reject"
+      />
 
       {/* ── Confirm Delete ── */}
       <AlertDialog

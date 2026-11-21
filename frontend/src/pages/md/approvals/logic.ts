@@ -1,5 +1,5 @@
 // Pure helpers of the HOD approvals page and of the sidebar's HOD sub-menu.
-import { dayLong } from "@/lib/md/format";
+import { clockText, dayLong } from "@/lib/md/format";
 import type { ApprovalGroup, ApprovalItem, ApprovalKind, Hod, RequestStatusFilter } from "./types";
 
 export const APPROVALS_PATH = "/md/approvals";
@@ -76,6 +76,16 @@ export function agoText(iso: string | null | undefined, now: Date = new Date()):
   if (days < 14) return `${days} days ago`;
   if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
   return `${Math.floor(days / 30)} months ago`;
+}
+
+/** When the employee sent it, to the minute, in this computer's time: "11 Nov 2026, 9:52 am"; empty when unknown. */
+export function submittedText(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "";
+  const two = (n: number) => String(n).padStart(2, "0");
+  const day = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+  return `${dayLong(day)}, ${clockText(`${day}T${two(at.getHours())}:${two(at.getMinutes())}`)}`;
 }
 
 /** The chip tone of a request's state. */

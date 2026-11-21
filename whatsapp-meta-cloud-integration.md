@@ -71,6 +71,7 @@ Every type goes out as its template: HR's override (`WhatsAppSettings.template_o
 | `hrms_absent_alert`, `hrms_late_alert`, `hrms_punch_reminder`, `hrms_on_duty_punch_reminder`, `hrms_missing_punch_alert`, `hrms_attendance_report` | - | UTILITY |
 | `hrms_approval_approved`, `hrms_approval_rejected`, `hrms_hod_request_waiting`, `hrms_hod_pending_reminder` | - | UTILITY |
 | `hrms_geo_approval`, `hrms_geo_rejection`, `hrms_geo_punch_approval`, `hrms_geo_punch_rejection` | - | UTILITY |
+| On-Duty tracking alerts (2026-11-21, backend.md 4.27): `hrms_geo_location_off`, `hrms_geo_permission_restricted`, `hrms_geo_background_restricted`, `hrms_geo_tracking_failure`, `hrms_geo_missing_punch` (each with a `_hod` copy for the Department Head) and `hrms_geo_punch_reminder` | - | UTILITY |
 | `hrms_visitor_at_reception` (the visitor's phone is one of its variables), `hrms_gate_out`, `hrms_gate_in` | - | UTILITY |
 
 Not sent through Meta: the visitor **contact card** (a template can't carry one) and **WhatsApp groups** (Attendance Notify

@@ -56,6 +56,28 @@ LEGACY_ROLE = {HOD: "dept_head", HR: "hr"}
 
 MAX_STEPS = 2
 
+# Owner brief 2026-11-21: approving never needs a remark, rejecting always needs the reason (the employee reads it). One rule
+# for every pipeline below (decide()) and for the decision endpoints outside it (employee requests, On-Duty punches,
+# advances), with the same words and code so every client can recognise it.
+REJECT_REMARK_MIN = 3
+REJECT_REMARK_MAX = 1000
+REJECT_REMARK_MESSAGE = f"Write the reason for rejecting (at least {REJECT_REMARK_MIN} characters)."
+REJECT_REMARK_CODE = "remark_required"
+
+
+def clean_remark(text) -> str:
+    """A decision remark as it is kept: spaces collapsed, trimmed, at most REJECT_REMARK_MAX characters."""
+    return " ".join(str(text or "").split())[:REJECT_REMARK_MAX]
+
+
+def reject_remark_refusal(decision, comment):
+    """The 400 response for a rejection without its reason, or None when the call may go on (any approval does)."""
+    if decision != "rejected" or len(clean_remark(comment)) >= REJECT_REMARK_MIN:
+        return None
+    from rest_framework.response import Response
+
+    return Response({"error": REJECT_REMARK_MESSAGE, "code": REJECT_REMARK_CODE}, status=400)
+
 
 class ApprovalError(Exception):
     """A decision (or a submission) the pipeline does not allow; carries the HTTP status and a message for the user."""
@@ -673,6 +695,9 @@ def decide(
     ok, message, http_status, code = check_can_act(cfg.steps, approved, role, decision, defn.early_reject_roles)
     if not ok:
         raise ApprovalError(message or "Not allowed", status=http_status, code=code)
+    # Only after "may this role decide now": a rejection must carry its reason (2026-11-21), an approval never needs one.
+    if decision == "rejected" and len(clean_remark(comment)) < REJECT_REMARK_MIN:
+        raise ApprovalError(REJECT_REMARK_MESSAGE, status=400, code=REJECT_REMARK_CODE)
 
     entry = {
         "role": role,

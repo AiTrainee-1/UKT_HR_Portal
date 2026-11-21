@@ -126,10 +126,13 @@ class EngineClaimsBase(eng.ClaimsEngineBase):
         return HolidayWorkClaim.objects.get(pk=response.json()["id"])
 
     def hod(self, claim_id, decision="approved"):
+        body = {"status": decision}
+        if decision == "rejected":
+            body["comment"] = "Not approved this time"  # a rejection needs its reason (2026-11-21)
         with self.captureOnCommitCallbacks(execute=True):
             response = self.client.patch(
                 f"/api/manager/holiday-work/{claim_id}/status",
-                {"status": decision},
+                body,
                 content_type="application/json",
                 **_emp_token(self.boss),
             )

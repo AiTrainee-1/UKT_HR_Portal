@@ -14,6 +14,7 @@ import {
   pickHod,
   rightsOff,
   stepName,
+  submittedText,
   whenText,
 } from "./logic";
 
@@ -64,6 +65,10 @@ describe("HOD approvals helpers", () => {
     expect(agoText(new Date(2026, 10, 10, 9, 0).toISOString(), now)).toBe("4 days ago");
     expect(agoText(new Date(2026, 9, 10, 9, 0).toISOString(), now)).toBe("5 weeks ago");
     expect(agoText(null, now)).toBe("");
+    expect(submittedText("2026-11-11T09:52:00")).toBe("11 Nov 2026, 9:52 am");
+    expect(submittedText("2026-11-11T15:05:30")).toBe("11 Nov 2026, 3:05 pm");
+    expect(submittedText(null)).toBe("");
+    expect(submittedText("not a date")).toBe("");
     expect(stepName({ label: null, roles: ["hod", "hr"] })).toBe("Department Head or HR");
     expect(stepName({ label: "Final check", roles: ["hr"] })).toBe("Final check");
   });

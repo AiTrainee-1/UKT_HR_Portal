@@ -4,37 +4,37 @@ import { Bell, BellRing, CheckCircle2, Hourglass, Inbox, ShieldAlert, UserCheck,
 import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { PipelineSummary } from "@/components/ApprovalTrail";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
-import { useIsMobile } from "@/hooks/use-mobile";
 import { useToast } from "@/hooks/use-toast";
 import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import { moduleForPath } from "@/lib/permission-modules";
 import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
 import { DetailDialog, DecisionDialog, HandleDialog } from "./requests/dialogs";
-import { useDecide, useHandleRequest, useHubRequests } from "./requests/api";
+import { fetchHubExport, useDecide, useHandleRequest, useHubRequests } from "./requests/api";
 import { useHrReminders, withReminders } from "./requests/reminders";
 import {
+  DEFAULT_PAGE_SIZE,
   EXPORT_HEADERS,
+  KIND_KEYS,
   NO_FILTERS,
   buildTabs,
   daysText,
   dayStamp,
   exportRows,
-  filterItems,
   filtersActive,
   normalizeHub,
   serverParams,
-  sortItems,
   tabFromAddress,
   toCsv,
   type Filters,
   type HubItem,
   type HubKind,
 } from "./requests/logic";
+import Pager from "./requests/Pager";
 import { FigureCard, type ActionHandlers } from "./requests/parts";
 import RequestList, { EmptyState, ErrorState, ListSkeleton } from "./requests/RequestList";
 import Toolbar from "./requests/Toolbar";
@@ -51,10 +51,17 @@ import {
   type PageSection,
 } from "./requests/sections";
 
-/** Requests shown before "Show more": a long list is paged on the page, the server has already narrowed it. A phone shows
- *  them as tall cards, so it pages by 20 (fifty cards are a 10,000 px scroll). */
-const PAGE_SIZE = 50;
-const PHONE_PAGE_SIZE = 20;
+/** How long the search box waits after the last key before it asks the server (one request per pause, not per key). */
+const SEARCH_DELAY_MS = 300;
+
+function useDebounced<T>(value: T, delay: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSettled(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [value, delay]);
+  return settled;
+}
 
 const readTab = () => {
   try {
@@ -130,21 +137,40 @@ export default function ApprovedRequests() {
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [rawTab, setRawTab] = useState<string | null>(readTab);
-  // how many pages of the list are open; a page is 50 requests, 20 on a phone
-  const phone = useIsMobile();
-  const pageSize = phone ? PHONE_PAGE_SIZE : PAGE_SIZE;
-  const [pages, setPages] = useState(1);
-  const visible = pages * pageSize;
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const [deciding, setDeciding] = useState<{ item: HubItem; mode: "approve" | "reject" } | null>(null);
+  // the On-Duty approval asks first (it accepts the captured punches); every rejection asks for its reason
+  const [approving, setApproving] = useState<HubItem | null>(null);
+  const [rejecting, setRejecting] = useState<HubItem | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
   const [handling, setHandling] = useState<HubItem | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   // `?kind=leave&focus=12` (a HoD's link, a notification) opens that request's details once the list is in
   const [focus, setFocus] = useState<FocusTarget | null>(() => focusFromSearch(window.location.search));
+  // the request a link opened stays asked for (`focus=`) while its details are open: it may be on no page of the list
+  const [pinnedKey, setPinnedKey] = useState<string | null>(null);
+
+  // The server searches, filters, sorts and pages (2026-11-21). The search box asks once typing pauses; any change of
+  // tab, filter, search or rows per page starts again at page 1 (worked out here, so no request goes out for the old page).
+  const searchText = useDebounced(filters.query, SEARCH_DELAY_MS);
+  const effective = useMemo(() => ({ ...filters, query: searchText }), [filters, searchText]);
+  const requestTab = rawTab && (KIND_KEYS as readonly string[]).includes(rawTab) ? rawTab : "all";
+  const listKey = JSON.stringify([effective, requestTab, pageSize]);
+  const [paging, setPaging] = useState<{ key: string; page: number }>({ key: listKey, page: 1 });
+  const page = paging.key === listKey ? paging.page : 1;
+  // forget the old page for good: going back to the same search later starts at page 1 too, not where it was left
+  useEffect(() => {
+    if (paging.key !== listKey) setPaging({ key: listKey, page: 1 });
+  }, [paging.key, listKey]);
+  const focusParam = focus ? focusKey(focus) : pinnedKey;
 
   const today = dayStamp(new Date());
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const params = useMemo(() => serverParams(filters, new Date()), [filters, today]);
+  const params = useMemo(() => {
+    const p = serverParams(effective, new Date(), { tab: requestTab, page, pageSize });
+    if (focusParam) p.focus = focusParam;
+    return p;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effective, requestTab, page, pageSize, focusParam, today]);
   const query = useHubRequests(params, canSee("requests"));
   // the reminders employees sent HR from the app show on their rows ("Employee reminded HR on ...")
   const reminders = useHrReminders(canSee("requests"));
@@ -163,11 +189,21 @@ export default function ApprovedRequests() {
   const tab = tabFromAddress(rawTab, hub.kinds);
   const activeKind = tab === "all" ? undefined : kinds[tab];
 
-  const inTab = useMemo(() => (tab === "all" ? hub.items : hub.items.filter((i) => i.kind === tab)), [hub.items, tab]);
-  const shown = useMemo(() => sortItems(filterItems(hub.items, filters, tab), filters.sort), [hub.items, filters, tab]);
+  // a ?kind= this role cannot open falls back to All (the server listed nothing for it)
+  useEffect(() => {
+    if (query.data && !query.isPlaceholderData && hub.kinds.length > 0 && tab !== requestTab) setRawTab(tab);
+  }, [query.data, query.isPlaceholderData, hub.kinds.length, tab, requestTab]);
 
-  // a different tab or filter starts at the top again
-  useEffect(() => setPages(1), [filters, tab]);
+  // the page the server sent: already the tab, the filters, the search and the order
+  const shown = hub.items;
+  const total = hub.total;
+  const listTop = useRef<HTMLDivElement>(null);
+  const goToPage = (next: number) => {
+    setPaging({ key: listKey, page: next });
+    // back to the top of the list when it is out of sight (after a click at the bottom of a long page)
+    const top = listTop.current?.getBoundingClientRect().top;
+    if (top !== undefined && top < 0) listTop.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
 
   // on a phone the sub-tab row scrolls: the open one is brought into view (?kind=advance opens it out of sight otherwise).
   // Only the row itself scrolls, never the page.
@@ -180,18 +216,21 @@ export default function ApprovedRequests() {
     box.scrollLeft += at - (box.clientWidth - pill.offsetWidth) / 2;
   }, [tab, tabs.length]);
 
+  // the server sends the linked request itself (focusItem), whatever page or filter it is on
   useEffect(() => {
     if (!focus || !query.data || query.isPlaceholderData) return;
     const key = focusKey(focus);
     setFocus(null);
     dropFocus();
-    if (hub.items.some((i) => i.key === key)) setSelectedKey(key);
-    else
+    if (hub.focusItem?.key === key || hub.items.some((i) => i.key === key)) {
+      setPinnedKey(key);
+      setSelectedKey(key);
+    } else
       toast({
         title: "That request is not in the list",
-        description: "It may have been decided and closed already, or it is older than the list holds.",
+        description: "It may have been removed, or it belongs to a branch or a kind of request your role cannot open.",
       });
-  }, [focus, query.data, query.isPlaceholderData, hub.items, toast]);
+  }, [focus, query.data, query.isPlaceholderData, hub.items, hub.focusItem, toast]);
 
   const selectSection = (next: PageSection) => {
     const qs = searchForSection(search, next);
@@ -220,12 +259,23 @@ export default function ApprovedRequests() {
     writeTab(next);
   };
 
+  const closeDetail = () => {
+    setSelectedKey(null);
+    setPinnedKey(null);
+  };
+
   const kindLabel = (item: Pick<HubItem, "kind">) => kinds[item.kind]?.label ?? item.kind;
 
   // The server's reason when it refuses (not this role's turn, workflow switched off, ...) beats a bare "Failed".
-  const failed = (title: string, err: unknown) =>
-    toast({ title, description: err instanceof Error ? err.message : undefined, variant: "destructive" });
+  // the server's own sentence (`{"error": ...}`) when it sent one, without the "HTTP 400 :" the fetch helper adds
+  const errorText = (err: unknown) => {
+    const said = (err as { data?: { error?: unknown } } | null)?.data?.error;
+    if (typeof said === "string" && said.trim()) return said;
+    return err instanceof Error ? err.message : undefined;
+  };
+  const failed = (title: string, err: unknown) => toast({ title, description: errorText(err), variant: "destructive" });
 
+  /** Approve (no remark needed) or reject (the reason is required: the dialog checks, the server checks again). */
   const decideNow = async (item: HubItem, status: "approved" | "rejected", comment?: string) => {
     setBusyKey(item.key);
     try {
@@ -233,7 +283,8 @@ export default function ApprovedRequests() {
       toast({ title: `${kindLabel(item)} ${status}` });
       return true;
     } catch (err) {
-      failed(status === "approved" ? "Failed to approve" : "Failed to reject", err);
+      if (status === "rejected") setRejectError(errorText(err) ?? "The request could not be rejected.");
+      else failed("Failed to approve", err);
       return false;
     } finally {
       setBusyKey(null);
@@ -241,10 +292,12 @@ export default function ApprovedRequests() {
   };
 
   const handlers: ActionHandlers = {
-    // an On-Duty approval also accepts the punches already captured, so it asks first
-    onApprove: (item) =>
-      item.kind === "on_duty" ? setDeciding({ item, mode: "approve" }) : void decideNow(item, "approved"),
-    onReject: (item) => setDeciding({ item, mode: "reject" }),
+    // Approve is one click; an On-Duty approval also accepts the punches already captured, so it asks first
+    onApprove: (item) => (item.kind === "on_duty" ? setApproving(item) : void decideNow(item, "approved")),
+    onReject: (item) => {
+      setRejectError(null);
+      setRejecting(item);
+    },
     onHandle: (item) => setHandling(item),
     onOpenPage: (_item, kind) => kind.openPath && navigate(kind.openPath),
   };
@@ -253,23 +306,28 @@ export default function ApprovedRequests() {
   const detailHandlers: ActionHandlers = {
     ...handlers,
     onReject: (item) => {
-      setSelectedKey(null);
+      closeDetail();
       handlers.onReject(item);
     },
     onHandle: (item) => {
-      setSelectedKey(null);
+      closeDetail();
       handlers.onHandle(item);
     },
     onApprove: (item) => {
-      if (item.kind === "on_duty") setSelectedKey(null);
+      if (item.kind === "on_duty") closeDetail();
       handlers.onApprove(item);
     },
   };
 
-  const confirmDecision = async (comment: string) => {
-    if (!deciding) return;
-    const ok = await decideNow(deciding.item, deciding.mode === "approve" ? "approved" : "rejected", comment);
-    if (ok) setDeciding(null);
+  const confirmApproval = async (comment: string) => {
+    if (!approving) return;
+    if (await decideNow(approving, "approved", comment)) setApproving(null);
+  };
+
+  const confirmRejection = async (reason: string) => {
+    if (!rejecting) return;
+    setRejectError(null);
+    if (await decideNow(rejecting, "rejected", reason)) setRejecting(null);
   };
 
   const submitHandling = async (status: string, notes: string) => {
@@ -286,12 +344,13 @@ export default function ApprovedRequests() {
     }
   };
 
+  // every request that matches (all pages), asked for when HR exports
   const exportList = useCallback(
     async (format: "xlsx" | "csv") => {
       const labels = Object.fromEntries(hub.kinds.map((k) => [k.key, k.label]));
-      const rows = exportRows(shown, labels);
       const name = `requests-${fileSafe(activeKind?.label ?? "all")}-${todayStamp()}`;
       try {
+        const rows = exportRows(await fetchHubExport(params), labels);
         if (format === "csv") {
           downloadBlob(new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" }), `${name}.csv`);
           return;
@@ -308,7 +367,7 @@ export default function ApprovedRequests() {
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [shown, hub.kinds, activeKind],
+    [params, hub.kinds, activeKind],
   );
 
   // the cards narrow the list to what they count
@@ -318,7 +377,9 @@ export default function ApprovedRequests() {
     setFilters({ ...NO_FILTERS, status });
   };
 
-  const selected = selectedKey ? (hub.items.find((i) => i.key === selectedKey) ?? null) : null;
+  const selected = selectedKey
+    ? (hub.items.find((i) => i.key === selectedKey) ?? (hub.focusItem?.key === selectedKey ? hub.focusItem : null))
+    : null;
   const stats = hub.stats;
   const oldest = stats.oldestWaiting;
   const oldestDays = oldest
@@ -326,7 +387,6 @@ export default function ApprovedRequests() {
     : 0;
   const filtered = filtersActive(filters);
   const hasData = !!query.data;
-  const page = shown.slice(0, visible);
 
   return (
     <HrLayout>
@@ -475,14 +535,14 @@ export default function ApprovedRequests() {
               onFilters={setFilters}
               options={hub.options}
               showRequestType={tab === "request"}
-              shown={shown.length}
-              total={inTab.length}
-              canExport={shown.length > 0}
+              matching={total}
+              canExport={total > 0}
               onExport={exportList}
             />
 
-            {/* The list */}
-            <Card className="overflow-hidden rounded-2xl">
+            {/* The list, one page at a time */}
+            <div ref={listTop} className="scroll-mt-4" />
+            <Card className="overflow-hidden rounded-2xl" aria-busy={query.isFetching || undefined}>
               <CardContent className="p-0">
                 {query.isError && !hasData ? (
                   <ErrorState onRetry={() => void query.refetch()} />
@@ -503,7 +563,7 @@ export default function ApprovedRequests() {
                   />
                 ) : (
                   <RequestList
-                    items={page}
+                    items={shown}
                     kinds={kinds}
                     now={now}
                     busyKey={busyKey}
@@ -514,22 +574,16 @@ export default function ApprovedRequests() {
               </CardContent>
             </Card>
 
-            {shown.length > visible && (
-              <div className="flex justify-center">
-                <Button variant="outline" onClick={() => setPages((p) => p + 1)} data-testid="requests-more">
-                  Show {Math.min(pageSize, shown.length - visible)} more ({shown.length - visible} left)
-                </Button>
-              </div>
-            )}
-
-            {hub.kinds.some((k) => k.truncated) && (
-              <p className="text-center text-xs text-amber-700" data-testid="requests-truncated">
-                {hub.kinds
-                  .filter((k) => k.truncated)
-                  .map((k) => `${k.label}: the newest ${hub.limit} of ${k.matched}`)
-                  .join(" · ")}
-                . Narrow the period to see older ones.
-              </p>
+            {hasData && total > 0 && (
+              <Pager
+                page={hub.page}
+                pages={hub.pages}
+                pageSize={pageSize}
+                total={total}
+                loading={query.isFetching && query.isPlaceholderData}
+                onPage={goToPage}
+                onPageSize={setPageSize}
+              />
             )}
 
             {/* on a phone each line keeps its icon beside the text instead of wrapping the text under it */}
@@ -547,14 +601,28 @@ export default function ApprovedRequests() {
         now={now}
         busy={busyKey === selected?.key}
         handlers={detailHandlers}
-        onClose={() => setSelectedKey(null)}
+        onClose={closeDetail}
       />
       <DecisionDialog
-        item={deciding?.item ?? null}
-        mode={deciding?.mode ?? "reject"}
+        item={approving}
+        mode="approve"
         busy={busyKey !== null}
-        onClose={() => setDeciding(null)}
-        onConfirm={(comment) => void confirmDecision(comment)}
+        onClose={() => setApproving(null)}
+        onConfirm={(comment) => void confirmApproval(comment)}
+      />
+      <RejectReasonDialog
+        open={!!rejecting}
+        title={rejecting ? `Reject this ${kindLabel(rejecting).toLowerCase()} request?` : "Reject this request?"}
+        description={
+          rejecting
+            ? `${rejecting.employee.name}: ${rejecting.label}${rejecting.summary ? ` (${rejecting.summary})` : ""}.`
+            : undefined
+        }
+        busy={busyKey !== null}
+        error={rejectError}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => void confirmRejection(reason)}
+        testIdPrefix="request-reject"
       />
       <HandleDialog
         item={handling}

@@ -197,6 +197,7 @@ from .geo_tracking import (
     DutyTrackEvent,
     DutyTrackPoint,
     DutyTrackSegment,
+    GeoTrackingAlert,
     GeoTrackingSettings,
     TrackingConsent,
     TrackingDevice,

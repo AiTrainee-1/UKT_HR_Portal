@@ -27,7 +27,7 @@ APPROVAL_PREFIX = "approval:"
 
 
 # One kind of phone notification. `group`: where Phone Notify Control lists it (GROUPS); `audience`: who receives it
-# (employee | approver).
+# (employee | approver | employee_hod: the employee first, then their Department Head when it is not fixed).
 class Extra(NamedTuple):
     label: str
     description: str
@@ -144,6 +144,64 @@ EXTRA_TYPES.update(
         ),
     }
 )
+# On-Duty tracking alerts (geo_tracking/alerts.py, 2026-11-21): the geo-tracking watchdog finds a problem on a recording
+# On-Duty track and tells the employee at once (after Geo Attendance -> Settings' short wait); when it is still not fixed
+# after the grace period, their Department Head gets the same kind of notification about them. The timing is Geo
+# Attendance's; whether the phone carries it is this switch alone.
+_TRACKING = "Geo Attendance: automatic tracking alerts (checked every 2 minutes, timing on Geo Attendance -> Settings)"
+TRACKING_ALERT_TYPES: dict[str, Extra] = {
+    "geo_location_off": Extra(
+        "Location turned off alert",
+        "The phone's location was turned off during On-Duty, so the route is not recorded: asks the employee to turn it "
+        "back on. Their Department Head is told if it stays off past the grace period.",
+        "tracking",
+        _TRACKING,
+        "employee_hod",
+    ),
+    "geo_permission_restricted": Extra(
+        "Background location permission restricted alert",
+        "The app's location permission is not 'Allow all the time' (only while using the app, or denied), so the route "
+        "cannot be recorded in the background: tells the employee how to fix it. Their Department Head is told if it is "
+        "not fixed in time.",
+        "tracking",
+        _TRACKING,
+        "employee_hod",
+    ),
+    "geo_background_restricted": Extra(
+        "Background app restriction alert",
+        "The phone restricts the app in the background (background use restricted, or battery optimisation on), so the "
+        "route may stop recording: tells the employee how to allow it. Their Department Head is told if it is not fixed "
+        "in time.",
+        "tracking",
+        _TRACKING,
+        "employee_hod",
+    ),
+    "geo_missing_punch": Extra(
+        "Missing Geo-Punch alert",
+        "No Geo-Punch since the On-Duty started (after the set wait), or fewer than the day's 4 punches at the end of the "
+        "duty day: asks the employee to record it. Their Department Head is told if it is still missing after the grace "
+        "period.",
+        "tracking",
+        _TRACKING,
+        "employee_hod",
+    ),
+    "geo_punch_reminder": Extra(
+        "Geo-Punch reminder",
+        "A friendly reminder when no Geo-Punch was made for the set time while on duty and a punch of the day is still "
+        "free. One reminder per wait, to the employee only.",
+        "tracking",
+        _TRACKING,
+    ),
+    "geo_tracking_failure": Extra(
+        "On-Duty tracking failure alert",
+        "The phone sent no location for the signal-lost time (the app was closed, the phone is off or offline): asks the "
+        "employee to open the app. Their Department Head is told if nothing arrives within the grace period.",
+        "tracking",
+        _TRACKING,
+        "employee_hod",
+    ),
+}
+EXTRA_TYPES.update(TRACKING_ALERT_TYPES)
 # The HRMS events that are told to the phone (and, separately, may also be told on WhatsApp by WhatsApp Control): one kind
 # each, described here for the phone. Their keys are the events' keys, which is all the two modules share.
 _DOC = "Documents pages: when HR sends the document to the employee"
@@ -251,6 +309,7 @@ GROUPS = {
     "attendance": "Attendance alerts",
     "approvals": "Approvals",
     "geo": "On-Duty & Geo",
+    "tracking": "On-Duty tracking alerts",
     "visitors": "Visitors",
     "outpass": "Gate outpass",
     "compensation": "Compensation & overtime",
@@ -306,7 +365,11 @@ CATEGORIES: dict[str, Category] = {
         "Absent, late, punch reminders and missing punches (checked every minute), missing-punch and attendance "
         "correction requests, attendance reports.",
     ),
-    "on_duty": Category("On-Duty & Geo", "Geo attendance and Geo punch decisions, On-Duty sessions ending."),
+    "on_duty": Category(
+        "On-Duty & Geo",
+        "Geo attendance and Geo punch decisions, On-Duty sessions ending, and the automatic On-Duty tracking alerts "
+        "(location off, permission or background restrictions, missing Geo-Punches, reminders, tracking failures).",
+    ),
     "compensation": Category(
         "Compensation & overtime",
         "Overtime decided (paid, time off, not compensated), Compensation Days and late-in / early-out windows, "
@@ -366,6 +429,7 @@ GROUP_CATEGORY = {  # the group of a kind not named above
     "attendance": "attendance",
     "approvals": "decisions",
     "geo": "on_duty",
+    "tracking": "on_duty",
     "visitors": "gate",
     "outpass": "gate",
     "other": "employee",

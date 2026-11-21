@@ -56,7 +56,7 @@ class OutpassRequestResolutionTests(TestCase):
 
     def test_rejection_creates_no_outpass_record(self):
         req = OutpassRequest.objects.create(employee=self.emp, destination="Market", reason="Personal errand")
-        resolve_outpass_request(req, "rejected", "HR Person", "hr", None)
+        resolve_outpass_request(req, "rejected", "HR Person", "hr", "Not needed")
 
         req.refresh_from_db()
         self.assertEqual(req.status, "rejected")
@@ -97,7 +97,7 @@ class OnDutyOutpassHookTests(TestCase):
         self.assertEqual(record.source, "request")
 
     def test_hr_rejection_generates_no_outpass(self):
-        resolve_on_duty_session_hr(self.session, "rejected", "HR Person", None)
+        resolve_on_duty_session_hr(self.session, "rejected", "HR Person", "Not needed")
         self.assertEqual(OutpassRequest.objects.filter(employee=self.emp).count(), 0)
 
     def test_direct_helper_is_idempotent_free_of_side_effects_on_session(self):

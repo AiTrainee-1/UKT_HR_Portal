@@ -171,6 +171,20 @@ class WhatsAppSettings(models.Model):
     four_punch_alert_enabled = models.BooleanField(default=False, db_column="four_punch_alert_enabled")
     missing_punch_alert_enabled = models.BooleanField(default=False, db_column="missing_punch_alert_enabled")
     geo_approval_enabled = models.BooleanField(default=False, db_column="geo_approval_enabled")
+    # On-Duty tracking alerts (2026-11-21, geo_tracking/alerts.py): one switch per alert kind, each covering the message to
+    # the employee and the one to their Department Head. All start OFF: each needs its Meta templates approved first.
+    geo_location_off_enabled = models.BooleanField(default=False, db_default=False, db_column="geo_location_off_enabled")
+    geo_permission_restricted_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="geo_permission_restricted_enabled"
+    )
+    geo_background_restricted_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="geo_background_restricted_enabled"
+    )
+    geo_missing_punch_enabled = models.BooleanField(default=False, db_default=False, db_column="geo_missing_punch_enabled")
+    geo_punch_reminder_enabled = models.BooleanField(default=False, db_default=False, db_column="geo_punch_reminder_enabled")
+    geo_tracking_failure_enabled = models.BooleanField(
+        default=False, db_default=False, db_column="geo_tracking_failure_enabled"
+    )
 
     # Attendance alert timing (whatsapp_alerts.py). Extra minutes to wait after the punctuality window
     # before an Absent alert; how many minutes BEFORE a punch is expected its friendly reminder goes

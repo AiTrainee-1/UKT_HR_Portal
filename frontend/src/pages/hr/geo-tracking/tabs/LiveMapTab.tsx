@@ -37,6 +37,7 @@ import { MapBridge, MapCardHeader, MapViewButtons, useMapView } from "../mapKit"
 import { COLOR_COMPANY, COLOR_MOCKED, COLOR_NORMAL, COLOR_ON_DUTY, pinIcon } from "../pins";
 import { timeAgo } from "../logic";
 import { thinPath } from "../thin";
+import TrackingAlerts from "../TrackingAlerts";
 import {
   TIRUPPUR_CAPTION,
   TIRUPPUR_CENTER,
@@ -361,6 +362,12 @@ export default function LiveMapTab({ onOpenJourney }: { onOpenJourney: (id: numb
           </p>
         </div>
       </Card>
+
+      {/* under both columns: what the server found and told on its own while employees are On-Duty (location off, a
+          missing punch ...) */}
+      <div className="order-3 min-w-0 lg:col-span-2">
+        <TrackingAlerts onOpenJourney={onOpenJourney} />
+      </div>
     </div>
   );
 }

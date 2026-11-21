@@ -141,3 +141,29 @@ describe("what a save sends", () => {
     expect(needsPhotoConfirm({ ...toForm(two), ondutyPunchPhotos: "1" }, two)).toBe(false);
   });
 });
+
+describe("the automatic tracking alerts", () => {
+  it("shows the server's alert timing and sends only what changed", () => {
+    const form = toForm(saved);
+    expect([form.alertDebounceMinutes, form.alertHodGraceMinutes, form.punchReminderMinutes]).toEqual([
+      "2",
+      "15",
+      "180",
+    ]);
+    expect([form.alertsEnabled, form.alertHodEnabled, form.punchCheckTime]).toEqual([true, true, "19:00"]);
+    expect(
+      toPatch({ ...form, alertsEnabled: false, alertHodEnabled: false, missingFirstPunchMinutes: "45" }, saved),
+    ).toEqual({
+      alertsEnabled: false,
+      alertHodEnabled: false,
+      missingFirstPunchMinutes: 45,
+    });
+  });
+
+  it("refuses a check time outside the afternoon and evening", () => {
+    expect(validate({ ...toForm(saved), punchCheckTime: "10:00" }, saved).punchCheckTime).toMatch(
+      /between 12:00 and 23:59/,
+    );
+    expect(validate({ ...toForm(saved), punchCheckTime: "7pm" }, saved).punchCheckTime).toMatch(/choose a time of day/);
+  });
+});

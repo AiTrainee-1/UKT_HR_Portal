@@ -13,6 +13,7 @@ import {
 import HrLayout from "@/components/HrLayout";
 import { PipelineNote } from "@/components/ApprovalTrail";
 import { RefreshButton } from "@/components/PageRefreshBar";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -21,7 +22,7 @@ import { useToast } from "@/hooks/use-toast";
 import { waitingText } from "@/lib/approval-workflow";
 import { useMissingPunchRequestsHR, useUpdateMissingPunchHR } from "@/lib/api-client/custom-hooks";
 import { EmptyState, StatCard } from "./settlement/parts";
-import { downloadTable } from "./settlement/shared";
+import { downloadTable, formatDate } from "./settlement/shared";
 import BulkDialog from "./missing-punch/BulkDialog";
 import DetailSheet from "./missing-punch/DetailSheet";
 import RequestCard from "./missing-punch/RequestCard";
@@ -34,6 +35,7 @@ import {
   bulkApprovable,
   exportTable,
   filterRows,
+  formatPunchTime,
   punchLabel,
   sortRows,
   summarize,
@@ -52,6 +54,9 @@ export default function MissingPunch() {
   const [bulkRows, setBulkRows] = useState<MissingRow[]>([]);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [bulkRunning, setBulkRunning] = useState(false);
+  // the request HR pressed Reject on (on its card): nothing is sent until a reason is written (owner brief 2026-11-21)
+  const [rejecting, setRejecting] = useState<MissingRow | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   const { data: items, isLoading, isError, refetch } = useMissingPunchRequestsHR("all");
   const updateMutation = useUpdateMissingPunchHR();
@@ -68,8 +73,11 @@ export default function MissingPunch() {
   const statsLoading = isLoading || isError;
   const noneAtAll = !isLoading && !isError && all.length === 0;
 
-  const decide = async (r: MissingRow, status: "approved" | "rejected", comment?: string) => {
+  // Approving needs no remark. A rejection always carries its reason (the card's Reject asks for it in a dialog, the
+  // detail view's Reject needs its note); `fromDialog` keeps that dialog open with the server's words when it is refused.
+  const decide = async (r: MissingRow, status: "approved" | "rejected", comment?: string, fromDialog = false) => {
     setBusyId(r.id);
+    if (fromDialog) setRejectError(null);
     try {
       const result = await updateMutation.mutateAsync({ id: r.id, status, comment: comment || undefined });
       const passedOn = status === "approved" && result?.status !== "approved";
@@ -81,9 +89,12 @@ export default function MissingPunch() {
             ? `${punchLabel(r)} at ${r.punchTime} on ${r.date} has been added to ${r.employeeName}'s attendance.`
             : `${r.employeeName}'s Missing Punch request for ${r.date} was rejected.`,
       });
+      if (fromDialog) setRejecting(null);
     } catch (err) {
       const e = err as { data?: { error?: string }; message?: string };
-      toast({ title: e?.data?.error ?? e?.message ?? "Failed to update", variant: "destructive" });
+      const words = e?.data?.error ?? e?.message ?? "Failed to update";
+      if (fromDialog) setRejectError(words);
+      else toast({ title: words, variant: "destructive" });
     } finally {
       setBusyId(null);
     }
@@ -330,7 +341,10 @@ export default function MissingPunch() {
                 onSelect={(on) => toggle(r.id, on)}
                 busy={busyId === r.id || bulkRunning}
                 onApprove={(row) => decide(row, "approved")}
-                onReject={(row) => decide(row, "rejected")}
+                onReject={(row) => {
+                  setRejectError(null);
+                  setRejecting(row);
+                }}
                 onOpen={(row) => setDetailId(row.id)}
               />
             ))
@@ -338,6 +352,23 @@ export default function MissingPunch() {
         </div>
 
         <BulkDialog rows={bulkRows} onConfirm={approveSelected} onCancel={() => setBulkRows([])} />
+
+        <RejectReasonDialog
+          open={rejecting !== null}
+          title="Reject this Missing Punch?"
+          description={
+            rejecting
+              ? `${rejecting.employeeName}'s ${punchLabel(rejecting)} at ${formatPunchTime(rejecting.punchTime)} on ${formatDate(rejecting.date)}.`
+              : undefined
+          }
+          busy={rejecting !== null && busyId === rejecting.id}
+          error={rejectError}
+          onCancel={() => setRejecting(null)}
+          onConfirm={(reason) => {
+            if (rejecting) void decide(rejecting, "rejected", reason, true);
+          }}
+          testIdPrefix="mp-reject"
+        />
 
         <DetailSheet
           row={detail}

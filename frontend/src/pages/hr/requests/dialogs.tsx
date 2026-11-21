@@ -14,19 +14,27 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
 import { ApprovalTrail, WaitingChip } from "@/components/ApprovalTrail";
 import { explainsWaiting } from "@/lib/approval-workflow";
+import { REJECT_REMARK_MIN, cleanRejectRemark, rejectRemarkProblem } from "@/lib/reject-remark";
 import {
   REQUEST_STATUSES,
   decisionsHere,
+  reasonLabel,
+  reasonMissingText,
+  requestDayText,
+  requestedLabel,
+  requestedText,
   roleText,
   statusChip,
+  submittedText,
   waitingDays,
   type HubItem,
   type HubKind,
 } from "./logic";
 import { EmployeeCell, KindIcon, RequestActions, dateTimeLong, type ActionHandlers } from "./parts";
 
-/** Approve or reject with an optional reason. Used for every Reject, and for an On-Duty approval (which also accepts the
- *  punches the employee has captured, so it is never a single click). */
+/** The On-Duty approval (it also accepts the punches the employee has captured, so it is never a single click), with an
+ *  optional note. Every rejection opens RejectReasonDialog instead; "reject" here is kept for callers that still pass it
+ *  and then also requires the reason (lib/reject-remark.ts). */
 export function DecisionDialog({
   item,
   mode,
@@ -43,6 +51,7 @@ export function DecisionDialog({
   const [comment, setComment] = useState("");
   useEffect(() => setComment(""), [item?.key, mode]);
   const reject = mode === "reject";
+  const missingReason = reject && !!rejectRemarkProblem(comment);
   const punches = Number(item?.extra.pendingPunchCount ?? 0);
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
@@ -55,7 +64,7 @@ export function DecisionDialog({
                 {item.employee.name}: {item.label}
                 {item.summary ? ` (${item.summary})` : ""}.{" "}
                 {reject
-                  ? "The employee is told it was rejected. You can add the reason below."
+                  ? "The employee is told it was rejected, with the reason below (required)."
                   : item.kind === "on_duty"
                     ? `Approving accepts the punches already captured${punches ? ` (${punches} waiting)` : ""} and issues the outpass.`
                     : "The employee is told it was approved."}
@@ -66,7 +75,9 @@ export function DecisionDialog({
         <Textarea
           value={comment}
           onChange={(e) => setComment(e.target.value)}
-          placeholder={reject ? "Reason (optional)" : "Note for the employee (optional)"}
+          placeholder={
+            reject ? `Reason (required, at least ${REJECT_REMARK_MIN} characters)` : "Note for the employee (optional)"
+          }
           aria-label="Note"
           rows={3}
           data-testid="decision-note"
@@ -76,8 +87,8 @@ export function DecisionDialog({
             Cancel
           </Button>
           <Button
-            onClick={() => onConfirm(comment)}
-            disabled={busy}
+            onClick={() => onConfirm(reject ? cleanRejectRemark(comment) : comment)}
+            disabled={busy || missingReason}
             className={reject ? "gap-1 bg-red-600 hover:bg-red-700" : "gap-1 bg-green-600 hover:bg-green-700"}
             data-testid="decision-confirm"
           >
@@ -111,12 +122,21 @@ export function HandleDialog({
 }) {
   const [status, setStatus] = useState("in_review");
   const [notes, setNotes] = useState("");
+  const [tried, setTried] = useState(false);
+  const rejecting = status === "rejected" && item?.extra.storedStatus !== "rejected";
+  const notesProblem = rejecting ? rejectRemarkProblem(notes) : null;
   useEffect(() => {
     if (!item) return;
     const stored = String(item.extra.storedStatus ?? "pending");
     setStatus(stored === "pending" ? "in_review" : stored);
     setNotes(String(item.extra.hrNotes ?? ""));
+    setTried(false);
   }, [item]);
+  const save = () => {
+    setTried(true);
+    if (notesProblem) return;
+    onSubmit(status, notes);
+  };
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md" data-testid="handle-dialog">
@@ -150,23 +170,35 @@ export function HandleDialog({
           </div>
           <div className="space-y-1">
             <label className="text-xs font-semibold text-gray-500" htmlFor="handle-notes">
-              Notes for the employee
+              {rejecting ? (
+                <>
+                  Reason for rejecting <span className="font-normal text-red-600">(required)</span>
+                </>
+              ) : (
+                "Notes for the employee"
+              )}
             </label>
             <Textarea
               id="handle-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={4}
-              placeholder="What was done, or what you need from them"
+              placeholder={rejecting ? "Why is this request rejected?" : "What was done, or what you need from them"}
+              aria-invalid={(tried && !!notesProblem) || undefined}
               data-testid="handle-notes"
             />
+            {tried && notesProblem && (
+              <p className="text-xs text-red-600" role="alert" data-testid="handle-notes-error">
+                {notesProblem}
+              </p>
+            )}
           </div>
         </div>
         <DialogFooter className="gap-2 sm:gap-2">
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <Button onClick={() => onSubmit(status, notes)} disabled={busy} data-testid="handle-submit">
+          <Button onClick={save} disabled={busy} data-testid="handle-submit">
             Save status
           </Button>
         </DialogFooter>
@@ -243,6 +275,41 @@ export function DetailDialog({
                 )}
               </div>
 
+              {/* owner brief 2026-11-21: when it was asked, what for, why, and the exact moment it was sent */}
+              <div
+                className="grid grid-cols-2 gap-3 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3"
+                data-testid="request-facts"
+              >
+                <Fact label="Request date">{requestDayText(item.submittedAt) || "Not recorded"}</Fact>
+                <Fact label={requestedLabel(item)}>
+                  <span data-testid="request-requested">{requestedText(item) ?? "Not tied to a date"}</span>
+                </Fact>
+                <div className="col-span-2">
+                  <Fact label="Submitted at">
+                    <span className="tabular-nums" data-testid="request-submitted-at">
+                      {submittedText(item.submittedAt) || "Not recorded"}
+                    </span>
+                  </Fact>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                    {reasonLabel(item)}
+                  </p>
+                  {item.reason ? (
+                    <p
+                      className="mt-1 whitespace-pre-line rounded-lg border bg-white p-3 text-sm text-gray-700"
+                      data-testid="request-reason"
+                    >
+                      {item.reason}
+                    </p>
+                  ) : (
+                    <p className="mt-0.5 text-sm text-gray-500" data-testid="request-reason">
+                      {reasonMissingText(item)}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 {item.details.map((d) => (
                   <Fact key={d.label} label={d.label}>
@@ -250,13 +317,6 @@ export function DetailDialog({
                   </Fact>
                 ))}
               </div>
-
-              {item.reason && (
-                <div>
-                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Reason</p>
-                  <p className="rounded-lg border bg-gray-50 p-3 text-sm text-gray-700">{item.reason}</p>
-                </div>
-              )}
 
               {item.approval && (
                 <div>
@@ -295,7 +355,6 @@ export function DetailDialog({
                 </div>
               )}
 
-              <p className="text-xs text-gray-400">Submitted {dateTimeLong(item.submittedAt)}</p>
               {here.why && item.status === "pending" && <p className="text-xs text-gray-500">{here.why}</p>}
             </div>
 

@@ -282,6 +282,12 @@ Priority order: **Department Head messages first** (the current priority), then 
 | `geo_rejection` | `hrms_geo_rejection` | Utility | — | employee_name, destination, requested_on, rejected_by, comment |
 | `geo_punch_approval` | `hrms_geo_punch_approval` | Utility | — | employee_name, punch_name, date, time, approved_by |
 | `geo_punch_rejection` | `hrms_geo_punch_rejection` | Utility | — | employee_name, punch_name, date, time, rejected_by, comment |
+| `geo_location_off` (+ `geo_location_off_hod`) | `hrms_geo_location_off` (+ `hrms_geo_location_off_hod`) | Utility | — | employee_name, since, destination (head: hod_name, employee_name, employee_code, since, destination, alerted_at) |
+| `geo_permission_restricted` (+ `_hod`) | `hrms_geo_permission_restricted` (+ `_hod`) | Utility | — | employee_name, permission (head: + hod_name, employee_code, since, alerted_at) |
+| `geo_background_restricted` (+ `_hod`) | `hrms_geo_background_restricted` (+ `_hod`) | Utility | — | employee_name, restriction (head: + hod_name, employee_code, since, alerted_at) |
+| `geo_tracking_failure` (+ `_hod`) | `hrms_geo_tracking_failure` (+ `_hod`) | Utility | — | employee_name, last_heard (head: + hod_name, employee_code, alerted_at) |
+| `geo_missing_punch` (+ `_hod`) | `hrms_geo_missing_punch` (+ `_hod`) | Utility | — | employee_name, date, punch_status (head: + hod_name, employee_code, alerted_at) |
+| `geo_punch_reminder` | `hrms_geo_punch_reminder` | Utility | — | employee_name, waited, since_text, destination |
 | `visitor_notification` | `hrms_visitor_at_reception` | Utility | — | employee_name, visitor_name, company, purpose, visitor_phone, visit_time |
 | `outpass_gate_out` | `hrms_gate_out` | Utility | — | employee_name, pass_type, date, gate_out_time, destination, gate_name |
 | `outpass_gate_in` | `hrms_gate_in` | Utility | — | employee_name, date, gate_in_time, duration, gate_name |

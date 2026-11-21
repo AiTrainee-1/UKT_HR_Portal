@@ -106,6 +106,8 @@ NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"production-payroll-excess(/.*)?", "production_payroll"),
     (r"payslips/production(/.*)?", "production_payroll"),
     (r"payslips/staff(/.*)?", "salary_slip"),
+    # Main -> Analytics, 2026-11-21: follows Attendance until a role sets it
+    (r"hr-analytics(/.*)?", "attendance"),
 )
 
 
@@ -618,7 +620,12 @@ class ApprovalEnforcement(TestCase):
     def test_a_role_with_the_old_other_requests_switch_decides_every_type(self):
         user = self.login({"requests": "edit"}, approvals={"request": True})
         for kind in ("leave", "general", "advance"):
-            r = self.call(user, "put", f"/api/employee-requests/{self.request(kind).id}/action", {"status": "rejected"})
+            r = self.call(
+                user,
+                "put",
+                f"/api/employee-requests/{self.request(kind).id}/action",
+                {"status": "rejected", "hrNotes": "Not this time"},
+            )
             self.assertEqual(r.status_code, 200, kind)
 
     def test_general_and_term_advances_are_separate(self):
@@ -627,8 +634,10 @@ class ApprovalEnforcement(TestCase):
         term = Advance.objects.create(
             employee=self.emp, amount=9000, advance_type="term", status="pending", repayment_months=3
         )
-        self.assertEqual(self.call(user, "put", f"/api/advances/{general.id}", {"status": "rejected"}).status_code, 200)
-        r = self.call(user, "put", f"/api/advances/{term.id}", {"status": "rejected"})
+        # a rejection carries its reason (Settlement, 2026-11-20)
+        rejected = {"status": "rejected", "decisionRemark": "Not this month"}
+        self.assertEqual(self.call(user, "put", f"/api/advances/{general.id}", rejected).status_code, 200)
+        r = self.call(user, "put", f"/api/advances/{term.id}", rejected)
         self.assertEqual((r.status_code, r.json()["code"]), (403, "approval_not_permitted"))
 
     def test_payroll_done_needs_its_own_switch_on_top_of_edit(self):

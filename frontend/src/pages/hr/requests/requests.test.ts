@@ -548,16 +548,42 @@ describe("export", () => {
   });
 
   it("one row per request in the header's columns", () => {
-    const rows = exportRows([decided, item({ kind: "advance" })], { leave: "Leave", advance: "Advance" });
+    const rows = exportRows(
+      [
+        {
+          ...decided,
+          requested: {
+            from: "2026-10-12",
+            to: "2026-10-13",
+            note: "2 days",
+            label: "Requested dates",
+            precision: "day",
+          },
+        },
+        item({
+          kind: "advance",
+          requested: { from: "2026-11-01", to: null, note: null, label: "Deduct from", precision: "month" },
+        }),
+      ],
+      { leave: "Leave", advance: "Advance" },
+    );
     expect(rows).toHaveLength(2);
     for (const row of rows) expect(row).toHaveLength(EXPORT_HEADERS.length);
+    const col = (name: string) => EXPORT_HEADERS.indexOf(name);
     expect(rows[0].slice(0, 4)).toEqual(["Leave", "Casual Leave", "E001", 'Asha "Ace" Kumar']);
-    expect(rows[0][6]).toBe("Production");
-    expect(rows[0][10]).toBe("approved");
-    expect(rows[0].slice(12)).toEqual(["Meena", "2026-10-10 09:15", "ok"]);
+    expect(rows[0][col("Employee type")]).toBe("Production");
+    // the request date, the date(s) asked for and the exact moment it was sent (local time, to the second)
+    expect(rows[0][col("Request date")]).toBe(rows[0][col("Submitted at")].slice(0, 10));
+    expect(rows[0][col("Requested date(s)")]).toBe("2026-10-12 to 2026-10-13 · 2 days");
+    expect(rows[0][col("Submitted at")]).toMatch(/^2026-10-10 \d\d:\d\d:\d\d$/);
+    expect(rows[1][col("Requested date(s)")]).toBe("2026-11");
+    expect(rows[0][col("Status")]).toBe("approved");
+    expect(rows[0][col("Decided by")]).toBe("Meena");
+    expect(rows[0][col("Decided on")]).toMatch(/^2026-10-10 \d\d:\d\d$/);
+    expect(rows[0][col("Decision note")]).toBe("ok");
     expect(rows[1][0]).toBe("Advance");
-    expect(rows[1][11]).toBe("Waiting for HOD or HR");
-    expect(rows[0][11]).toBe("");
+    expect(rows[1][col("Waiting for")]).toBe("Waiting for HOD or HR");
+    expect(rows[0][col("Waiting for")]).toBe("");
   });
 
   it("a CSV starts with a BOM and a header, and quotes what needs it", () => {
@@ -726,10 +752,11 @@ describe("Holiday / Sunday work: HR raises it, the Department Head decides it", 
 
   it("says in the export what it is and who it waits for", () => {
     const [row] = exportRows([claim], { holiday_work: "Holiday / Sunday work" });
+    const col = (name: string) => EXPORT_HEADERS.indexOf(name);
     expect(row[0]).toBe("Holiday / Sunday work");
-    expect(row[7]).toBe("2026-10-11 · 0.5 shift");
-    expect(row[8]).toBe("Dispatch rush");
-    expect(row[10]).toBe("pending");
-    expect(row[11]).toBe("Waiting for HOD");
+    expect(row[col("Details")]).toBe("2026-10-11 · 0.5 shift");
+    expect(row[col("Reason")]).toBe("Dispatch rush");
+    expect(row[col("Status")]).toBe("pending");
+    expect(row[col("Waiting for")]).toBe("Waiting for HOD");
   });
 });

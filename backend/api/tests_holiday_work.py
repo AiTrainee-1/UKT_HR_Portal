@@ -508,7 +508,7 @@ class ListTests(HolidayWorkBase):
     def test_filters(self):
         pending = self.raise_claim(self.asha)
         rejected = self.raise_claim(self.ravi)
-        self.patch_hod(rejected.id, {"status": "rejected", "comment": "No"})
+        self.patch_hod(rejected.id, {"status": "rejected", "comment": "Not needed"})
         self.assertEqual([c["id"] for c in self.get(status="pending").json()["results"]], [pending.id])
         self.assertEqual([c["id"] for c in self.get(status="waiting").json()["results"]], [pending.id])
         self.assertEqual([c["id"] for c in self.get(status="rejected").json()["results"]], [rejected.id])
@@ -646,7 +646,7 @@ class WithdrawTests(HolidayWorkBase):
         approved = self.raise_claim(self.asha)
         self.patch_hod(approved.id, {"status": "approved"})
         rejected = self.raise_claim(self.ravi)
-        self.patch_hod(rejected.id, {"status": "rejected"})
+        self.patch_hod(rejected.id, {"status": "rejected", "comment": "Not worked"})
         for claim in (approved, rejected):
             r = self.delete(f"{BASE}/{claim.id}")
             self.assertEqual(r.status_code, 400)
@@ -843,7 +843,7 @@ class DepartmentHeadTests(HolidayWorkBase):
             first = self.raise_claim(self.asha)
             second = self.raise_claim(self.ravi)
             self.patch_hod(first.id, {"status": "approved"})
-            self.patch_hod(second.id, {"status": "rejected", "comment": "No"})
+            self.patch_hod(second.id, {"status": "rejected", "comment": "Not needed"})
         self.assertEqual(
             [c.args[:3] for c in notify.call_args_list],
             [("holiday_work", first, "approved"), ("holiday_work", second, "rejected")],

@@ -60,6 +60,7 @@ import {
   type TileId,
 } from "./logic";
 import { PushAgainButton } from "./MessagesTab";
+import TrackingAlertsCard, { trackingControls } from "./TrackingAlertsCard";
 import { pnPath, type PnTabKey } from "./routes";
 import { InlineConfirm, LoadError, Notice, Panel, StatusCard, useLockedWhy } from "./ui";
 
@@ -638,6 +639,16 @@ export default function OverviewTab({
     return to && canOpen(to.tab) ? <TileLink to={pnPath(to.tab, to.query)}>{to.label}</TileLink> : null;
   };
 
+  const setTracking = (row: MobileMessageControl, on: boolean) =>
+    update.mutate(
+      { types: { [row.key]: on } },
+      {
+        onSuccess: () => toast({ title: `${row.label}: ${on ? "ON" : "OFF"}` }),
+        onError: (e) =>
+          toast({ title: "Could not change that", description: errorText(e, "Try again."), variant: "destructive" }),
+      },
+    );
+
   const setCategory = (cat: PushCategory, on: boolean, after?: () => void) => {
     const types = categoryChange(cat.keys, on, controls.data?.controls);
     if (Object.keys(types).length === 0) {
@@ -720,6 +731,16 @@ export default function OverviewTab({
           onSet={setCategory}
         />
       )}
+
+      {/* the six automatic On-Duty tracking alerts, each with its own switch (the Controls tab's, read when it is open) */}
+      <TrackingAlertsCard
+        rows={trackingControls(controls.data?.controls)}
+        pushEnabled={o.pushEnabled}
+        busy={update.isPending}
+        locked={switchLock}
+        canManage={canOpen("controls")}
+        onToggle={setTracking}
+      />
 
       {o.failedRecent && (
         <NeedsAttention

@@ -131,7 +131,7 @@ class HodAuditTextTests(ClaimsBase):
                 {"kind": "ot_shift", "date": OT_SHIFT_DAY.isoformat(), "overtimeRecordId": self.shift_rec.id}
             )
         )
-        self.assertEqual(self.decide(claim.id, "rejected", comment="No").status_code, 200)
+        self.assertEqual(self.decide(claim.id, "rejected", comment="Not needed").status_code, 200)
         text = self._log(claim).record_description
         self.assertIn("rejected", text)
         self.assertNotIn("added to the compensation balance", text)

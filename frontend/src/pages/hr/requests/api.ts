@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
-import { normalizeHub, type HubItem, type HubResponse, type KindKey } from "./logic";
+import { exportParams, normalizeHub, type HubItem, type HubResponse, type KindKey } from "./logic";
 
 export const HUB_KEY = "/api/hr-requests";
 
@@ -20,10 +20,16 @@ export function useHubRequests(params: Record<string, string>, enabled = true) {
   });
 }
 
+/** Every request that matches the page's filters, for the Excel / CSV export (one call, up to EXPORT_MAX rows). */
+export async function fetchHubExport(params: Record<string, string>): Promise<HubItem[]> {
+  const qs = new URLSearchParams(exportParams(params)).toString();
+  return normalizeHub(await customFetch<Partial<HubResponse>>(`/api/hr-requests?${qs}`)).items;
+}
+
 export type Decision = {
   item: Pick<HubItem, "kind" | "id">;
   status: "approved" | "rejected";
-  /** The reason HR gives; optional. */
+  /** HR's words: optional on an approval, required on a rejection (lib/reject-remark.ts; the server refuses without). */
   comment?: string;
 };
 

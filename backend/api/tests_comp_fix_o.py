@@ -673,7 +673,7 @@ class HolidayWorkFixTests(hw.HolidayWorkBase):
         self.assertEqual((log.new_values["ledgerEntryId"], log.new_values["status"]), (entry.id, "approved"))
         self.assertIn("added to the compensation balance", log.record_description)
         other = self.raise_claim(self.ravi, hw.SUNDAY, shifts=1)
-        self.patch_hod(other.id, {"status": "rejected", "comment": "No"})
+        self.patch_hod(other.id, {"status": "rejected", "comment": "Not needed"})
         self.assertEqual(AuditLog.objects.filter(action="reject", module="compensation", record_id=other.id).count(), 1)
 
 

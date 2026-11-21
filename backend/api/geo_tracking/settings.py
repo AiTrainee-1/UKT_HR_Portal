@@ -6,6 +6,10 @@
 
 The ranges below are enforced here (the database only stores). A changed notice text without an explicit noticeVersion
 raises the version by one, so every employee has to accept the new wording before their next track records.
+
+The automatic tracking alerts' timing (alertsEnabled, alertDebounceMinutes, alertHodEnabled, alertHodGraceMinutes,
+alertCooldownMinutes, missingFirstPunchMinutes, punchCheckTime, punchReminderMinutes; geo_tracking/alerts.py) is part of the
+same object: when a problem counts and who is told is a rule of geo tracking, not of a channel.
 """
 
 from __future__ import annotations
@@ -61,6 +65,15 @@ FIELDS: tuple[Field, ...] = (
         "choice",
         choices=(GeoTrackingSettings.REVERSE_GEOCODE_OFF, GeoTrackingSettings.REVERSE_GEOCODE_NOMINATIM),
     ),
+    # the automatic tracking alerts (geo_tracking/alerts.py): minutes, and the IST time of the day's punch check
+    Field("alerts_enabled", "alertsEnabled", "Tracking alerts", "bool"),
+    Field("alert_debounce_minutes", "alertDebounceMinutes", "Wait before alerting", "int", 0, 30),
+    Field("alert_hod_enabled", "alertHodEnabled", "Tell the Department Head", "bool"),
+    Field("alert_hod_grace_minutes", "alertHodGraceMinutes", "Department Head after", "int", 1, 240),
+    Field("alert_cooldown_minutes", "alertCooldownMinutes", "Same problem again within", "int", 0, 720),
+    Field("missing_first_punch_minutes", "missingFirstPunchMinutes", "First Geo-Punch within", "int", 5, 240),
+    Field("punch_check_time", "punchCheckTime", "Day's punch check time", "time"),
+    Field("punch_reminder_minutes", "punchReminderMinutes", "Geo-Punch reminder after", "int", 30, 720),
 )
 BY_ATTR = {f.attr: f for f in FIELDS}
 #: other spellings a client may use for a key (the punch-photo policy is also called punchPhotos in /tracking/state)
@@ -116,6 +129,14 @@ def to_dict(s: GeoTrackingSettings) -> dict:
         "noticeVersion": s.notice_version,
         "noticeText": s.notice_text,
         "reverseGeocodeProvider": s.reverse_geocode_provider,
+        "alertsEnabled": s.alerts_enabled,
+        "alertDebounceMinutes": s.alert_debounce_minutes,
+        "alertHodEnabled": s.alert_hod_enabled,
+        "alertHodGraceMinutes": s.alert_hod_grace_minutes,
+        "alertCooldownMinutes": s.alert_cooldown_minutes,
+        "missingFirstPunchMinutes": s.missing_first_punch_minutes,
+        "punchCheckTime": s.punch_check_time.strftime("%H:%M"),
+        "punchReminderMinutes": s.punch_reminder_minutes,
         "updatedBy": s.updated_by.full_name or s.updated_by.username if s.updated_by_id else None,
         "updatedAt": s.updated_at.isoformat() if s.updated_at else None,
     }
@@ -172,7 +193,12 @@ def _coerce(f: Field, raw):
         if value is None:
             raise SettingsError(f"{f.label} must be a time like 23:50.")
         if value < DAY_END_EARLIEST:
-            raise SettingsError(f"{f.label} must be between 12:00 and 23:59 (it closes the day's duties).")
+            why = (
+                "the punches of the day are checked then"
+                if f.attr == "punch_check_time"
+                else "it closes the day's duties"
+            )
+            raise SettingsError(f"{f.label} must be between 12:00 and 23:59 ({why}).")
         return value
     if f.lo is not None and value < f.lo or f.hi is not None and value > f.hi:
         lo = int(f.lo) if f.lo == int(f.lo) else f.lo

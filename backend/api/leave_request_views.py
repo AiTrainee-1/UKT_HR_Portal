@@ -300,6 +300,9 @@ def update_leave_status(request: Request, pk: int) -> Response:
 
     if new_status != old_status and not approval.role_takes_part(WORKFLOW, approval.HR):
         return _error("HR is not part of the approval pipeline for Leave, so it cannot change this decision.", 403)
+    # turning an approved leave into a rejected one is a rejection too: it needs the reason (2026-11-21)
+    if new_status != old_status and (refused := approval.reject_remark_refusal(new_status, comment)):
+        return refused
 
     # A comment edit, or a correction of a decision already made.
     record.status = new_status

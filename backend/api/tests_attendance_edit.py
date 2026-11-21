@@ -50,9 +50,14 @@ class EditBase(Base):
         return self.send("post", "/api/attendance/override", body)
 
     def hod_ok(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/attendance-requests/{pk}/status", {"status": status})
+        reason = "Not approved this time" if status == "rejected" else None  # a rejection needs its reason (2026-11-21)
+        return self.as_hod(
+            "patch", f"/api/manager/attendance-requests/{pk}/status", {"status": status, "comment": reason}
+        )
 
     def hr_ok(self, pk, status="approved", comment=None):
+        if status == "rejected" and comment is None:
+            comment = "Not approved this time"  # a rejection needs its reason (2026-11-21)
         return self.send("patch", f"/api/attendance/override-requests/{pk}", {"status": status, "comment": comment})
 
     def record(self):

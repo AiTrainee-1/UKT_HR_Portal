@@ -206,10 +206,79 @@ describe("HOD Approvals", () => {
     );
     const card = '[data-testid="md-approval-leave-14"]';
     await page.click(`${card} [data-testid="md-approval-reject"]`);
+    await page.type(`${card} [data-testid="md-approval-comment"]`, "Clash with the audit");
     await page.click(`${card} [data-testid="md-approval-send"]`);
     expect(byTestId(page, "md-approval-error")?.textContent).toContain("switched off in User Management");
     expect(byTestId(page, "md-approval-confirm")).not.toBeNull();
     expect(toast).not.toHaveBeenCalled();
+  });
+
+  it("approves with no comment at all: nothing but the decision is sent", async () => {
+    const posted: unknown[] = [];
+    page = await renderMdPage(
+      MdApprovals,
+      data({
+        "/api/md/approvals/hods/5/decide": (_params, init) => {
+          posted.push(JSON.parse(String(init?.body)));
+          return { decision: "approved", actor: "Test MD", item: null };
+        },
+      }),
+      { path: "/md/approvals/5" },
+    );
+    const card = '[data-testid="md-approval-leave-14"]';
+    await page.click(`${card} [data-testid="md-approval-approve"]`);
+    expect(byTestId(page, "md-approval-confirm")?.textContent).toContain("Comment (optional, the employee sees it)");
+    await page.click(`${card} [data-testid="md-approval-send"]`);
+    expect(posted).toEqual([{ kind: "leave", id: 14, decision: "approved" }]);
+    expect(byTestId(page, "md-approval-problem")).toBeNull();
+  });
+
+  it("a rejection needs the reason: without one nothing is sent, with one it goes as the comment", async () => {
+    const posted: unknown[] = [];
+    page = await renderMdPage(
+      MdApprovals,
+      data({
+        "/api/md/approvals/hods/5/decide": (_params, init) => {
+          posted.push(JSON.parse(String(init?.body)));
+          return { decision: "rejected", actor: "Test MD (MD, for Sandhya Krishnan)", item: null };
+        },
+      }),
+      { path: "/md/approvals/5" },
+    );
+    const card = '[data-testid="md-approval-leave-14"]';
+    await page.click(`${card} [data-testid="md-approval-reject"]`);
+    expect(byTestId(page, "md-approval-confirm")?.textContent).toContain(
+      "Reason for rejecting (required, the employee sees it)",
+    );
+    await page.click(`${card} [data-testid="md-approval-send"]`);
+    expect(posted).toEqual([]);
+    expect(byTestId(page, "md-approval-problem")?.textContent).toBe(
+      "Write the reason for rejecting (at least 3 characters).",
+    );
+    expect(byTestId(page, "md-approval-confirm")).not.toBeNull();
+    await page.type(`${card} [data-testid="md-approval-comment"]`, " ok ");
+    await page.click(`${card} [data-testid="md-approval-send"]`);
+    expect(posted).toEqual([]); // two letters are not a reason
+    await page.type(`${card} [data-testid="md-approval-comment"]`, "  Clash   with the audit ");
+    await page.click(`${card} [data-testid="md-approval-send"]`);
+    expect(posted).toEqual([{ kind: "leave", id: 14, decision: "rejected", comment: "Clash with the audit" }]);
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Rejected: Surya M's leave" }));
+  });
+
+  it("shows when the employee submitted the request, to the minute", async () => {
+    const at = "2026-11-11T09:52:00";
+    const body = {
+      ...PENDING,
+      items: [item({ submittedAt: at })],
+      counts: { leave: 1, permission: 0, other: 0, total: 1 },
+    };
+    page = await renderMdPage(MdApprovals, data({ "/api/md/approvals/hods/5": body }), { path: "/md/approvals/5" });
+    const card = byTestId(page, "md-approval-leave-14")!;
+    expect(card.querySelector('[data-testid="md-approval-submitted"]')?.textContent).toMatch(
+      /^Submitted 11 Nov 2026, 9:52 am( · .+)?$/,
+    );
+    expect(card.textContent).toContain("12 Nov 2026 – 13 Nov 2026"); // the dates asked for
+    expect(card.textContent).toContain("Fever"); // the employee's reason
   });
 
   it("warns before approving a resignation that may deactivate the employee", async () => {

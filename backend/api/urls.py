@@ -157,7 +157,7 @@ from .geo_attendance_views import (
     on_duty_punch_verifications_hr, on_duty_punch_verification_hr_status, on_duty_punch_verification_photo,
     live_location_team, live_location_trail, live_location_route, on_duty_map,
 )
-from .geo_tracking import hr_views as geo_tracking_hr, views as geo_tracking_views
+from .geo_tracking import alert_views as geo_tracking_alerts, hr_views as geo_tracking_hr, views as geo_tracking_views
 from .reports_views import (
     attendance_report, attendance_summary_report,
     leave_report, leave_balance_report,
@@ -657,6 +657,8 @@ urlpatterns = [
     path("tracking/journeys/<int:pk>/export", geo_tracking_hr.journey_export),
     path("tracking/journeys/<int:pk>/rebuild", geo_tracking_hr.journey_rebuild),
     path("tracking/live", geo_tracking_hr.live_tracks),
+    # The automatic tracking alerts' log (geo_tracking/alerts.py): the Live Map tab's (permission prefix tracking/live).
+    path("tracking/live/alerts", geo_tracking_alerts.tracking_alerts),
     # The geo-tracking rules (permission module settings.attendance).
     path("tracking/settings", geo_tracking_hr.tracking_settings),
 
@@ -1056,4 +1058,5 @@ urlpatterns = [
     path("", include("api.urls_payroll_excess")),
     # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──
     path("", include("api.urls_factory_employees")),
+    path("", include("api.urls_hr_analytics")),
 ]

@@ -365,20 +365,81 @@ describe("Requests", () => {
     expect(world.calls).toEqual([]);
   });
 
-  it("rejecting sends the decision and says so", async () => {
+  const decisionButton = (label: string) =>
+    [...document.body.querySelectorAll<HTMLButtonElement>('[data-testid="outpass-requests"] button')].find(
+      (b) => text(b) === label,
+    )!;
+  /** Types into a React-controlled textarea the way the browser does. */
+  const typeReason = (value: string) =>
+    act(() => {
+      const el = must("outpass-reject-text") as HTMLTextAreaElement;
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(el, value);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+  it("approving is one click, with no remark asked for", async () => {
     mountPage(`${OUTPASS}/requests`);
     await waitFor(() => ready("outpass-requests") && text(q("outpass-requests")).includes("Employee 1"), "requests");
-    const reject = [...document.body.querySelectorAll("button")].find((b) => text(b) === "Reject")!;
-    click(reject);
+    click(decisionButton("Approve"));
     await waitFor(() => world.calls.length === 1, "the decision");
     expect(world.calls[0]).toEqual({
       method: "PUT",
       url: "/api/outpass-requests/1/hr-status",
-      body: { status: "rejected" },
+      body: { status: "approved" },
+    });
+    expect(q("outpass-reject-dialog")).toBeNull();
+    await waitFor(() => h.toast.mock.calls.length > 0, "the toast");
+    expect(h.toast).toHaveBeenCalledWith({ title: "Gate pass approved" });
+  });
+
+  it("rejecting asks for the reason: nothing is sent without one, and the reason goes with the decision", async () => {
+    mountPage(`${OUTPASS}/requests`);
+    await waitFor(() => ready("outpass-requests") && text(q("outpass-requests")).includes("Employee 1"), "requests");
+    click(decisionButton("Reject"));
+    await waitFor(() => q("outpass-reject-dialog") !== null, "the reason dialog");
+    expect(text(q("outpass-reject-dialog"))).toContain("Reject this gate pass?");
+    expect(text(q("outpass-reject-dialog"))).toContain("Employee 1");
+    click(must("outpass-reject-confirm"));
+    await settle(10);
+    expect(world.calls).toEqual([]);
+    expect(text(q("outpass-reject-dialog"))).toContain("Write the reason for rejecting (at least 3 characters).");
+    typeReason("  Not   a work trip ");
+    click(must("outpass-reject-confirm"));
+    await waitFor(() => world.calls.length === 1, "the decision");
+    expect(world.calls[0]).toEqual({
+      method: "PUT",
+      url: "/api/outpass-requests/1/hr-status",
+      body: { status: "rejected", comment: "Not a work trip" },
     });
     await waitFor(() => h.toast.mock.calls.length > 0, "the toast");
     expect(h.toast).toHaveBeenCalledWith({ title: "Gate pass rejected" });
+    await waitFor(() => q("outpass-reject-dialog") === null, "the dialog to close");
     expect(here()).toBe(`${OUTPASS}/requests`);
+  });
+
+  it("keeps the dialog open with the server's words when it refuses the rejection", async () => {
+    const base = h.fetch.getMockImplementation()!;
+    h.fetch.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+      if (init?.method === "PUT" && url.endsWith("/hr-status")) {
+        throw harnessError(
+          400,
+          { error: "Write the reason for rejecting (at least 3 characters).", code: "remark_required" },
+          "PUT",
+          url,
+        );
+      }
+      return base(url, init);
+    });
+    mountPage(`${OUTPASS}/requests`);
+    await waitFor(() => ready("outpass-requests") && text(q("outpass-requests")).includes("Employee 1"), "requests");
+    click(decisionButton("Reject"));
+    await waitFor(() => q("outpass-reject-dialog") !== null, "the reason dialog");
+    typeReason("Not a work trip");
+    click(must("outpass-reject-confirm"));
+    await waitFor(() => q("outpass-reject-error") !== null, "the refusal");
+    expect(text(q("outpass-reject-error"))).toBe("Write the reason for rejecting (at least 3 characters).");
+    expect(q("outpass-reject-dialog")).not.toBeNull();
+    expect(h.toast).not.toHaveBeenCalledWith({ title: "Gate pass rejected" });
   });
 });
 

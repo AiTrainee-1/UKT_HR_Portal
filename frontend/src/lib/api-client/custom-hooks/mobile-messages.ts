@@ -156,8 +156,9 @@ export type PushCategory = {
   month: PushKindStats;
 };
 
-/** Who receives a kind of notification. */
-export type PushAudience = "employee" | "approver" | "hr";
+/** Who receives a kind of notification. "employee_hod": the employee first, then their Department Head when it is not fixed
+ *  in time (the On-Duty tracking alerts, 2026-11-21). */
+export type PushAudience = "employee" | "approver" | "hr" | "employee_hod";
 
 /** The last 30 days of one kind (a workflow row: the messages of that workflow). */
 export type PushKindStats = {

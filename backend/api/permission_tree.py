@@ -1270,6 +1270,21 @@ COMPENSATION = N(
 
 SETTLEMENT = N("settlement", "Settlement", "page", "Salary advances and term loans, and their repayment.")
 
+# Main -> Analytics (/hr/analytics, api/hr_analytics/; owner 2026-11-21): who needs HR's attention and why (frequent
+# leave, late arrival, missing punches, On-Duty without punches, HOD patterns ...), Staff and Production tabs. It reads
+# attendance and request records, so until a role sets it, it follows Attendance.
+ANALYTICS = N(
+    "analytics",
+    "Analytics",
+    "page",
+    "Attendance patterns and recurring issues per employee, with drill-down and exports. Read only.",
+    N("analytics.staff", "Staff", "tab", "Staff checks, including the Department Head view."),
+    N("analytics.production", "Production", "tab", "Production checks: days off, late, night work, continuous leave."),
+    api=["hr-analytics"],
+    routes=["/hr/analytics"],
+    inherits="attendance",
+)
+
 # HR -> Payroll -> Salary Slip (/hr/salary-slip, api/salary_slip_center/): standalone slips worked out from attendance and
 # salary, no payroll needed (owner 2026-11-20). Until a role sets it, it follows Staff Payroll -> Payslip, so whoever
 # handles payslips today finds the page.
@@ -2035,7 +2050,7 @@ SETTINGS = N(
 )
 
 GROUPS: list[dict] = [
-    {"id": "main", "label": "Main", "children": [DASHBOARD, EMPLOYEES, ATTENDANCE, GEO, GATE]},
+    {"id": "main", "label": "Main", "children": [DASHBOARD, ANALYTICS, EMPLOYEES, ATTENDANCE, GEO, GATE]},
     {
         "id": "hr_operations",
         "label": "HR Operations",

@@ -40,8 +40,7 @@ export default function Toolbar({
   onFilters,
   options,
   showRequestType,
-  shown,
-  total,
+  matching,
   canExport,
   onExport,
 }: {
@@ -50,9 +49,8 @@ export default function Toolbar({
   options: HubOptions;
   /** The Other requests tab: its own kind of request has types worth filtering by. */
   showRequestType: boolean;
-  /** Requests on the screen now (after every filter) and how many the tab holds before the search and the client filters. */
-  shown: number;
-  total: number;
+  /** How many requests match the tab, the filters and the search, over every page (the server counts them). */
+  matching: number;
   canExport: boolean;
   onExport: (format: "xlsx" | "csv") => void;
 }) {
@@ -245,7 +243,8 @@ export default function Toolbar({
 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs text-gray-500" data-testid="requests-count">
-          Showing <b>{shown}</b> of {total} request{total === 1 ? "" : "s"}
+          <b>{matching}</b> request{matching === 1 ? "" : "s"}
+          {filtersActive(filters) ? " match" : ""}
           {narrowed > 0 && ` · ${narrowed} filter${narrowed === 1 ? "" : "s"} on`}
         </p>
         {rangeInvalid(filters) && (

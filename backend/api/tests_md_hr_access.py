@@ -178,13 +178,16 @@ class MdHrApiAccessTests(TestCase):
         leave, perm, outpass = self._requests()
         r = self.client.patch(
             f"/api/leave-requests/{leave.pk}/status",
-            {"status": "rejected"},
+            {"status": "rejected", "hrComment": "Not needed"},
             content_type="application/json",
             **headers_for(hr),
         )
         self.assertEqual(r.status_code, 200, r.content)
         r = self.client.put(
-            f"/api/permissions/{perm.pk}", {"status": "rejected"}, content_type="application/json", **headers_for(hr)
+            f"/api/permissions/{perm.pk}",
+            {"status": "rejected", "hrComment": "Not needed"},
+            content_type="application/json",
+            **headers_for(hr),
         )
         self.assertEqual(r.status_code, 200, r.content)
         leave.refresh_from_db()

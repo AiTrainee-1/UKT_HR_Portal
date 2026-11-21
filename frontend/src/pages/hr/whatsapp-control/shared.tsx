@@ -89,6 +89,7 @@ export const CATEGORY_LABEL: Record<string, string> = {
   approvals: "Approvals",
   hod: "Department Heads",
   geo: "Geo Attendance",
+  geo_alerts: "On-Duty tracking alerts",
   visitors: "Visitors",
   outpass: "Outpass & Gate",
   other: "Other",
@@ -101,6 +102,7 @@ export const CATEGORY_HELP: Record<string, string> = {
   approvals: "Leave, permission, outpass, missing punch and other approvals",
   hod: "New requests waiting for a Department Head, and the scheduled reminder",
   geo: "Geo Attendance and punch approvals and rejections",
+  geo_alerts: "Location off, permission or background restrictions, missing Geo-Punches, reminders, tracking stopped",
   visitors: "Visitor arrivals, with the visitor's phone number",
   outpass: "Gate OUT and IN confirmations",
   other: "Anything else",
@@ -113,6 +115,7 @@ export const CATEGORIES: string[] = [
   "approvals",
   "hod",
   "geo",
+  "geo_alerts",
   "visitors",
   "outpass",
 ];

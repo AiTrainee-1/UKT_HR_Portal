@@ -379,6 +379,8 @@ export type World = {
   /** Old live feed (employees HR switched live tracking on for). */
   team: Raw[];
   verifications: Raw[];
+  /** The automatic tracking alerts' log (GET /api/tracking/live/alerts). */
+  alerts: Raw[];
   requests: string[];
   writes: Call[];
   unexpected: string[];
@@ -437,6 +439,7 @@ export function newWorld(): World {
     settings: copy(SETTINGS_RAW),
     team: [],
     verifications: [],
+    alerts: [],
     requests: [],
     writes: [],
     unexpected: [],
@@ -494,6 +497,25 @@ export function installWorld(fetchMock: Mock, world: World = newWorld()): World 
     if (method === "PUT" && path === "/api/tracking/settings") {
       world.settings = { ...world.settings, ...body, updatedBy: "Asha Admin", updatedAt: at("10:00") };
       return copy(world.settings);
+    }
+    if (method === "GET" && path === "/api/tracking/live/alerts") {
+      const rows = params.get("status") === "open" ? world.alerts.filter((a) => a.open) : world.alerts;
+      const open = world.alerts.filter((a) => a.open);
+      const openByKind: Record<string, number> = {};
+      for (const a of open) openByKind[String(a.kind)] = (openByKind[String(a.kind)] ?? 0) + 1;
+      return {
+        results: copy(rows),
+        total: rows.length,
+        page: 1,
+        pageSize: Number(params.get("pageSize") ?? 25),
+        open: open.length,
+        openByKind,
+        kinds: [
+          { key: "location_off", label: "Location turned off" },
+          { key: "missing_punch", label: "Missing Geo-Punch" },
+        ],
+        settings: { alertsEnabled: true, hodEnabled: true, hodGraceMinutes: 15, debounceMinutes: 2 },
+      };
     }
     if (method === "GET" && path === "/api/live-location/team") return copy(world.team);
     if (method === "GET" && path === "/api/employees") return copy(EMPLOYEES);

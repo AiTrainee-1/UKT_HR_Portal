@@ -343,6 +343,9 @@ def employee_request_action(request: Request, pk: int) -> Response:
             return refused
         if hr_access.out_of_branch(request, er.employee.branch_id if er.employee_id else None):
             return Response({"error": "Request not found"}, status=404)
+        # rejecting needs the reason the employee reads (HR's notes on the request), approving never does (2026-11-21)
+        if refused := approval.reject_remark_refusal(data.get("status"), data.get("hrNotes")):
+            return refused
     elif refused := hr_access.decision_only_refusal(request):
         return refused
     if "status" in data:
@@ -730,6 +733,9 @@ def employee_permission_detail(request: Request, pk: int) -> Response:
             {"error": "HR is not part of the approval pipeline for Permission, so it cannot change this decision."},
             status=403,
         )
+    # a rejection (a decision, or turning an approved permission into a rejected one) needs the reason (2026-11-21)
+    if new_status != prev_status and (refused := approval.reject_remark_refusal(new_status, comment)):
+        return refused
     # HR can classify a request that arrived untyped (older web-app submissions) or correct a
     # mis-picked type -it decides whether an approved permission shifts a boundary at all.
     if "type" in data:

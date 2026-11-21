@@ -84,6 +84,31 @@
           ]
         },
         {
+          "key": "analytics",
+          "label": "Analytics",
+          "type": "page",
+          "help": "Attendance patterns and recurring issues per employee, with drill-down and exports. Read only.",
+          "routes": ["/hr/analytics"],
+          "inherits": "attendance",
+          "enforce": "server",
+          "children": [
+            {
+              "key": "analytics.staff",
+              "label": "Staff",
+              "type": "tab",
+              "help": "Staff checks, including the Department Head view.",
+              "enforce": "screen"
+            },
+            {
+              "key": "analytics.production",
+              "label": "Production",
+              "type": "tab",
+              "help": "Production checks: days off, late, night work, continuous leave.",
+              "enforce": "screen"
+            }
+          ]
+        },
+        {
           "key": "employees",
           "label": "Employees",
           "type": "section",

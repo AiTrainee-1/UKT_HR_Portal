@@ -58,6 +58,14 @@ HR_ONLY = (S(HR),)
 # ═════════════════════════════ the rules ═════════════════════════════
 
 
+REJECT_REASON = "Not approved this time"  # a rejection needs its reason since 2026-11-21
+
+
+def _decision(status: str) -> dict:
+    """A decision body; a rejection carries the reason the server requires."""
+    return {"status": status, "comment": REJECT_REASON} if status == "rejected" else {"status": status}
+
+
 class PipelineRuleTests(SimpleTestCase):
     def can(self, steps, approved, role, decision="approved", early=()):
         return approval.check_can_act(steps, set(approved), role, decision, early)
@@ -528,10 +536,10 @@ class MissingPunchPipelineTests(Base):
         return r.json()
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("patch", f"/api/missing-punch-requests/{pk}/status", {"status": status})
+        return self.send("patch", f"/api/missing-punch-requests/{pk}/status", _decision(status))
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/missing-punch-requests/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/missing-punch-requests/{pk}/status", _decision(status))
 
     def test_default_pipeline_hod_then_hr_and_hr_cannot_jump_the_queue(self):
         data = self.submit()
@@ -609,10 +617,10 @@ class LeavePipelineTests(Base):
         return r.json()
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("patch", f"/api/leave-requests/{pk}/status", {"status": status, "hrComment": "ok"})
+        return self.send("patch", f"/api/leave-requests/{pk}/status", {"status": status, "hrComment": "Noted by HR"})
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/leave-requests/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/leave-requests/{pk}/status", _decision(status))
 
     def used(self):
         self.balance.refresh_from_db()
@@ -727,10 +735,10 @@ class OnDutyPipelineTests(Base):
         return OnDutySession.objects.get(pk=r.json()["sessionId"])
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("patch", f"/api/on-duty-sessions/{pk}/status", {"status": status})
+        return self.send("patch", f"/api/on-duty-sessions/{pk}/status", _decision(status))
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/on-duty-sessions/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/on-duty-sessions/{pk}/status", _decision(status))
 
     def test_default_hr_may_decide_without_waiting_for_the_hod(self):
         s = self.submit()
@@ -797,7 +805,9 @@ class ResignationPipelineTests(Base):
         return r.json()
 
     def hr_action(self, pk, action="approve"):
-        return self.send("patch", f"/api/recruitment/resignations/{pk}/action", {"action": action, "hrComment": "ok"})
+        return self.send(
+            "patch", f"/api/recruitment/resignations/{pk}/action", {"action": action, "hrComment": "Noted by HR"}
+        )
 
     def hod_action(self, pk, action="approve"):
         return self.as_hod("patch", f"/api/manager/resignations/{pk}/action", {"action": action, "comment": "ok"})
@@ -880,10 +890,10 @@ class PermissionPipelineTests(Base):
         return r.json()
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("put", f"/api/permissions/{pk}", {"status": status, "hrComment": "ok"})
+        return self.send("put", f"/api/permissions/{pk}", {"status": status, "hrComment": "Noted by HR"})
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/permissions/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/permissions/{pk}/status", _decision(status))
 
     def test_default_either_role_decides(self):
         data = self.submit()
@@ -926,10 +936,10 @@ class CasualLeavePipelineTests(Base):
         return r.json()
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("patch", f"/api/casual-leaves/{pk}", {"status": status})
+        return self.send("patch", f"/api/casual-leaves/{pk}", _decision(status))
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/casual-leaves/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/casual-leaves/{pk}/status", _decision(status))
 
     def test_default_final_writes_a_paid_present_day(self):
         data = self.submit()
@@ -965,10 +975,10 @@ class OutpassPipelineTests(Base):
         return r.json()
 
     def hr_decide(self, pk, status="approved"):
-        return self.send("put", f"/api/outpass-requests/{pk}/hr-status", {"status": status})
+        return self.send("put", f"/api/outpass-requests/{pk}/hr-status", _decision(status))
 
     def hod_decide(self, pk, status="approved"):
-        return self.as_hod("patch", f"/api/manager/outpass-requests/{pk}/status", {"status": status})
+        return self.as_hod("patch", f"/api/manager/outpass-requests/{pk}/status", _decision(status))
 
     def test_default_either_role_and_the_pass_is_issued_once(self):
         data = self.submit()

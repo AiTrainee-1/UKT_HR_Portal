@@ -92,6 +92,13 @@ GROUPS = [
         "Requests -> Notify).",
     ),
     ("geo", "Geo Attendance", "Approval and rejection messages for On-Duty requests and their punches."),
+    (
+        "geo_alerts",
+        "On-Duty tracking alerts (automatic)",
+        "Found by the geo-tracking watchdog while an employee is On-Duty. The employee is told what to fix; when it is "
+        "still not fixed after the grace period their Department Head gets a message too (the reminder goes to the "
+        "employee only). The timing is set on Geo Attendance -> Settings. Each needs its Meta templates approved.",
+    ),
     ("visitors", "Visitors", "Tells an employee who is at reception to meet them, with the visitor's phone number."),
     ("outpass", "Outpass & gate", "Confirms to the employee each time the gate records them going out or coming back."),
     (
@@ -201,6 +208,52 @@ FEATURES = [
         "Geo Attendance approval & rejection",
         "geo",
         "Tell the employee when their Geo Attendance request, or one of its punches, is approved or rejected.",
+    ),
+    (
+        "geoLocationOffEnabled",
+        "geo_location_off_enabled",
+        "Location turned off",
+        "geo_alerts",
+        "Message an employee on On-Duty whose phone location was turned off, then their Department Head if it stays off.",
+    ),
+    (
+        "geoPermissionRestrictedEnabled",
+        "geo_permission_restricted_enabled",
+        "Location permission not 'all the time'",
+        "geo_alerts",
+        "Message an employee on On-Duty whose app may use location only while open (or not at all), with how to fix it; "
+        "then their Department Head if it is not fixed.",
+    ),
+    (
+        "geoBackgroundRestrictedEnabled",
+        "geo_background_restricted_enabled",
+        "App restricted in the background",
+        "geo_alerts",
+        "Message an employee on On-Duty whose phone restricts the app in the background (battery optimisation), with how "
+        "to allow it; then their Department Head if it is not fixed.",
+    ),
+    (
+        "geoMissingPunchEnabled",
+        "geo_missing_punch_enabled",
+        "Missing Geo-Punch",
+        "geo_alerts",
+        "Message an employee on On-Duty with no Geo-Punch after the set wait, or fewer than the day's 4 punches at the end "
+        "of the duty day; then their Department Head if it is still missing.",
+    ),
+    (
+        "geoPunchReminderEnabled",
+        "geo_punch_reminder_enabled",
+        "Geo-Punch reminder",
+        "geo_alerts",
+        "A friendly reminder to an employee on On-Duty who has made no Geo-Punch for the set time. To the employee only.",
+    ),
+    (
+        "geoTrackingFailureEnabled",
+        "geo_tracking_failure_enabled",
+        "Tracking stopped (no location received)",
+        "geo_alerts",
+        "Message an employee on On-Duty whose phone has sent no location for the signal-lost time, then their Department "
+        "Head if nothing arrives.",
     ),
     (
         "visitorNotificationEnabled",

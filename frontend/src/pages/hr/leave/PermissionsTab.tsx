@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { ApprovalTrailLine, PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { explainsWaiting, hrCanAct, hrCanReject } from "@/lib/approval-workflow";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -41,6 +42,7 @@ import {
   filterPermissions,
   longDate,
   permissionFiltersActive,
+  serverError,
   type PermissionFilters,
   type PermissionRow,
 } from "./logic";
@@ -104,6 +106,9 @@ export default function PermissionsTab() {
   // The type HR has picked in the details dialog ("" = the request has none yet and none is picked).
   const [typeDraft, setTypeDraft] = useState<PermissionType | "">("");
   const [toDelete, setToDelete] = useState<PermissionFull | null>(null);
+  // the request HR pressed Reject on: nothing is sent until a reason is written (owner brief 2026-11-21)
+  const [rejecting, setRejecting] = useState<PermissionItem | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
 
   // Polled: a mobile HOD approval writes straight to the DB and nothing tells an HR user parked on this page.
   const query = useListPermissions({ ...(month !== ALL ? { month: Number(month) } : {}), year }, {
@@ -192,7 +197,13 @@ export default function PermissionsTab() {
   };
 
   // `type` classifies the request as it is decided (HR can set it on an untyped one, or correct a mis-picked one).
+  // Approving needs no remark; Reject first asks for the reason (see `reject`).
   const decide = async (p: PermissionItem, status: "approved" | "rejected", type?: PermissionType) => {
+    if (status === "rejected") {
+      setRejectError(null);
+      setRejecting(p);
+      return;
+    }
     try {
       await updateMutation.mutateAsync({
         id: p.id,
@@ -207,6 +218,22 @@ export default function PermissionsTab() {
       return;
     }
     toast({ title: `Permission ${status}` });
+    refresh();
+  };
+
+  // The reason goes to the employee as HR's comment; a refusal keeps the dialog open with the server's words.
+  const reject = async (reason: string) => {
+    const p = rejecting;
+    if (!p) return;
+    setRejectError(null);
+    try {
+      await updateMutation.mutateAsync({ id: p.id, data: { status: "rejected", hrComment: reason } });
+    } catch (err) {
+      setRejectError(serverError(err, "Failed to reject the permission"));
+      return;
+    }
+    setRejecting(null);
+    toast({ title: "Permission rejected" });
     refresh();
   };
 
@@ -631,6 +658,16 @@ export default function PermissionsTab() {
         saving={updateMutation.isPending}
         onDecide={decide}
         onSaveType={saveType}
+      />
+      <RejectReasonDialog
+        open={rejecting !== null}
+        title="Reject this permission?"
+        description={rejecting ? `${rejecting.employeeName}'s permission on ${longDate(rejecting.date)}.` : undefined}
+        busy={updateMutation.isPending}
+        error={rejectError}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => void reject(reason)}
+        testIdPrefix="permission-reject"
       />
       <ConfirmDialog
         open={toDelete !== null}

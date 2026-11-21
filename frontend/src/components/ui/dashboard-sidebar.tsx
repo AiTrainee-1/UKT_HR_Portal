@@ -55,6 +55,8 @@ export const navGroups: NavGroupData[] = [
   {
     items: [
       { path: '/hr/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      // Attendance patterns and recurring issues per employee (owner 2026-11-21): right under the dashboard.
+      { path: '/hr/analytics', label: 'Analytics', icon: BarChart3 },
       // The Managing Director's own portal: shown to that one account only (filtered below).
       { path: '/md/dashboard', label: 'MD Portal', icon: Crown },
       {

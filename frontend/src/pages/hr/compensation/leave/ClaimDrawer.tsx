@@ -4,8 +4,8 @@ import { ArrowRight } from "lucide-react";
 import { ApprovalTrail } from "@/components/ApprovalTrail";
 import { Button } from "@/components/ui/button";
 import type { CompensationClaim } from "@/lib/api-client/custom-hooks";
-import { DetailDrawer, DrawerFields, DrawerSection, StatusChip } from "@/pages/hr/outpass-visitors/kit";
-import { dateLong, dateShort, minutesText, shiftsText } from "../logic";
+import { DetailDrawer, DrawerFields, DrawerSection, StatusChip, fmtDateTime } from "@/pages/hr/outpass-visitors/kit";
+import { dateLong, minutesText, shiftsText } from "../logic";
 import { subPath } from "../routes";
 import {
   DATE_LABEL,
@@ -169,7 +169,8 @@ export function ClaimDrawer({
                 { label: DATE_LABEL[c.kind], value: dateLong(c.workDate) },
                 { label: "Claimed", value: claimAmountText(c) },
                 { label: "Raised by", value: raisedByText(c) },
-                { label: "Raised on", value: c.createdAt ? dateShort(c.createdAt.slice(0, 10)) : null },
+                // the date and the exact time it was sent (India time)
+                { label: "Submitted on", value: c.createdAt ? fmtDateTime(c.createdAt, { year: true }) : null },
                 { label: "Department", value: [c.department, c.branch].filter(Boolean).join(" · ") },
                 { label: "Reason", value: c.reason, wide: true },
               ]}

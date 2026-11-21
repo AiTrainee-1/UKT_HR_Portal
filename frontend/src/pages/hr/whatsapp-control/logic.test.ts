@@ -336,6 +336,9 @@ describe("Message Controls: every type with its switch, template and count", () 
     expect(typeOfSwitch("lateAlertEnabled")).toBe("late_alert");
     expect(typeOfSwitch("documentNotificationsEnabled")).toBeNull();
     expect(typeOfSwitch("leaveApprovalEnabled")).toBeNull();
+    // the On-Duty tracking alerts: each own switch is its type's (the Department Head copy follows it on the server)
+    expect(typeOfSwitch("geoLocationOffEnabled")).toBe("geo_location_off");
+    expect(typeOfSwitch("geoTrackingFailureEnabled")).toBe("geo_tracking_failure");
   });
 
   it("keeps the server's groups in order, adds a group for a module with only type switches, drops empty ones", () => {
