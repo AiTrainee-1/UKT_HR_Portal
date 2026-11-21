@@ -5,6 +5,7 @@ import {
   CircleCheck,
   Coins,
   Hourglass,
+  HandCoins,
   IndianRupee,
   Info,
   Landmark,
@@ -46,7 +47,9 @@ import {
 import { CardError, ChartLegend, Explain, Figure, ToneChip, failed } from "./parts";
 import type { DashQueries } from "./queries";
 import SortTable, { type Col } from "./SortTable";
-import type { PayFigures, PayMonthRow, PayMonthlyResponse } from "./types";
+import StaffWorkflow from "./StaffWorkflow";
+import type { PayFigures, PayMonthRow, PayMonthlyResponse, PayYearBlock } from "./types";
+import YearCompare, { type YearSide } from "./YearCompare";
 
 const STATUS_ICON: Record<StatusTone, LucideIcon> = {
   success: CircleCheck,
@@ -159,6 +162,16 @@ const KPIS: Kpi[] = [
     sub: (f) => `PF ${inrCompact(f.deductions.pf)} · ESI ${inrCompact(f.deductions.esi)}`,
   },
   {
+    key: "bonus",
+    label: "Excess - detection",
+    icon: HandCoins,
+    tone: "teal",
+    kind: "money",
+    goodWhen: "neutral",
+    ids: ["excess"],
+    sub: (f) => `+${inrCompact(f.excess)} excess · -${inrCompact(f.detection)} detection`,
+  },
+  {
     key: "netPaid",
     label: "Net paid",
     icon: Wallet,
@@ -208,12 +221,12 @@ const valueText = (kpi: Kpi, f: PayFigures) => {
 };
 
 /** The month's headline figures, each against the month before and with its line over the months shown. Two across on a
- *  phone (the odd last one spans both), three across from a tablet. */
+ *  phone, three across from a tablet, five on a wide screen. */
 export function MonthlyKpis({ data, loading }: { data: PayMonthlyResponse | undefined; loading: boolean }) {
   const current = data?.current ?? null;
   return (
     <div
-      className="grid grid-cols-2 gap-2.5 @lg:gap-3 @3xl:grid-cols-3 @max-3xl:[&>*:last-child:nth-child(odd)]:col-span-2"
+      className="grid grid-cols-2 gap-2.5 @lg:gap-3 @3xl:grid-cols-3 @5xl:grid-cols-5 @max-3xl:[&>*:last-child:nth-child(odd)]:col-span-2"
       data-testid="md-pay-kpis"
     >
       {KPIS.map((kpi) => (
@@ -489,6 +502,7 @@ export default function MonthlyView({
       {data.notes.map((n) => (
         <NoteBanner key={n}>{n}</NoteBanner>
       ))}
+      <StaffWorkflow row={data.current} notIncluded={data.notIncluded} />
       {data.previous && (
         <p className="px-1 text-[11.5px] font-medium text-md-ink-soft" data-testid="md-pay-kpi-caption">
           Arrows compare {data.label} with {data.previous.label}; the small lines show the {data.months.length} months
@@ -563,7 +577,55 @@ export default function MonthlyView({
         </div>
       </div>
 
+      {data.yearly && (
+        <YearCompare
+          year={Number(selected?.slice(0, 4) ?? new Date().getFullYear())}
+          current={yearSide(data.yearly.current)}
+          previous={yearSide(data.yearly.previous)}
+          previousFull={yearSide(data.yearly.previousFull)}
+          change={
+            data.yearly.change
+              ? {
+                  companyCost: data.yearly.change.companyCost,
+                  netPaid: data.yearly.change.netPaid,
+                  pay: data.yearly.change.earnedSalary,
+                  bonus: data.yearly.change.bonus,
+                  deductions: data.yearly.change.deductions,
+                  employees: data.yearly.change.employees,
+                }
+              : null
+          }
+          months={data.yearly.months}
+          payLabel="Earned salary"
+          sameMonth={sameMonthText(data)}
+        />
+      )}
+
       <MonthTable data={data} onSelect={onSelectMonth} />
     </div>
   );
+}
+
+/** A year block of the Staff side as the year card reads it. */
+export function yearSide(block: PayYearBlock | null): YearSide | null {
+  if (!block) return null;
+  return {
+    label: block.label,
+    months: block.months,
+    companyCost: block.companyCost,
+    netPaid: block.netPaid,
+    pay: block.earnedSalary,
+    bonus: block.bonus,
+    deductions: block.deductions.total,
+    employees: block.employees,
+  };
+}
+
+/** "Sep 2025: ₹4.1 L company cost, ₹3.9 L net paid (now +12.4%)" when the same month a year before had payroll. */
+export function sameMonthText(data: PayMonthlyResponse): string | null {
+  const same = data.yearly?.sameMonthLastYear;
+  if (!same) return null;
+  const c = data.yearly?.sameMonthChange?.companyCost;
+  const moved = c ? (c.pct != null ? ` (${data.label} is ${c.pct > 0 ? "+" : ""}${c.pct}%)` : "") : "";
+  return `${same.label}: ${inrCompact(same.companyCost)} company cost, ${inrCompact(same.netPaid)} net paid, ${num(same.employees)} employees${moved}.`;
 }

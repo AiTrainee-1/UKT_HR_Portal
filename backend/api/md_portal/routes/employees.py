@@ -9,6 +9,9 @@ analytics/employees.py and returns its envelope.
     GET milestones     work anniversaries, birthdays, probation (look-ahead)
     GET insights       "Needs your attention" for the chosen period and scope
     GET directory      the searchable, paged people list (no salary)
+    GET briefing       the plain-English summary of the Insights tab (fixed rules, no AI)
+    GET workforce      today's groups: staff / production, Factory Employees by label, pay cycles, PF / ESI / TDS
+    GET people         the people behind one figure (?group=joiners|leavers|early|active|factory|cycle|statutory&value=)
     GET employee/<id>  one person's read-only profile (no salary)
 """
 
@@ -95,6 +98,31 @@ def directory(request):
 
 
 @md_get
+def briefing(request):
+    params = request_params(request)
+    return analytics.briefing(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
+
+
+@md_get
+def workforce(request):
+    return analytics.workforce(resolve_scope(request_params(request)))
+
+
+@md_get
+def people(request):
+    params = request_params(request)
+    return analytics.people_list(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        group=params.get("group") or "active",
+        value=params.get("value") or "",
+        query=params.get("q"),
+        page=_int(params, "page", 1),
+        page_size=_int(params, "pageSize", 25, maximum=100),
+    )
+
+
+@md_get
 def employee(request, employee_id: int):
     body = analytics.employee_profile(employee_id=employee_id, detail=True)
     if not body["found"]:
@@ -110,5 +138,8 @@ urlpatterns = [
     path("milestones", milestones),
     path("insights", insights),
     path("directory", directory),
+    path("briefing", briefing),
+    path("workforce", workforce),
+    path("people", people),
     path("employee/<int:employee_id>", employee),
 ]

@@ -300,3 +300,42 @@ export function assistantSummary(c: SummaryCurrent): Record<string, string | num
     Attrition: c.attritionPct == null ? null : pct(c.attritionPct),
   };
 }
+
+// ─── the view filter and the overview sentence (2026-11-21) ─────────────────────────────────────────────────────
+
+/** Which part of recruitment the page shows: everything, hiring (openings, funnel, staffing gap), resignations, or
+ *  joiners and leavers. Kept in the address as `view`. */
+export type RecruitmentView = "all" | "hiring" | "resignations" | "joiners";
+
+export const VIEWS: { value: RecruitmentView; label: string }[] = [
+  { value: "all", label: "Everything" },
+  { value: "hiring", label: "Hiring" },
+  { value: "resignations", label: "Resignations" },
+  { value: "joiners", label: "Joiners & leavers" },
+];
+
+export const shows = (view: RecruitmentView, part: Exclude<RecruitmentView, "all">) => view === "all" || view === part;
+
+/** The page in two sentences, before the figures: what happened in the period and what needs a decision now. */
+export function overviewText(c: SummaryCurrent, periodLabel: string): string {
+  // "Last 90 days" reads "in the last 90 days"; a month or a date range keeps its capitals
+  const words = /^(Last|This|Today|Yesterday)\b/.test(periodLabel)
+    ? `the ${periodLabel.charAt(0).toLowerCase()}${periodLabel.slice(1)}`.replace(/^the (today|yesterday)/, "$1")
+    : periodLabel;
+  const when = periodLabel ? `In ${words}` : "In the period";
+  const net =
+    c.net > 0
+      ? `${num(c.net)} more joined than left`
+      : c.net < 0
+        ? `${num(-c.net)} more left than joined`
+        : "as many joined as left";
+  const first = `${when}, ${plural(c.joiners, "person", "people")} joined and ${num(c.leavers)} left (${net}); ${plural(c.resignationsRaised, "resignation")} ${c.resignationsRaised === 1 ? "was" : "were"} raised.`;
+  const waits = [
+    c.openPositions
+      ? `${plural(c.openPositions, "position")} open${c.stalePositions ? ` (${num(c.stalePositions)} too long)` : ""}`
+      : null,
+    c.resignationsPending ? `${plural(c.resignationsPending, "resignation")} waiting for a decision` : null,
+    c.interviewsNext7Days ? `${plural(c.interviewsNext7Days, "interview")} in the next 7 days` : null,
+  ].filter(Boolean);
+  return waits.length ? `${first} Now: ${waits.join(", ")}.` : `${first} Nothing is waiting now.`;
+}

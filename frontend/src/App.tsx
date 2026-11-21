@@ -57,6 +57,7 @@ const MdReports = lazy(() => import("@/pages/md/MdReports"));
 const MdRecruitment = lazy(() => import("@/pages/md/MdRecruitment"));
 const MdActivity = lazy(() => import("@/pages/md/MdActivity"));
 const MdApprovals = lazy(() => import("@/pages/md/MdApprovals"));
+const MdCommunications = lazy(() => import("@/pages/md/MdCommunications"));
 
 // HR pages
 const HrDashboard = lazy(() => import("@/pages/hr/Dashboard"));
@@ -507,6 +508,9 @@ function Router() {
         <Route path="/md/reports">{() => <ProtectedRoute component={MdReports} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/recruitment">{() => <ProtectedRoute component={MdRecruitment} allowedRoles={["hr"]} />}</Route>
         <Route path="/md/activity">{() => <ProtectedRoute component={MdActivity} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/communications">
+          {() => <ProtectedRoute component={MdCommunications} allowedRoles={["hr"]} />}
+        </Route>
         {/* HOD Approvals: one page per Department Head of the MD department (/md/approvals/<id>), picked in the sidebar */}
         <Route path="/md/approvals/*?">{() => <ProtectedRoute component={MdApprovals} allowedRoles={["hr"]} />}</Route>
         {/* The analytics pages that used to be separate now live inside the pages they analyse. */}

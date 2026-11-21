@@ -55,6 +55,9 @@ from .md_portal.assistant import registry
 from .md_portal.common import MdParamError, Scope, read_only_db, resolve_period
 from .models import (
     AttendanceDayRecord,
+    AttendanceNotifyAutomation,
+    AttendanceNotifyDelivery,
+    AttendanceNotifyRun,
     AuditLog,
     Branch,
     Department,
@@ -72,7 +75,7 @@ TODAY = date(2026, 9, 21)
 W = {"from": "2026-09-07", "to": "2026-09-13"}  # the week measured
 P = {"from": "2026-08-31", "to": "2026-09-06"}  # the week before it
 BASE = "/api/md/reportlog"
-ROUTES = ["summary", "briefing", "trend", "gaps", "departments", "exports", "attention"]
+ROUTES = ["summary", "briefing", "trend", "gaps", "departments", "exports", "attention", "scheduled", "absences"]
 
 STATUS = {
     "P": ("present", None),
@@ -270,7 +273,14 @@ class SummaryTests(World):
         ids = [p["id"] for p in s["provenance"]]
         self.assertEqual(
             ids,
-            ["reportlog-absences", "reportlog-followup", "reportlog-gaps", "reportlog-exports", "reportlog-previous"],
+            [
+                "reportlog-absences",
+                "reportlog-followup",
+                "reportlog-gaps",
+                "reportlog-exports",
+                "reportlog-scheduled",
+                "reportlog-previous",
+            ],
         )
         rows = {p["id"]: p["rows"] for p in s["provenance"]}
         self.assertEqual((rows["reportlog-absences"], rows["reportlog-exports"]), (9, 6))
@@ -598,7 +608,12 @@ class ExportTests(World):
     def test_every_attendance_report_of_the_report_center_is_recognised(self):
         before = self.api("exports", {"from": "2026-10-01", "to": "2026-10-01"})["totals"]["attendance"]
         titles = rl._attendance_titles()
-        self.assertEqual(len(titles), len([s for s in all_specs() if s.category == "attendance"]))
+        expected = {s.title for s in all_specs() if s.category == "attendance" or s.id in rl.HR_ATTENDANCE_REPORTS}
+        self.assertEqual(len(titles), len(expected))
+        # the statutory attendance registers moved to the HR group in the 2026-11-19 layout; they still count
+        self.assertIn("Punching Register (Employees Present List)", titles)
+        self.assertIn("Time Card (Form 25 B)", titles)
+        self.assertNotIn("Salary Statement", titles)
         for i, title in enumerate(titles):
             report_export(ist(10, 1, 9, i % 60), "Priya", title)
         report_export(ist(10, 1, 9, 59), "Priya", "Some Unknown Report")
@@ -606,18 +621,19 @@ class ExportTests(World):
         self.assertEqual((before, t["attendance"], t["all"]), (0, len(titles), len(titles) + 1))
 
     def test_the_real_report_center_export_is_recognised(self):
-        """The audit entry the Report Center really writes ("<title> - XLSX - n rows - ...") is counted."""
+        """The audit entry the Report Center really writes ("<title> - XLSX - n rows - ...") is counted. (The report used
+        to be "Daily Absentee / Leave List", retired by the Report Center's 2026-11-19 layout: its export is a 404 now.)"""
         admin = HRUser.objects.create(username="rootrl", password_hash="x", is_super_admin=True)
         token = sign_token({"role": "hr", "hrUserId": admin.id})
         today = datetime.now(FACTORY_TZ).date().isoformat()
         r = self.client.get(
-            "/api/reports/export/absentee-list-daily",
+            "/api/reports/export/hr-punching-register",
             {"fmt": "xlsx", "dateFrom": today, "dateTo": today},
             HTTP_AUTHORIZATION=f"Bearer {token}",
         )
         self.assertEqual(r.status_code, 200, r.content[:300])
         row = AuditLog.objects.filter(action="export", module="reports").order_by("-id").first()
-        self.assertTrue(row.record_description.startswith("Daily Absentee / Leave List - XLSX - "))
+        self.assertTrue(row.record_description.startswith("Punching Register (Employees Present List) - XLSX - "))
         counted = AuditLog.objects.filter(pk=row.pk).filter(rl._attendance_q(rl._attendance_titles())).count()
         self.assertEqual(counted, 1)
 
@@ -703,6 +719,189 @@ class EmptyDatabaseTests(MdApiTestCase):
         self.assertEqual((h["kpis"][1]["value"], h["kpis"][2]["value"]), (0, 0))
         self.assertTrue(all(k["delta"] is None for k in h["kpis"]))
         self.assertIn("No absences", h["kpis"][0]["sub"])
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# the drill-down: the absences behind a figure
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+class AbsenceDrillDownTests(World):
+    def rows(self, **params):
+        return self.api("absences", W, **params)
+
+    def test_every_absence_of_the_week_newest_first(self):
+        a = self.rows()
+        self.assertEqual(a["total"], 9)
+        self.assertEqual(
+            (a["counts"]["absences"], a["counts"]["informed"], a["counts"]["notInformed"], a["counts"]["unmarked"]),
+            (9, 2, 2, 5),
+        )
+        days = [r["date"] for r in a["rows"]]
+        self.assertEqual(days, sorted(days, reverse=True))
+        # Thursday 10 Sep: E1 and E2 not marked, E4 Informed (names A-Z within the day)
+        thursday = [(r["employeeName"], r["mark"]) for r in a["rows"] if r["date"] == "2026-09-10"]
+        self.assertEqual(thursday, [("Asha Test", "unmarked"), ("Bala Test", "unmarked"), ("Dev Test", "informed")])
+        first = a["rows"][0]  # Friday 11 Sep: Asha, Not informed (Sat / Sun hold no absence)
+        self.assertEqual((first["date"], first["mark"]), ("2026-09-11", "not_informed"))
+        self.assertEqual(
+            {k: first[k] for k in ("employeeCode", "department", "unit", "type", "weekday")},
+            {"employeeCode": "T001", "department": "Stitching", "unit": "Unit A", "type": "staff", "weekday": "Fri"},
+        )
+        self.assertEqual(first["absencesInSelection"], 3)  # Asha was absent three times this week
+
+    def test_by_mark(self):
+        self.assertEqual(self.rows(mark="not_informed")["total"], 2)
+        self.assertEqual(self.rows(mark="informed")["total"], 2)
+        unmarked = self.rows(mark="unmarked")
+        self.assertEqual(unmarked["total"], 5)
+        self.assertEqual(unmarked["counts"]["absences"], 9)  # the counts are of the whole selection, before the mark
+        self.assertEqual({r["mark"] for r in unmarked["rows"]}, {"unmarked"})
+
+    def test_one_day_the_gap_day(self):
+        tuesday = self.rows(day="2026-09-08")
+        self.assertEqual(
+            [(r["employeeCode"], r["mark"]) for r in tuesday["rows"]], [("T002", "unmarked"), ("T004", "unmarked")]
+        )
+        self.assertEqual(tuesday["filters"]["day"], "2026-09-08")
+
+    def test_one_group_as_the_comparison_names_it(self):
+        self.assertEqual(self.rows(by="department", group="Cutting")["total"], 1)
+        self.assertEqual(self.rows(by="type", group="Production")["total"], 2)
+        self.assertEqual(self.rows(by="unit", group="Head Office")["total"], 0)
+
+    def test_the_scope_applies(self):
+        self.assertEqual(self.rows(type="production")["total"], 2)
+        self.assertEqual(self.rows(department="Stitching", mark="unmarked")["total"], 5)
+
+    def test_paging(self):
+        page1 = self.rows(pageSize=4)
+        page3 = self.rows(pageSize=4, page=3)
+        self.assertEqual((page1["pages"], len(page1["rows"]), len(page3["rows"])), (3, 4, 1))
+
+    def test_bad_parameters_are_readable(self):
+        for params in ({"mark": "maybe"}, {"by": "planet", "group": "x"}, {"day": "Tuesday"}, {"pageSize": "lots"}):
+            r = self.get(f"{BASE}/absences", **W, **params)
+            self.assertEqual(r.status_code, 400, params)
+            self.assertIn("error", r.json())
+
+    def test_today_is_never_an_absence(self):
+        a = self.api("absences", {"from": "2026-09-21", "to": "2026-09-21"})
+        self.assertEqual((a["total"], a["rows"]), (0, []))
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# scheduled attendance reports (Attendance Notify)
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+def make_run(
+    automation, run_date, status, deliveries, *, channel="whatsapp", trigger="schedule", slot="09:30", error=""
+):
+    run = AttendanceNotifyRun.objects.create(
+        automation=automation,
+        automation_name=automation.name if automation else "Old report",
+        channel=channel,
+        trigger=trigger,
+        slot=slot if trigger == "schedule" else None,
+        run_date=run_date,
+        status=status,
+        error=error,
+    )
+    for i, state in enumerate(deliveries):
+        AttendanceNotifyDelivery.objects.create(run=run, kind="number", recipient=f"+9190000000{i}", status=state)
+    return run
+
+
+class ScheduledReportTests(World):
+    """Week W: the 09:30 WhatsApp absent report ran Mon-Sat; Wednesday's failed (no recipient reached), Friday's reached one
+    of two; the Gmail summary ran by hand once (sent to the same two addresses twice: one recipient counted once). The week
+    before: 2 runs, both done. One automation is switched off.
+
+        runs 8 (W): done 6, partial 1, failed 1; scheduled 6 + 1 retry, manual 1    delivered: 5 x 2 + 1 + 2 = 13
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        wa = AttendanceNotifyAutomation.objects.create(name="Absent list 09:30", channel="whatsapp")
+        mail = AttendanceNotifyAutomation.objects.create(name="Daily summary mail", channel="email")
+        AttendanceNotifyAutomation.objects.create(name="Old chat card", channel="chat", is_active=False)
+        for day in (7, 8, 10, 12):
+            make_run(wa, d(day), "done", ["sent", "queued"])
+        make_run(wa, d(9), "failed", ["failed", "failed"], error="WhatsApp is not configured")
+        make_run(wa, d(9), "done", ["sent", "sent"], trigger="retry")
+        make_run(wa, d(11), "partial", ["sent", "failed"])
+        make_run(mail, d(13), "done", ["sent", "sent"], channel="email", trigger="manual")
+        make_run(wa, d(1), "done", ["sent"])
+        make_run(wa, d(2), "done", ["sent"])
+        make_run(wa, d(14), "done", ["sent"])  # the day after the week: not counted
+
+    def test_the_week_in_numbers(self):
+        s = self.api("scheduled")
+        self.assertEqual((s["automations"]["total"], s["automations"]["active"]), (3, 2))
+        r = s["runs"]
+        self.assertEqual(
+            (
+                r["total"],
+                r["previous"],
+                r["done"],
+                r["partial"],
+                r["failed"],
+                r["scheduled"],
+                r["manual"],
+                r["retries"],
+            ),
+            (8, 2, 6, 1, 1, 6, 1, 1),
+        )
+        self.assertEqual(r["reachedEveryonePct"], 75.0)
+        self.assertEqual((s["delivered"], s["deliveredPrevious"]), (13, 2))
+        whatsapp = next(c for c in s["byChannel"] if c["channel"] == "whatsapp")
+        self.assertEqual((whatsapp["sent"], whatsapp["queued"], whatsapp["failed"]), (7, 4, 3))
+        self.assertEqual(s["recipients"], 2)
+
+    def test_the_failures_with_their_reason(self):
+        s = self.api("scheduled")
+        self.assertEqual(
+            [(f["date"], f["status"], f["failedDeliveries"]) for f in s["failures"]],
+            [("2026-09-11", "partial", 1), ("2026-09-09", "failed", 2)],
+        )
+        self.assertEqual(s["failures"][1]["error"], "WhatsApp is not configured")
+        self.assertEqual(s["failures"][0]["automation"], "Absent list 09:30")
+        days = {x["date"]: (x["runs"], x["failed"]) for x in s["days"]}
+        self.assertEqual((days["2026-09-09"], days["2026-09-11"], days["2026-09-13"]), ((2, 1), (1, 1), (1, 0)))
+        self.assertEqual(s["lastRun"]["automation"], "Daily summary mail")
+
+    def test_the_summary_and_briefing_carry_them(self):
+        s = self.api("summary")
+        m = s["metrics"]
+        self.assertEqual(
+            values(m, "scheduledRuns", "scheduledFailedRuns", "scheduledDelivered"), ((8, 2), (2, 0), (13, 2))
+        )
+        self.assertEqual(s["activeAutomations"], 2)
+        sentence = next(x for x in self.api("briefing")["sentences"] if x["id"] == "scheduled")
+        self.assertEqual(
+            sentence["text"],
+            "8 scheduled attendance reports went out through Attendance Notify to 13 recipients; 2 did not reach everyone.",
+        )
+        self.assertEqual(sentence["tone"], "bad")
+
+    def test_failed_runs_are_a_finding(self):
+        items = {i["id"]: i for i in self.api("attention")["items"]}
+        item = items["reportlog.scheduled-failed"]
+        self.assertEqual(item["severity"], "warning")
+        self.assertIn("2 scheduled attendance reports did not reach everyone", item["title"])
+        self.assertIn("WhatsApp is not configured", item["detail"])
+
+    def test_the_tool_names_no_person(self):
+        result = registry.collect_tools()["report_log_scheduled_reports"].run({"from": W["from"], "to": W["to"]})
+        self.assertEqual(result["runs"]["total"], 8)
+        self.assertNotIn('"name":', json.dumps(result))
+
+    def test_nothing_scheduled_says_so(self):
+        e = self.api("scheduled", {"from": "2026-07-01", "to": "2026-07-05"})
+        self.assertEqual((e["runs"]["total"], e["delivered"], e["failures"], e["lastRun"]), (0, 0, [], None))
+        self.assertIn("No scheduled attendance report was due", " ".join(e["notes"]))
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -925,8 +1124,12 @@ class ParameterTests(MdApiTestCase):
         ]
         for route in ROUTES:
             for params, text in cases:
-                if route == "exports" and text in ("No department called", "No unit called", "staff or production"):
-                    continue  # the exports are company-wide: they take no scope
+                if route in ("exports", "scheduled") and text in (
+                    "No department called",
+                    "No unit called",
+                    "staff or production",
+                ):
+                    continue  # the exports and the scheduled reports are company-wide: they take no scope
                 r = self.get(f"{BASE}/{route}", **params)
                 self.assertEqual(r.status_code, 400, (route, params))
                 self.assertIn(text, r.json()["error"])
@@ -944,6 +1147,7 @@ class ToolTests(World):
         "report_log_followup_by_group",
         "report_log_gap_days",
         "report_log_exports",
+        "report_log_scheduled_reports",
     }
 
     def tool(self, name):

@@ -17,6 +17,13 @@ MD_PAGES: list[dict] = [
         "domain": "dashboard",
     },
     {
+        "id": "analytics",
+        "title": "Analytics",
+        "path": "/md/analytics",
+        "summary": "Who has recurring attendance issues and why, for Staff and Production: frequent leave, late arrival, missing punches, On-Duty without punches, Department Head delays, night work and continuous leave, with each employee's records.",
+        "domain": None,
+    },
+    {
         "id": "employees",
         "title": "Employees",
         "path": "/md/employees",
@@ -121,6 +128,13 @@ MD_PAGES: list[dict] = [
         "path": "/md/payroll",
         "summary": "What the company spends on salaries each month, what is deducted and what employees actually earn: month by month, department by department and employee by employee, with each employee's salary history, attendance deductions and Casual Leave.",
         "domain": "payroll",
+    },
+    {
+        "id": "communications",
+        "title": "Communication usage & cost",
+        "path": "/md/communications",
+        "summary": "How much WhatsApp, SMS and email the HRMS sends and what it costs: monthly usage, trends, cost by channel, month-over-month comparison and the message history.",
+        "domain": None,
     },
     {
         "id": "reports",

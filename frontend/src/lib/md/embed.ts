@@ -25,6 +25,8 @@ export const EMBEDDED_HR_PREFIXES: readonly string[] = [
   "/hr/shifts",
   "/hr/leave",
   "/hr/requests",
+  // Analytics (2026-11-21): the HR page itself, view only for the MD
+  "/hr/analytics",
   // the Device Status page: the Attendance page has a button to it
   "/hr/Biometric-Connectors",
 ];
@@ -32,7 +34,8 @@ export const EMBEDDED_HR_PREFIXES: readonly string[] = [
 /** HR pages with no copy here but a nearby MD page: the HR address (and anything under it) -> that MD page. */
 export const HR_TO_MD_PAGES: Readonly<Record<string, string>> = {
   "/hr/payroll": "/md/payroll",
-  "/hr/production-payroll": "/md/payroll",
+  // the MD Payroll page's Production side (2026-11-21: Staff | Production)
+  "/hr/production-payroll": "/md/payroll?kind=production",
   "/hr/recruitment": "/md/recruitment",
   "/hr/activity-logs": "/md/activity",
   "/hr/settlement": "/md/requests",
@@ -103,7 +106,9 @@ export function hrToMd(address: string): string {
     if (startsWithSegment(path, prefix)) return `/md${path.slice("/hr".length)}${rest}`;
   }
   for (const [prefix, target] of Object.entries(HR_TO_MD_PAGES)) {
-    if (startsWithSegment(path, prefix)) return `${target}${rest}`;
+    // a target with its own query keeps it: the link's query is added after it ("?kind=production&x=1")
+    if (startsWithSegment(path, prefix))
+      return target.includes("?") && rest.startsWith("?") ? `${target}&${rest.slice(1)}` : `${target}${rest}`;
   }
   return address;
 }

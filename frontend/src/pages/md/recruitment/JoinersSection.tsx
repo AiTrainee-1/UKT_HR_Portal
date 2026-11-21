@@ -120,9 +120,12 @@ const TREND_SERIES = (withVacancies: boolean): TrendSeries[] => [
 export default function JoinersSection({
   trend,
   joiners,
+  onOpenEmployee,
 }: {
   trend: QueryLike<RecruitmentTrend>;
   joiners: QueryLike<RecruitmentJoiners>;
+  /** Opens an employee (the MD's copy of the HR employee page). */
+  onOpenEmployee?: (employeeId: number) => void;
 }) {
   const t = trend.data;
   const j = joiners.data;
@@ -202,6 +205,7 @@ export default function JoinersSection({
                     rowKey={(r) => `${r.employeeName}-${r.joinDate}`}
                     pageSize={5}
                     dense
+                    onRowClick={onOpenEmployee ? (r) => onOpenEmployee(r.employeeId) : undefined}
                   />
                   {j.listShown < j.summary.joiners && (
                     <p className="mt-2 text-[11px] leading-snug text-md-ink-soft">
@@ -247,6 +251,7 @@ export default function JoinersSection({
                     rowKey={(r) => `${r.employeeName}-${r.exitDate}`}
                     pageSize={5}
                     dense
+                    onRowClick={onOpenEmployee ? (r) => onOpenEmployee(r.employeeId) : undefined}
                   />
                 )}
                 {j.earlyAttrition.byDepartment.length > 0 && (

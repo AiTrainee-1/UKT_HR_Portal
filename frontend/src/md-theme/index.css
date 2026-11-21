@@ -1,6 +1,9 @@
-/* The Managing Director portal's skin. Imported once, from src/index.css. Everything that changes how something looks is
-   scoped to html[data-md-theme] (set by MdLayout), so nothing here affects the HR portal. See lib/md/theme.ts and
-   md-portal.md section 11. */
+/* The Managing Director portal's skin: its own stylesheet, imported by components/md/MdShell.tsx only, so it is
+   downloaded with the MD shell and by nobody else (the HR portal, the logins, the employee app never fetch it). The
+   build loads it before the shell renders (Vite's preload waits for the stylesheet), so an MD page never shows unstyled.
+   Everything that changes how something looks is scoped to html[data-md-theme] (set by the shell), so even once loaded
+   nothing here affects another portal. The md-* Tailwind utilities are registered in ./tailwind.css, which src/index.css
+   imports (Tailwind makes utilities only in the stylesheet it compiles). See lib/md/theme.ts and md-portal.md section 11. */
 @import "./tokens.css";
 @import "./typography.css";
 @import "./tailwind-remap.css";

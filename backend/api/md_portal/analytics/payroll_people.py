@@ -16,10 +16,20 @@ pay period ENDS in; unit and department are the employee's CURRENT ones. So the 
 Analysis figures to the paisa (earned = salary earned, net, deductions, late; companyCost = its employer cost), except
 that the employer PF / ESI estimate is rounded per slip here (per department there): a few paise at most.
 
-Per slip (contract names):
+Per slip (contract names). Since 2026-11-21 the money a person was PAID follows the payroll row, exactly as HR's Staff /
+Production Payroll pages, the Salary Statement and the bank file read it (``payroll_statement_views._staff_values``):
 
-* earnedSalary    ``gross_salary`` less any bonus on the slip (shown as ``bonus``; the engines write none, so it is
-                  ``gross_salary``), so companyCost = earned + overtime + bonus + employer PF/ESI never counts a bonus twice
+* earnedSalary    ``gross_salary``: what the days / shifts paid earned. HR's Excess / Detection is NOT in it (the engines
+                  keep it out of the gross; until 2026-11-21 this page took the bonus off every gross, which is right only
+                  for a slip written the older way with the bonus inside it, as the MD demo data is: ``_bonus_inside_gross``)
+* bonus           the payroll row's ``bonus`` = HR's Excess - Detection of the month / pay period (payroll_excess.py,
+                  owner 2026-11-20); ``excess`` / ``detection`` are its two sides (the slip's ``breakdown.excess`` block,
+                  else the bonus itself: an older HR bonus is all excess)
+* deductions      total = the payroll row's ``deductions`` (HR may change it after the slip was computed: the change
+                  shows in ``other`` and as the person's ``adjustment``); PF / ESI / advance / late from the slip, TDS
+                  from the payroll row (as the statement)
+* netPaid         the payroll row's ``final_salary``: gross + overtime + bonus - deductions, rounded UP to the rupee;
+                  what the bank file pays
 * actualSalary    staff: ``earnings.monthlySalary`` of the slip's calculation (a slip without one: its earned salary, so
                   nothing is called lost); production: none
 * lateDeduction   payroll.py's late figure (``LATE_SQL``): the late and permission penalties the slip deducted. A Penalty
@@ -27,22 +37,28 @@ Per slip (contract names):
 * clDays          the Salary Statement's CL column (``payroll_statement_views._staff_values``): approved Casual Leave
                   (``payroll_insights.casual_leave_days``, the same rule, read for several months at once) on the slip's
                   present / half-shift days, min(shifts completed, the CL portion), at most the paid days
-* adjustment      the payroll details page's "Adjustment by HR" (``payroll_insights``, issue "adjustment"): HR's bonus
-                  less what HR changed the deductions by after the slip was computed; null when neither
+* companyCost     earned + overtime + bonus + the employer PF / ESI estimate
+* adjustment      what HR changed the deductions by after the slip was computed, as money to the employee (+ = HR
+                  took deductions off, - = HR added some); null when HR changed nothing. Excess / Detection is its own
+                  line (bonus), not an adjustment
 * status          payroll.py's month state (Payroll Done / payment pending / Paid; Cleared is a verification, never paid);
                   a person's month from their own payroll row
+
+A slip with no payroll row (imported, very old) falls back to its own columns.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Sequence
 
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
-from ...models import CasualLeaveRequest, Employee, Payroll, PayrollMonthClose, SalarySlip
+from ...compensation_shared import parse_join_date
+from ...models import CasualLeaveRequest, Department, Employee, Payroll, PayrollMonthClose, SalarySlip
 from ...payroll_insights import natural_key, parse_iso_date
 from ...reporting.definitions.payroll_core_common import EMPLOYER_ESI_RATE, EMPLOYER_PF_RATE, LATE_SQL, SLIP_TYPE_SQL
 from ..common import MdParamError, Scope, cached, change, money, parse_month, pct
@@ -70,6 +86,8 @@ SORTS = (
 )
 DIRECTIONS = ("asc", "desc")
 CHANGE_KEYS = ("companyCost", "earnedSalary", "netPaid", "attendanceDeduction", "clAmount", "employees")
+YEAR_CHANGE_KEYS = ("companyCost", "earnedSalary", "netPaid", "deductions", "bonus", "employees")
+NOT_INCLUDED_LISTED = 20
 UNASSIGNED = "Unassigned"
 
 Ym = tuple[int, int]
@@ -154,6 +172,7 @@ _SLIP_FIELDS = (
     "employee__last_name",
     "employee__status",
     "employee__employment_type",
+    "employee__production_pay_cycle",
     "employee__department_id",
     "employee__department__name",
     "employee__department__branch__name",
@@ -163,20 +182,94 @@ _SLIP_FIELDS = (
     "breakdown_details__summary",
     "breakdown_details__earnings",
     "breakdown_details__salaryPerShift",
+    "breakdown_details__excess",
+)
+
+# the payroll row of a slip: the money HR's pages and the bank file read, and where the row stands in the workflow
+_PAYROLL_FIELDS = (
+    "employee_id",
+    "year",
+    "month",
+    "period_start",
+    "period_end",
+    "pay_cycle",
+    "status",
+    "on_hold",
+    "payment_status",
+    "payment_paid_at",
+    "released_from",
+    "bonus",
+    "deductions",
+    "tds_deduction",
+    "final_salary",
 )
 
 
+def _attach_payrolls(rows: list[dict]) -> None:
+    """Put each slip's own payroll row on it as ``pay`` (None when it has none), in ONE query: a staff slip pairs with
+    the month's staff row, a production slip with the row of its pay period."""
+    ids = {r["employee_id"] for r in rows}
+    if not ids:
+        return
+    pairs = {(r["year"], r["month"]) for r in rows if r["period_start"] is None}
+    starts = {r["period_start"] for r in rows if r["period_start"] is not None}
+    q = Q(pk__in=[])
+    if pairs:
+        q |= Q(period_start__isnull=True) & P._pairs_q(pairs)
+    if starts:
+        q |= Q(period_start__in=starts)
+    staff: dict[tuple, dict] = {}
+    production: dict[tuple, dict] = {}
+    for p in (
+        Payroll.objects.filter(q, employee_id__in=ids, week_number__isnull=True).order_by("id").values(*_PAYROLL_FIELDS)
+    ):
+        if p["period_start"] is None:
+            staff[(p["employee_id"], p["year"], p["month"])] = p
+        else:
+            production[(p["employee_id"], p["period_start"], p["period_end"])] = p
+    for r in rows:
+        r["pay"] = (
+            staff.get((r["employee_id"], r["year"], r["month"]))
+            if r["period_start"] is None
+            else production.get((r["employee_id"], r["period_start"], r["period_end"]))
+        )
+
+
 def _rows(qs: QuerySet) -> list[dict]:
-    """One dict per slip: its columns, its employee and the figures of the contract (see ``_figures``)."""
-    out = []
-    for r in (
+    """One dict per slip: its columns, its employee, its payroll row (``pay``) and the figures of the contract (see
+    ``_figures``)."""
+    out = list(
         qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, pf_wages=P._PF_WAGES)
         .order_by()
         .values(*_SLIP_FIELDS, "stype", "late_amt", "pf_wages")
-    ):
+    )
+    _attach_payrolls(out)
+    for r in out:
         r["fig"] = _figures(r)
-        out.append(r)
     return out
+
+
+def excess_split(block: Any, bonus: Decimal) -> tuple[Decimal, Decimal]:
+    """(excess, detection) of a slip whose payroll bonus is ``bonus``: the slip's own ``excess`` block when it adds up
+    to that bonus (payroll_excess.breakdown_json), else the bonus itself (an older HR bonus: all excess; a negative
+    one: all detection)."""
+    if isinstance(block, dict):
+        excess, detection = _num(block.get("excess")), _num(block.get("detection"))
+        if excess is not None and detection is not None and P._d2(excess - detection) == P._d2(bonus):
+            return excess, detection
+    return (bonus, ZERO) if bonus >= 0 else (ZERO, -bonus)
+
+
+def _bonus_inside_gross(r: dict) -> bool:
+    """Was this slip written with its bonus INSIDE gross_salary (the older way, as the MD demo data still does)? The
+    engines' slips keep HR's Excess / Detection outside the gross (net = gross + OT + bonus - deductions); a slip whose net
+    only adds up without the bonus has it inside, and its earned salary is the gross less the bonus."""
+    dec = P._dec
+    bonus = dec(r["bonuses"])
+    if bonus == 0:
+        return False
+    base = dec(r["net_salary"]) - dec(r["gross_salary"]) - dec(r["ot_amount"]) + dec(r["total_deductions"])
+    return abs(base) < 1 <= abs(base - bonus)
 
 
 def _figures(r: dict) -> dict[str, Decimal | None]:
@@ -184,12 +277,18 @@ def _figures(r: dict) -> dict[str, Decimal | None]:
     dec = P._dec
     summary = r.get("breakdown_details__summary") if isinstance(r.get("breakdown_details__summary"), dict) else {}
     earnings = r.get("breakdown_details__earnings") if isinstance(r.get("breakdown_details__earnings"), dict) else {}
+    pay = r.get("pay")
     staff = r["stype"] == "staff"
-    bonus = dec(r["bonuses"])
-    earned = dec(r["gross_salary"]) - bonus
+    earned = dec(r["gross_salary"])
+    if _bonus_inside_gross(r):
+        earned -= dec(r["bonuses"])
+    bonus = dec(pay["bonus"]) if pay else dec(r["bonuses"])
+    excess, detection = excess_split(r.get("breakdown_details__excess"), bonus)
     ot = dec(r["ot_amount"])
-    pf, esi, tds = dec(r["pf_deduction"]), dec(r["esi_deduction"]), dec(r["tds_deduction"])
-    adv, total = dec(r["advance_deduction"]), dec(r["total_deductions"])
+    pf, esi, adv = dec(r["pf_deduction"]), dec(r["esi_deduction"]), dec(r["advance_deduction"])
+    tds = dec(pay["tds_deduction"]) if pay else dec(r["tds_deduction"])
+    total = dec(pay["deductions"]) if pay else dec(r["total_deductions"])
+    net = dec(pay["final_salary"]) if pay else dec(r["net_salary"])
     late = dec(r["late_amt"])
     if staff:
         monthly = _num(earnings.get("monthlySalary"))
@@ -206,6 +305,7 @@ def _figures(r: dict) -> dict[str, Decimal | None]:
         late_days = _first(_num(summary.get("lateDays")), ZERO)
         shifts = ZERO
         rate = None
+        period_days = working
     else:
         actual = lop = None
         span = (r["period_end"] - r["period_start"]).days + 1 if r["period_start"] and r["period_end"] else 0
@@ -218,6 +318,7 @@ def _figures(r: dict) -> dict[str, Decimal | None]:
         late_days = _first(_num(summary.get("lateDays")), ZERO)
         shifts = _first(_num(summary.get("totalShifts")), _num(earnings.get("totalShifts")), dec(r["present_days"]))
         rate = _first(_num(r.get("breakdown_details__salaryPerShift")), _num(earnings.get("salaryPerShift")))
+        period_days = _first(_num(summary.get("periodDays")), Decimal(span))
     wages = r["pf_wages"]
     pf_base = (wages if wages is not None else dec(r["basic"])) if pf > 0 else ZERO
     esi_base = (wages if wages is not None else dec(r["gross_salary"])) if esi > 0 else ZERO
@@ -230,13 +331,17 @@ def _figures(r: dict) -> dict[str, Decimal | None]:
         "attendance": (lop or ZERO) + late,
         "ot": ot,
         "bonus": bonus,
+        "excess": excess,
+        "detection": detection,
         "pf": pf,
         "esi": esi,
         "tds": tds,
         "adv": adv,
         "other": total - pf - esi - tds - adv - late,
         "ded": total,
-        "net": dec(r["net_salary"]),
+        # what HR changed the deductions by on the payroll row after the slip was computed (0: nothing)
+        "hr_ded": total - dec(r["total_deductions"]),
+        "net": net,
         "employer": employer,
         "cost": earned + ot + bonus + employer,
         "cl_days": ZERO,
@@ -250,6 +355,7 @@ def _figures(r: dict) -> dict[str, Decimal | None]:
         "late_days": late_days,
         "shifts": shifts,
         "rate": rate,
+        "period_days": period_days,
     }
 
 
@@ -319,6 +425,8 @@ _SUMMED = (
     "attendance",
     "ot",
     "bonus",
+    "excess",
+    "detection",
     "pf",
     "esi",
     "tds",
@@ -369,6 +477,8 @@ class _Sum:
             "attendanceDeduction": money(t["attendance"]),
             "overtime": money(t["ot"]),
             "bonus": money(t["bonus"]),
+            "excess": money(t["excess"]),
+            "detection": money(t["detection"]),
             "deductions": {
                 "pf": money(t["pf"]),
                 "esi": money(t["esi"]),
@@ -435,6 +545,10 @@ def _state_words(st: dict) -> dict:
         extra.append(f"{P._plural(st['onHold'], 'salary', 'salaries')} on hold.")
     if st.get("newJoinersWaiting"):
         extra.append(f"{P._plural(st['newJoinersWaiting'], 'new joiner')} waiting to be added to the payroll.")
+    if st.get("paidSeparately"):
+        extra.append(f"{P._plural(st['paidSeparately'], 'person', 'people')} paid separately after Payroll Done.")
+    if st.get("productionParked"):
+        extra.append(f"{P._plural(st['productionParked'], 'production worker')} waiting in a pay period's New Joiners.")
     if extra:
         detail = " ".join([detail, *extra] if detail else extra)
     return {"state": state, "label": label, "detail": detail}
@@ -490,34 +604,6 @@ def _person_state(
     return {"state": "no_data", "label": "No payroll row", "detail": None}
 
 
-_PAYROLL_FIELDS = (
-    "employee_id",
-    "year",
-    "month",
-    "period_start",
-    "period_end",
-    "status",
-    "on_hold",
-    "payment_status",
-    "payment_paid_at",
-    "released_from",
-    "bonus",
-    "deductions",
-)
-
-
-def _payroll_rows(qs: QuerySet) -> tuple[dict[tuple, dict], dict[tuple, dict]]:
-    """The payroll rows that go with the slips: (staff by (employee, year, month), production by (employee, period))."""
-    staff: dict[tuple, dict] = {}
-    production: dict[tuple, dict] = {}
-    for p in qs.filter(week_number__isnull=True).order_by("id").values(*_PAYROLL_FIELDS):
-        if p["period_start"] is None:
-            staff[(p["employee_id"], p["year"], p["month"])] = p
-        else:
-            production[(p["employee_id"], p["period_start"], p["period_end"])] = p
-    return staff, production
-
-
 def _payment_status(staff_row: dict | None, prod_rows: list[dict]) -> str | None:
     """Paid or not: staff by the payment status, production once every pay period's payroll has payment status Paid."""
     if staff_row is not None:
@@ -528,37 +614,207 @@ def _payment_status(staff_row: dict | None, prod_rows: list[dict]) -> str | None
     return None
 
 
-def _adjustment(slips: list[dict], staff_row: dict | None, production: dict[tuple, dict]) -> Decimal | None:
-    """The details page's "Adjustment by HR": HR's bonus less what HR changed the deductions by after the slip was
-    computed, over the person's slips of the month; None when HR changed neither."""
-    total, touched = ZERO, False
-    for r in slips:
-        p = (
-            staff_row
-            if r["period_start"] is None
-            else production.get((r["employee_id"], r["period_start"], r["period_end"]))
-        )
-        if p is None:
-            continue
-        bonus = P._dec(p["bonus"])
-        changed = P._dec(p["deductions"]) - P._dec(r["total_deductions"])
-        if bonus != 0 or changed != 0:
-            touched = True
-            total += bonus - changed
-    return total if touched else None
+def _adjustment(slips: list[dict]) -> Decimal | None:
+    """The details page's "Adjustment by HR" left once Excess / Detection is its own line (2026-11-20): what HR changed
+    the deductions by after the slip was computed, as money to the employee (+ = deductions taken off, - = added);
+    None when HR changed none."""
+    changed = [r["fig"]["hr_ded"] for r in slips if r.get("pay") is not None and r["fig"]["hr_ded"] != 0]
+    return -sum(changed, ZERO) if changed else None
+
+
+def _own_rows(items: list[dict]) -> tuple[dict | None, list[dict]]:
+    """The staff payroll row and the production payroll rows of one person's slips of a month."""
+    staff_row = next((r["pay"] for r in items if r["stype"] == "staff" and r.get("pay") is not None), None)
+    prod_rows = [r["pay"] for r in items if r["stype"] == "production" and r.get("pay") is not None]
+    return staff_row, prod_rows
 
 
 # ─── 1. monthly ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 
+def _left(rows: list[dict]) -> tuple[int, Decimal]:
+    """People in the slips who are no longer active today (HR's payroll lists show active employees only), and their net."""
+    people: set[int] = set()
+    net = ZERO
+    for r in rows:
+        if (r["employee__status"] or "").strip().lower() != "active":
+            people.add(r["employee_id"])
+            net += r["fig"]["net"]
+    return len(people), net
+
+
+def _workflow(st: dict, rows: list[dict]) -> dict:
+    """Where the month stands in HR's month workflow, as numbers (payroll.py's month state, 2026-11-10): the lock, the
+    payment, the verification (Cleared), held salaries, new joiners waiting, people paid separately, production workers
+    parked in a pay period's New Joiners, and the people who have since left (in these figures, not on HR's lists)."""
+    left, left_net = _left(rows)
+    return {
+        "staffState": st.get("staffState"),
+        "productionState": st.get("productionState"),
+        "locked": bool(st.get("locked")),
+        "finalizedAt": st.get("finalizedAt"),
+        "markedPaidAt": st.get("markedPaidAt"),
+        "paymentPendingDays": st.get("paymentPendingDays"),
+        "daysToPay": st.get("daysToPay"),
+        "slips": st.get("slips", 0),
+        "paidSlips": st.get("paidSlips", 0),
+        "unpaidSlips": st.get("unpaidSlips", 0),
+        "unpaidNet": st.get("unpaidNet", 0.0),
+        "clearedSlips": st.get("clearedSlips", 0),
+        "provisionalSlips": st.get("provisionalSlips", 0),
+        "onHold": st.get("onHold", 0),
+        "onHoldNet": st.get("onHoldNet", 0.0),
+        "newJoinersWaiting": st.get("newJoinersWaiting", 0),
+        "newJoinersNet": st.get("newJoinersNet", 0.0),
+        "paidSeparately": st.get("paidSeparately", 0),
+        "productionParked": st.get("productionParked", 0),
+        "leftSince": left,
+        "leftSinceNet": money(left_net),
+    }
+
+
 def _month_row(ym: Ym, rows: list[dict], st: dict) -> dict:
-    return {"month": P._key(ym), "label": P._label(ym), **_Sum(rows).json(), "status": _state_words(st)}
+    return {
+        "month": P._key(ym),
+        "label": P._label(ym),
+        **_Sum(rows).json(),
+        "status": _state_words(st),
+        "workflow": _workflow(st, rows),
+    }
+
+
+def _not_included(scope: Scope, ym: Ym) -> dict | None:
+    """Staff HR's Staff Payroll would list as not included in the month (its Skipped view, "Not generated"): ACTIVE
+    staff of the scope, joined by the month's end, with NO payroll row for the month at all (a held salary or a new
+    joiner waiting has one and is counted apart). ``noSalary`` of them have no monthly salary on their profile, so the
+    engine cannot pay them. None for a production-only scope (production is paid per pay period). Two queries."""
+    if scope.employment_type == "production":
+        return None
+    end = P._end(ym)
+    staff = dataclasses.replace(scope, employment_type="staff").employees(active=True)
+    have = set(
+        Payroll.objects.filter(
+            employee__in=staff, year=ym[0], month=ym[1], period_start__isnull=True, week_number__isnull=True
+        ).values_list("employee_id", flat=True)
+    )
+    people = []
+    for e in staff.order_by("employee_code").values(
+        "id", "employee_code", "first_name", "last_name", "join_date", "salary_amount", "department__name"
+    ):
+        if e["id"] in have:
+            continue
+        joined = parse_join_date(e["join_date"])
+        if joined is not None and joined > end:
+            continue
+        no_salary = not e["salary_amount"] or e["salary_amount"] <= 0
+        people.append(
+            {
+                "employeeId": e["id"],
+                "code": e["employee_code"] or "",
+                "name": f"{e['first_name'] or ''} {e['last_name'] or ''}".strip(),
+                "department": e["department__name"],
+                "reason": "no_salary" if no_salary else "not_generated",
+            }
+        )
+    return {
+        "count": len(people),
+        "noSalary": sum(1 for p in people if p["reason"] == "no_salary"),
+        "notGenerated": sum(1 for p in people if p["reason"] == "not_generated"),
+        "people": people[:NOT_INCLUDED_LISTED],
+    }
+
+
+def _year_block(year: int, first: Ym, last: Ym, by_month: dict[Ym, list[dict]]) -> dict | None:
+    """The months first..last of ``year`` added up (only months with slips); None when none has any."""
+    pairs = [x for x in by_month if first <= x <= last and by_month[x]]
+    if not pairs:
+        return None
+    rows = [r for x in pairs for r in by_month[x]]
+    return {
+        "year": year,
+        "label": f"{year} ({P._label(first)[:3]}-{P._label(last)[:3]})" if first != last else P._label(first),
+        "from": P._key(first),
+        "to": P._key(last),
+        "months": len(pairs),
+        **_Sum(rows).json(),
+    }
+
+
+def _year_change(cur: dict | None, prev: dict | None) -> dict | None:
+    if not cur or not prev:
+        return None
+    return {
+        k: change(cur[k]["total"], prev[k]["total"]) if k == "deductions" else change(cur[k], prev[k])
+        for k in YEAR_CHANGE_KEYS
+    }
+
+
+MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def year_months(ym: Ym, by_month: dict[Ym, list[dict]], point) -> list[dict]:
+    """January to December of the chosen year beside the same month a year before, for the year-on-year chart: each side
+    ``point(rows)`` ({companyCost, netPaid, employees}) or None when that month had no payroll (or is after the chosen
+    month)."""
+    out = []
+    for m in range(1, 13):
+        now, before = (ym[0], m), (ym[0] - 1, m)
+        out.append(
+            {
+                "month": m,
+                "label": MONTH_ABBR[m - 1],
+                "current": point(by_month[now]) if now <= ym and by_month.get(now) else None,
+                "previous": point(by_month[before]) if by_month.get(before) else None,
+            }
+        )
+    return out
+
+
+def _point(rows: list[dict]) -> dict:
+    fig = _Sum(rows).json()
+    return {"companyCost": fig["companyCost"], "netPaid": fig["netPaid"], "employees": fig["employees"]}
+
+
+def _yearly(ym: Ym, by_month: dict[Ym, list[dict]], states: dict[Ym, dict]) -> dict:
+    """The year so far against the same months a year before, the whole year before, and the selected month against the
+    same month a year before."""
+    year = ym[0]
+    current = _year_block(year, (year, 1), ym, by_month)
+    previous = _year_block(year - 1, (year - 1, 1), (year - 1, ym[1]), by_month)
+    previous_full = _year_block(year - 1, (year - 1, 1), (year - 1, 12), by_month)
+    last = (year - 1, ym[1])
+    same = _month_row(last, by_month[last], states[last]) if by_month.get(last) and last in states else None
+    this = _month_row(ym, by_month[ym], states[ym]) if by_month.get(ym) and ym in states else None
+    return {
+        "current": current,
+        "previous": previous,
+        "previousFull": previous_full,
+        "change": _year_change(current, previous),
+        "sameMonthLastYear": same,
+        "sameMonthChange": {k: change(this[k], same[k]) for k in CHANGE_KEYS} if this and same else None,
+        "months": year_months(ym, by_month, _point),
+    }
+
+
+def _department_options(scope: Scope) -> list[dict]:
+    """The departments the scope's kind of employee belongs to (Department.category, 2026-11-16: staff and production
+    departments are separate; a staff-only or production-only page lists only its own), in the chosen unit."""
+    qs = Department.objects.all()
+    if scope.employment_type in (Department.CATEGORY_STAFF, Department.CATEGORY_PRODUCTION):
+        qs = qs.filter(category=scope.employment_type)
+    if scope.branch_ids:
+        qs = qs.filter(branch_id__in=scope.branch_ids)
+    return [
+        {"id": d["id"], "name": d["name"], "branchId": d["branch_id"]}
+        for d in qs.order_by("name", "branch_id").values("id", "name", "branch_id")
+    ]
 
 
 @cached()
 def payroll_monthly(scope: Scope, month: str | None = None, months: int = MONTHS_DEFAULT) -> dict:
-    """The month (default: the latest ENDED month with slips) and the months before it, oldest first, with the change on the month
-    before. A month in the window with no payroll is left out of the list (a note names it): no zeros that mean 'none'."""
+    """The month (default: the latest ENDED month with slips) and the months before it, oldest first, with the change on
+    the month before, the year so far against the year before, and the staff HR has not included. A month in the window
+    with no payroll is left out of the list (a note names it): no zeros that mean 'none'."""
     months = _clamp(months, 1, MONTHS_MAX)
     today = P._today()
     available = P._available_months(scope)
@@ -573,15 +829,19 @@ def payroll_monthly(scope: Scope, month: str | None = None, months: int = MONTHS
             "current": None,
             "previous": None,
             "change": None,
+            "yearly": None,
+            "notIncluded": None,
+            "departments": _department_options(scope),
             **base,
             "notes": notes + [P.NO_PAYROLL_NOTE],
         }
     window = [P._shift(ym, -i) for i in range(months - 1, -1, -1)]
     prev = P._shift(ym, -1)
-    pairs = window + ([prev] if prev not in window else [])
+    year_pairs = [(ym[0], m) for m in range(1, ym[1] + 1)] + [(ym[0] - 1, m) for m in range(1, 13)]
+    pairs = sorted(set(window) | {prev} | set(year_pairs))
     by_month = _month_rows(scope, pairs)
     states = P._month_states(scope, pairs, today, available)
-    rows = {x: _month_row(x, by_month[x], states[x]) for x in pairs if by_month.get(x)}
+    rows = {x: _month_row(x, by_month[x], states[x]) for x in window + [prev] if by_month.get(x)}
     current, previous = rows.get(ym), rows.get(prev)
     started = min(available) if available else ym
     missing = [x for x in window if x not in rows and x >= started]
@@ -593,6 +853,13 @@ def payroll_monthly(scope: Scope, month: str | None = None, months: int = MONTHS
         notes.append(
             "No payroll in " + ", ".join(P._label(x) for x in missing) + ": left out of the months (not shown as zero)."
         )
+    if current is not None and current["workflow"]["leftSince"]:
+        w = current["workflow"]
+        notes.append(
+            f"{P._plural(w['leftSince'], 'person', 'people')} paid in {P._label(ym)} "
+            f"{'has' if w['leftSince'] == 1 else 'have'} left since ({P._inr(w['leftSinceNet'])} net): counted here as "
+            "the month's cost, while HR's payroll lists and Salary Statement show active employees only."
+        )
     return {
         "month": P._key(ym),
         "label": P._label(ym),
@@ -600,6 +867,9 @@ def payroll_monthly(scope: Scope, month: str | None = None, months: int = MONTHS
         "current": current,
         "previous": previous,
         "change": {k: change(current[k], previous[k]) for k in CHANGE_KEYS} if current and previous else None,
+        "yearly": _yearly(ym, by_month, states),
+        "notIncluded": _not_included(scope, ym) if current is not None else None,
+        "departments": _department_options(scope),
         **base,
         "notes": notes,
     }
@@ -692,16 +962,14 @@ def _sort_key(sort: str):
 def _people_rows(scope: Scope, ym: Ym) -> list[dict]:
     """One row per employee with a slip in the month (their slips added up), with their hold and payment status."""
     slips = _month_rows(scope, [ym]).get(ym, [])
-    staff_rows, prod_rows = _payroll_rows(Payroll.objects.filter(P._slip_scope_q(scope), year=ym[0], month=ym[1]))
     by_emp: dict[int, list[dict]] = defaultdict(list)
     for r in slips:
         by_emp[r["employee_id"]].append(r)
     out = []
     for emp_id, items in by_emp.items():
         first = items[0]
-        staff_row = staff_rows.get((emp_id, ym[0], ym[1])) if any(r["stype"] == "staff" for r in items) else None
+        staff_row, own = _own_rows(items)
         periods = [r for r in items if r["stype"] == "production"]
-        own = [prod_rows[k] for r in periods if (k := (emp_id, r["period_start"], r["period_end"])) in prod_rows]
         out.append(
             {
                 "employeeId": emp_id,
@@ -829,7 +1097,6 @@ def payroll_person(employee_id: int, months: int = PERSON_MONTHS_DEFAULT) -> dic
     keep = set(wanted)
     slips = [r for r in slips if (r["year"], r["month"]) in keep]
     _add_casual_leave(slips, wanted)
-    staff_rows, prod_rows = _payroll_rows(Payroll.objects.filter(employee_id=emp.id))
     closes = {(c.year, c.month): c for c in PayrollMonthClose.objects.filter(P._pairs_q(wanted))}
     by_month: dict[Ym, list[dict]] = defaultdict(list)
     for r in slips:
@@ -839,15 +1106,14 @@ def payroll_person(employee_id: int, months: int = PERSON_MONTHS_DEFAULT) -> dic
     for ym in wanted:
         items = sorted(by_month[ym], key=lambda r: (r["period_start"] or date.min, r["id"]))
         staff_slip = next((r for r in items if r["stype"] == "staff"), None)
-        staff_row = staff_rows.get((emp.id, ym[0], ym[1])) if staff_slip is not None else None
+        staff_row, own = _own_rows(items)
         periods = [r for r in items if r["stype"] == "production"]
-        own = [prod_rows[k] for r in periods if (k := (emp.id, r["period_start"], r["period_end"])) in prod_rows]
         group = _Sum(items)
         for r in items:
             total.add(r)
         figures = group.json()
         days = staff_slip["fig"] if staff_slip is not None else None
-        adjustment = _adjustment(items, staff_row, prod_rows)
+        adjustment = _adjustment(items)
         out.append(
             {
                 "month": P._key(ym),

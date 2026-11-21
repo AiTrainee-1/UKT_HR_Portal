@@ -2014,13 +2014,14 @@ If it does not work, the screen says why:
 - **"This gate is switched off. Ask HR to switch it on."**
 - **"Too many wrong tries. Wait 15 minutes or ask HR to reset the password."** After 5 wrong passwords in 15 minutes the username is locked for 15 minutes; a password reset by HR unlocks it at once.
 
-**Scanning.** The screen shows **Scan a pass** with what this gate takes (for example "Gate passes and tea breaks"). Hold the QR code under the scanner: a USB or Bluetooth scanner scans from anywhere on the page (**Pair scanner** in the top bar connects one if needed). Without a scanner, type the code under **Or type the pass code** and press **Check**. The answer shows in a big banner with the employee's photo, name, code and department, and the screen says it aloud (**Voice** on / off in the top bar):
-- **Green: "Allowed - exit recorded"** or **"Welcome back - return recorded"**.
-- **Amber: "Tea break started"** or **"Tea break ended - 12 min"**.
-- **Red, refused,** with the reason: pass already used, pass expired, not approved, has not gone out yet, or **not taken at this gate** (HR switched that kind of scan off for this gate).
-- **Grey:** "Code not recognised" (scan again) or "No connection" (check the network and scan again).
+**Scanning.** The screen shows **Scan a pass** with what this gate takes (for example "Gate passes and tea breaks"). Hold the QR code under the scanner: a USB or Bluetooth scanner scans from anywhere on the page (**Pair scanner** in the top bar connects one if needed). Without a scanner, type the code under **Or type the pass code** and press **Check**. The whole screen answers in a colour, with a short animation, so the operator can tell the result from a distance without reading: a glow round the screen, the big scanner card and the result card with the employee's photo, name, code and department. The screen also says it aloud (**Voice** on / off in the top bar). After a few seconds the screen goes back to Ready; the result card stays until the next scan.
+- **Green: "Allowed - exit recorded"**, **"Welcome back - return recorded"** or **"Tea break started"**.
+- **Blue: "Back from tea break - 12 min"** (an employee returning from a tea break has a colour of their own); an orange line adds **"Over the allowed 15 min by 3 min"** when the break ran over.
+- **Orange:** pass already used, pass expired, has not gone out yet, or **"Already scanned - please wait"**: the same employee scanned their tea-break code again within 5 minutes of their last scan. Nothing is recorded; the card shows when they were scanned and counts down until they may scan again (the 5 minutes are set on Tea Break -> Rule, "Repeat-scan cooldown"; 0 switches it off).
+- **Red:** code not recognised, not approved, or **not taken at this gate** (HR switched that kind of scan off for this gate).
+- **Grey:** "No connection" (check the network and scan again).
 
-Every scan, refused ones too, is recorded.
+Every scan is recorded, refused ones too, except a repeat tea-break scan inside the 5 minutes (it creates nothing, so it can never make a second break).
 
 **Today at this gate.** Exits, returns, tea breaks and refused scans of today, who is still out, **Export today** (Excel or PDF), and **Latest scans** with **See all records**. The screen only ever shows **this gate's** records.
 

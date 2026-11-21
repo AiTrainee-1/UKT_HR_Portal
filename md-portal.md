@@ -674,3 +674,42 @@ different x on each page and the stack at a different y.
 * Checked by `headerRow.test.ts` ("the grid layout") and e2e `md-hr-pages.spec.ts` ("the seven pages with a tall title row
   line up alike": same title x, same title / switch / stack centre lines relative to the row, buttons ending on the stack's
   right edge, no icon before the title).
+
+## 12. The 2026-11-21 round: speed, Analytics, communication cost, Staff | Production payroll, filters everywhere
+
+Owner brief: the portal was heavy after deployment; keep the look, the radio mascot and its cursor-following; add Analytics;
+bring every module up to the current HRMS; add WhatsApp / SMS / Gmail usage and cost; split payroll Staff | Production;
+month / year / range / department filters and drill-down on every module; MD portal only.
+
+* **Speed.** The skin (`src/md-theme/index.css`) is no longer in the global stylesheet: `src/index.css` imports only
+  `md-theme/tailwind.css` (the `@theme inline` block, so `md-*` utilities still exist) and `components/md/MdShell.tsx`
+  imports the skin, built by the `mdSkinStylesheet()` plugin in vite.config.ts (Lightning CSS pass). `MdLayout.tsx` is a
+  tiny wrapper; the shell (`MdShell`, `shell/loader.ts`, `shell/prefetch.ts`, `shell/ShellFallback.tsx`, `shell/UktLogo.tsx`)
+  loads lazily and is never downloaded by the HR portal. The assistant panel is its own chunk (`assistant/panel-loader.ts`,
+  fetched on idle / hover, mounted on first open); the launcher's motion is CSS (`linear()` springs in
+  `areas/assistant.css`); `mascot.tsx` is unchanged. In-flow glass lost its backdrop blur (saturate kept); the welcome sheet
+  and the assistant panel blur less. Sidebar / KPI links prefetch page chunks. Page tests must `await preloadMdShell()`
+  (in `pages/md/testing/renderMdPage.tsx`). Measured: global CSS 100.6 -> 72.8 KB gz; /md/dashboard first load 536.5 ->
+  373.7 KB gz.
+* **Dashboard** (`pages/md/home/`): month bar (`?month=`, kit MonthPicker), KPI band linking to the pages, light charts
+  (`kit/LiteCharts.tsx`, no recharts), past-month mode; `GET /api/md/dashboard/home?month=` (one request; overview only after it).
+* **Analytics** (`/md/analytics`): the HR Analytics page itself through MdHrApp (`EMBEDDED_HR_PREFIXES` /hr/analytics); md-nav
+  item `frame: false` renders it without the Operations / Insights frame. No grant: the `analytics` key inherits
+  `attendance`, which the MD has.
+* **Communication usage & cost** (`/md/communications`, `pages/md/communications/`, `analytics/comms.py`,
+  `routes/comms.py`): WhatsApp from `whatsapp_usage.usage()`, SMS from `sms_control_views._month_numbers()`, email from
+  `email_control_views._status_counts` (no per-email charge is stored anywhere: shown as 0); estimates before GST; history
+  with masked phones / emails and no message text. Assistant module `comms`.
+* **Payroll** (`/md/payroll?kind=staff|production`): Staff (monthly: workflow states, Excess - Detection, Not included,
+  year compare) and Production (cycle + period: Overview / Departments / Workers, worker day grid); money from the payroll
+  row (net = final_salary, deductions = Payroll.deductions), earned = gross. New `analytics/payroll_production.py`.
+* **MD-own pages** (Reports, Recruitment, Activity, HOD Approvals) aligned with the current HRMS (Report Center layout,
+  resignation decisions with reasons, new audit areas, request facts + mandatory reject reasons); shared URL helpers in
+  `lib/md/url-filters.ts`.
+* **Insights of the HR copies**: every page id has its own `pages/md/embedded/<id>/` module with the shared
+  `embedded/shared/` filters (`i.`-prefixed URL keys), `DetailSheet`, `jump.ts`, `drill.ts`. Domains updated: geo (tracks +
+  automatic alerts), report log (Attendance Notify runs), visitors (check-out from 18 Nov), gate pass (overdue, gate, reject
+  reason), tea break (refused scans), leave (CL balance, half days), requests (12 kinds, remarks), employees (factory, cycles,
+  statutory), units, shifts (production rules), attendance (quarter shifts, Penalty Early Out, data gaps, six today cards),
+  punches (auto attendance, On-Duty waiting). Retired Report Center reports are reached in tests through
+  `list_retired_reports()` in `setUpModule`.

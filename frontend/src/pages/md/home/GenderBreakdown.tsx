@@ -1,5 +1,5 @@
-import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { CHART, tooltipStyle } from "@/components/md/kit/chartTheme";
+import { CHART } from "@/components/md/kit/chartTheme";
+import { Donut } from "@/components/md/kit/LiteCharts";
 import { num, pct } from "@/lib/md/format";
 import type { GenderCounts, HomeGender } from "./home-types";
 import { LegendDot } from "./parts";
@@ -23,7 +23,9 @@ const share = (n: number, total: number) => (total > 0 ? (100 * n) / total : 0);
 /** One group as a donut: its people in the middle, each answer a slice (hover for the figure), the counts under it. */
 function GenderDonut({ label, counts }: { label: string; counts: GenderCounts }) {
   const slices = GENDER_SEGMENTS.filter((s) => counts[s.key] > 0).map((s) => ({
+    key: s.key,
     name: s.label,
+    label: s.label,
     value: counts[s.key],
     color: s.color,
   }));
@@ -36,30 +38,13 @@ function GenderDonut({ label, counts }: { label: string; counts: GenderCounts })
         aria-label={`${label}: ${slices.map((s) => `${num(s.value)} ${s.name.toLowerCase()}`).join(", ") || "nobody"}`}
       >
         {slices.length > 0 ? (
-          <ResponsiveContainer width="100%" height="100%">
-            <PieChart>
-              <Pie
-                data={slices}
-                dataKey="value"
-                nameKey="name"
-                innerRadius="64%"
-                outerRadius="96%"
-                paddingAngle={slices.length > 1 ? 3 : 0}
-                cornerRadius={4}
-                stroke="none"
-                startAngle={90}
-                endAngle={-270}
-              >
-                {slices.map((s) => (
-                  <Cell key={s.name} fill={s.color} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={tooltipStyle}
-                formatter={(v, name) => [`${num(Number(v))} (${pct(share(Number(v), counts.total))})`, name]}
-              />
-            </PieChart>
-          </ResponsiveContainer>
+          <Donut
+            segments={slices}
+            inner={0.64}
+            gapDegrees={3}
+            className="h-full w-full"
+            tipText={(s) => `${s.label}: ${num(s.value)} (${pct(share(s.value, counts.total))})`}
+          />
         ) : (
           <div className="h-full w-full rounded-full border-[10px] border-md-ink/[0.08]" />
         )}

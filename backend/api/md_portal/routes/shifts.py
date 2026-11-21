@@ -10,6 +10,7 @@ analytics/shifts.py and returns its envelope.
   GET changes     shift changes by day or week: moves, first assignments, renewals; each shift's people in and out
   GET attendance  attendance, absenteeism and late % per shift, against the previous period and the overall rate
   GET attention   "needs your attention" for the selected period and scope
+  GET people      the employees on one shift today (?shift=<template id>|none|production|special-<id>&page=&pageSize=)
 """
 
 from django.urls import path
@@ -67,6 +68,17 @@ def attention(request):
     return shifts_analytics.shifts_attention(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
 
 
+@md_get
+def people(request):
+    params = request_params(request)
+    return shifts_analytics.shifts_people(
+        resolve_scope(params),
+        params.get("shift") or "",
+        page=params.get("page") or 1,
+        page_size=params.get("pageSize") or 25,
+    )
+
+
 urlpatterns = [
     path("summary", summary),
     path("briefing", briefing),
@@ -76,4 +88,5 @@ urlpatterns = [
     path("changes", changes),
     path("attendance", attendance),
     path("attention", attention),
+    path("people", people),
 ]

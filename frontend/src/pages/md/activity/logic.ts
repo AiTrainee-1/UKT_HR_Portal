@@ -227,10 +227,12 @@ export const canShowMore = (total: number, shown: number, pageSize: number) =>
 
 /** The query of the feed: the period, the page, and only the filters that are set. */
 export function feedParams(
-  period: PeriodChoice,
+  base: PeriodChoice | Record<string, string | number>,
   opts: { pageSize: number; q?: string; category?: CategoryId | null; user?: string | null },
 ): Record<string, string | number> {
-  const out: Record<string, string | number> = { ...periodParams(period), page: 1, pageSize: opts.pageSize };
+  // `base` is the page's period (and, since 2026-11-21, its area / person focus) as query parameters
+  const start = "preset" in base ? periodParams(base as PeriodChoice) : base;
+  const out: Record<string, string | number> = { ...start, page: 1, pageSize: opts.pageSize };
   if (opts.q?.trim()) out.q = opts.q.trim();
   if (opts.category) out.category = opts.category;
   if (opts.user) out.user = opts.user;

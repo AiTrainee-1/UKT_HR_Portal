@@ -1,5 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { usePrefersReducedMotion } from "@/components/md/kit/reduced-motion";
+import { cn } from "@/lib/utils";
+
+// The Dashboard's small motions without a motion library (2026-11-21): a figure counting up (requestAnimationFrame), a
+// section rising in and a meter filling (CSS: md-rise / md-grow-x in md-theme/glass.css). All of them hold still with
+// "reduce motion" on.
 
 /**
  * A figure that counts up to its value when it first appears (and glides to a new value when the minute's refresh
@@ -16,7 +21,7 @@ export function CountUp({
   duration?: number;
   testId?: string;
 }) {
-  const reduce = useReducedMotion();
+  const reduce = usePrefersReducedMotion();
   const [shown, setShown] = useState(reduce ? value : 0);
   const from = useRef(reduce ? value : 0);
 
@@ -50,7 +55,7 @@ export function CountUp({
   );
 }
 
-/** A section that rises in once, the first time it is drawn; still with "reduce motion" on. */
+/** A section that rises in once, the first time it is drawn (staggered by `index`); still with "reduce motion" on. */
 export function Reveal({
   children,
   index = 0,
@@ -64,24 +69,16 @@ export function Reveal({
   testId?: string;
   labelledBy?: string;
 }) {
-  const reduce = useReducedMotion();
+  const style: CSSProperties | undefined = index ? { animationDelay: `${80 * index}ms` } : undefined;
   return (
-    <motion.section
-      className={className}
-      data-testid={testId}
-      aria-labelledby={labelledBy}
-      initial={reduce ? false : { opacity: 0, y: 14 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5, delay: reduce ? 0 : 0.08 * index, ease: [0.22, 1, 0.36, 1] }}
-    >
+    <section className={cn("md-rise", className)} style={style} data-testid={testId} aria-labelledby={labelledBy}>
       {children}
-    </motion.section>
+    </section>
   );
 }
 
 /** A thin bar that fills to `value` percent (0-100), with its meaning in an aria label. */
 export function Meter({ value, color, label }: { value: number | null; color: string; label: string }) {
-  const reduce = useReducedMotion();
   const width = Math.max(0, Math.min(100, value ?? 0));
   return (
     <div
@@ -92,12 +89,9 @@ export function Meter({ value, color, label }: { value: number | null; color: st
       aria-valuemax={100}
       aria-valuenow={value ?? 0}
     >
-      <motion.div
-        className="h-full rounded-full"
-        style={{ backgroundColor: color }}
-        initial={reduce ? false : { width: 0 }}
-        animate={{ width: `${width}%` }}
-        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+      <div
+        className="md-grow-x h-full rounded-full transition-[width] duration-700 ease-out motion-reduce:transition-none"
+        style={{ width: `${width}%`, backgroundColor: color }}
       />
     </div>
   );

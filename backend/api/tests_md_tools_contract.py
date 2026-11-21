@@ -70,7 +70,8 @@ class FindReports(MdApiTestCase):
         self.assertIn("overtime", top)
 
     def test_a_small_typo_still_finds_it(self):
-        self.assertGreater(self.find("overtme")["matches"], 0)
+        # the Report Center keeps the Punching Register (the overtime report this used was retired on 2026-11-19)
+        self.assertGreater(self.find("punchng")["matches"], 0)
 
     def test_nothing_matches_gibberish_and_the_limit_is_respected(self):
         self.assertEqual(self.find("zzzqqq xxyyzz")["reports"], [])

@@ -5,7 +5,7 @@ import { Eye } from "lucide-react";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
 import { moduleForPath } from "@/lib/permission-modules";
-import { lockIconOnlyDeletes, lockMutatingControls } from "@/lib/view-only-lock";
+import { lockIconOnlyDeletes, watchMutatingControls } from "@/lib/view-only-lock";
 import { LiveChip, ModeTabs, UpdatedRefresh, type FrameTab } from "../kit/MdHeaderParts";
 import MdPageHeader from "../kit/MdPageHeader";
 import { SkeletonBlock } from "../kit/states";
@@ -88,16 +88,30 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
   // the HR layout's view-only lock, for an MD whose copy of a page has been made read-only (permission_registry.MD_HR_GRANTS)
   const moduleKey = moduleForPath(location);
   const isViewOnly = isRouteViewOnly(user, location, moduleKey);
+  // (2026-11-21, performance: it used to re-scan every button of the document on every DOM change, which on a busy page
+  // was thousands of scans a minute; now the HR layout's incremental watcher, and the bins at most once a frame)
   useEffect(() => {
     if (!isViewOnly) return;
-    const relock = () => {
-      lockMutatingControls(document.body);
+    const stopWatching = watchMutatingControls(document.body);
+    const schedule = (cb: () => void) =>
+      typeof requestAnimationFrame === "function" ? requestAnimationFrame(cb) : window.setTimeout(cb, 16);
+    const cancel = (handle: number) =>
+      typeof cancelAnimationFrame === "function" ? cancelAnimationFrame(handle) : window.clearTimeout(handle);
+    let frame = 0;
+    const hideBins = () => {
+      frame = 0;
       lockIconOnlyDeletes(document.body);
     };
-    relock();
-    const observer = new MutationObserver(relock);
+    hideBins();
+    const observer = new MutationObserver(() => {
+      if (!frame) frame = schedule(hideBins);
+    });
     observer.observe(document.body, { childList: true, subtree: true });
-    return () => observer.disconnect();
+    return () => {
+      stopWatching();
+      observer.disconnect();
+      if (frame) cancel(frame);
+    };
   }, [isViewOnly, location]);
 
   // a sand panel with an eye: the MD can look at everything here but not change it
@@ -117,7 +131,8 @@ export default function MdEmbeddedFrame({ children }: { children: ReactNode }) {
     </div>
   );
 
-  if (!page) {
+  // a page that is all insights already (Analytics, md-nav `frame: false`) is shown as it is, like an unknown page
+  if (!page || page.frame === false) {
     return (
       <>
         {viewOnlyBanner}

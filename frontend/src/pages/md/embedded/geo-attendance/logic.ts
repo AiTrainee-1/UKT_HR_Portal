@@ -521,6 +521,7 @@ export function askQuestions(periodLabel: string, scopeText: string | null) {
     unusual: `Which on-duty sessions look unusual${when} (simulated GPS, far away, odd hours, left open, repeated rejections) and what should I check?`,
     people: `Who goes on duty most often${when}, and is it justified?`,
     live: "Who is on duty right now, who is awaiting approval and whose phone is not reporting a location?",
+    tracking: `How far did people travel on duty${when}, how complete are the journey records, and which automatic alerts went out (location off, permission, missing punches)? Who keeps getting them?`,
     compare: `How does on-duty work compare with the previous period${when}? Which figures moved most?`,
     briefing: `Explain the geo attendance summary${when} in more detail and tell me what to ask HR.`,
   };

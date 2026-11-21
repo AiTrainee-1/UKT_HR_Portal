@@ -258,6 +258,7 @@ describe("explore", () => {
   it("offers every page but the dashboard, in sidebar order, with the page's own summary", () => {
     const tiles = exploreTiles(ME.pages);
     expect(tiles.map((t) => t.id)).toEqual([
+      "analytics",
       "employees",
       "approvals",
       "branches",
@@ -273,6 +274,7 @@ describe("explore", () => {
       "leave",
       "requests",
       "payroll",
+      "communications",
       "reports",
       "recruitment",
       "activity",
@@ -286,7 +288,7 @@ describe("explore", () => {
 
   it("works before the page list has loaded", () => {
     const tiles = exploreTiles(undefined);
-    expect(tiles).toHaveLength(18);
+    expect(tiles).toHaveLength(20);
     expect(tiles.every((t) => t.summary === "")).toBe(true);
   });
 });

@@ -16,6 +16,14 @@ Source data and how a figure is made
   requests, because the ledger is bumped on approval only and can drift; the drift is reported.
 * Holidays come from ``Holiday``. The attendance engine applies every holiday row to every employee (the branch and
   department written on a row are not used), so holidays are not narrowed to the selected unit or department.
+* Casual Leave (updated 2026-11-21): a half day (first / second half) counts 0.5; the yearly balance is a fixed 12 days
+  from the cut-over (cl_balance.py), shown as its own block in ``leave_balances``; Casual Leave HR gives for an absent /
+  on-leave date on the Carry Forward tab is counted and named ("carry forward").
+* Permissions (Morning Late-In, Evening Early-Out, Middle One-Hour) are part of the HR page: ``leave_permissions`` counts
+  them against the monthly cap (PayrollSettings.permission_monthly_cap, attendance_final.permission_cap_status's rule).
+* Since 2026-11-21 a rejection must carry a reason: ``leave_approvals`` lists the reasons given; the reason an employee
+  picked in the apps (Sick Leave / Emergency / Personal / Other Reasons) is a grouping of its own (``by=reason``).
+* ``leave_list`` is the drill-down: the requests, leave days, people or permissions behind a figure, a page at a time.
 
 Nothing here writes. Reading goes through the data layer; no ``get()`` that creates a row is used.
 """
@@ -26,7 +34,8 @@ import statistics
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
-from ...models import Holiday, ResignationRequest
+from ...models import EmployeePermission, Holiday, LeaveRequest, ResignationRequest
+from ...reporting.definitions.requests_permission_duty_shared import load_settings, permission_cap
 from ...reporting.definitions.requests_leave_common import ist_bounds, ist_date
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, add_months, cached, change, envelope, parse_day, pct, prov
@@ -93,7 +102,13 @@ LOW_BALANCE_DAYS = 2.0
 LEDGER_MISMATCH_DAYS = 0.05
 LEDGER_WARN_ROWS = 5
 OVERDRAWN_WARN_PEOPLE = 5
-GROUP_BY = ("type", "department", "unit")
+GROUP_BY = ("type", "department", "unit", "reason")
+#: The reason an employee picks in the apps (LeaveRequest.reason_category).
+REASON_LABELS = dict(LeaveRequest.REASON_CATEGORY_CHOICES)
+NO_REASON_LABEL = "Reason not picked"
+PAGE_SIZE_DEFAULT = 25
+PAGE_SIZE_MAX = 100
+LIST_WHATS = ("requests", "days", "out", "cl", "permissions")
 
 _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2, "good": 3}
 
@@ -117,11 +132,21 @@ def _pick(entries: dict[str, dict], *ids: str) -> list[dict]:
     return [entries[i] for i in ids if i in entries]
 
 
+def reason_label(req: D.Req | None) -> str:
+    """The reason group of a leave day: what the employee picked in the apps; Casual Leave is its own group."""
+    if req is None:
+        return NO_REASON_LABEL
+    if req.type_key == D.CASUAL_KEY:
+        return D.CASUAL_LABEL
+    return REASON_LABELS.get(req.reason_category or "", NO_REASON_LABEL)
+
+
 def _tally(facts: D.Facts, lo: date, hi: date, key) -> dict:
-    """{group: {"days", "people", "requests"}} for the leave days in [lo, hi]; ``key(employee id, type key)`` names the group."""
+    """{group: {"days", "people", "requests"}} for the leave days in [lo, hi]; ``key(employee id, type key, request id)``
+    names the group."""
     out: dict = {}
     for eid, _day, weight, type_key, rid in facts.between(lo, hi):
-        slot = out.setdefault(key(eid, type_key), {"days": 0.0, "people": set(), "requests": set()})
+        slot = out.setdefault(key(eid, type_key, rid), {"days": 0.0, "people": set(), "requests": set()})
         slot["days"] += weight
         slot["people"].add(eid)
         slot["requests"].add(rid)
@@ -219,7 +244,7 @@ def _future_note(period: Period, today: date) -> list[str]:
 
 _COMMON_CAVEATS = [
     "Same rule as the Attendance page: only approved leave, Sundays skipped, a half day is 0.5, requests that overlap "
-    "count once, production employees left out, casual leave added as a paid day.",
+    "count once, production employees left out, casual leave added (a half day of Casual Leave is 0.5).",
 ]
 
 
@@ -610,15 +635,17 @@ def leave_groups(scope: Scope, period: Period, by: str = "type", limit: int = LI
     holidays = D.holiday_dates(previous.start, period.end)
     capacity = D.working_days(period.start, period.end, holidays)
 
-    def key(eid: int, type_key: str) -> str:
+    def key(eid: int, type_key: str, rid: int) -> str:
         if by == "type":
             return type_key
+        if by == "reason":
+            return reason_label(facts.reqs.get(rid))
         who = facts.who[eid]
         return who.dept if by == "department" else who.unit
 
     cur = _tally(facts, period.start, period.end, key)
     old = _tally(facts, previous.start, previous.end, key)
-    head_counts = {"type": None, "department": heads.by_dept, "unit": heads.by_unit}[by]
+    head_counts = {"type": None, "reason": None, "department": heads.by_dept, "unit": heads.by_unit}[by]
     total_days = sum(v["days"] for v in cur.values())
     company_per_head = total_days / heads.total if heads.total else None
 
@@ -635,7 +662,9 @@ def leave_groups(scope: Scope, period: Period, by: str = "type", limit: int = LI
         none_label = D.NO_DEPARTMENT if by == "department" else D.NO_UNIT
         rows.append(
             {
-                "key": NONE_KEY if label == none_label and by != "type" else (name if by == "type" else label),
+                "key": NONE_KEY
+                if label == none_label and by not in ("type", "reason")
+                else (name if by == "type" else label),
                 "label": label,
                 "sub": ("Paid" if meta.paid else "Unpaid" if meta.paid is False else None) if meta else None,
                 "leaveDays": days,
@@ -651,7 +680,7 @@ def leave_groups(scope: Scope, period: Period, by: str = "type", limit: int = LI
                 "lowSample": headcount is not None and headcount < MIN_GROUP_HEADS,
             }
         )
-    if by == "type":
+    if by in ("type", "reason"):
         rows = [r for r in rows if r["leaveDays"] or r["previousDays"]]
         rows.sort(key=lambda r: (-r["leaveDays"], -r["previousDays"], r["label"].lower()))
     else:
@@ -997,8 +1026,8 @@ def leave_balances(scope: Scope, year: int | None = None, limit: int = LIST_DEFA
         filters=[str(year), scope.describe()],
         caveats=[
             "The app does not stop leave beyond the allocation, and the allocation is a record HR maintains by hand.",
-            "Production employees, leavers and leave types HR has switched off are left out. Casual leave (its own "
-            "one-a-month system) has no allocation here.",
+            "Production employees, leavers and leave types HR has switched off are left out. Casual Leave has its own "
+            "fixed 12-day yearly balance, shown separately (the casual block).",
             "Carried-forward days are not added to the allocation (the ledger shows them for information only).",
         ],
     )
@@ -1015,10 +1044,12 @@ def leave_balances(scope: Scope, year: int | None = None, limit: int = LIST_DEFA
         rows=len(rows),
         filters=[str(year), scope.describe()],
     )
+    casual = _casual_balance(scope, year, limit)
     return envelope(
         {
             "year": year,
             "yearProgressPct": progress,
+            "casual": casual,
             "totals": {
                 "employees": len(people),
                 "allocated": round(total["allocated"], 1),
@@ -1041,8 +1072,96 @@ def leave_balances(scope: Scope, year: int | None = None, limit: int = LIST_DEFA
             "overdrawnTotal": len(overdrawn),
         },
         scope=scope,
-        provenance=[entry, ledger],
+        provenance=[entry, ledger, _casual_provenance(scope, year, casual)],
         notes=notes,
+    )
+
+
+def _casual_balance(scope: Scope, year: int, limit: int) -> dict:
+    """Casual Leave's own year: 12 days each, used / waiting / left, who has used it up or is close, and the days HR turned
+    into Casual Leave on the Carry Forward tab."""
+    rows, meta = D.load_cl_balances(scope, year)
+    used = round(sum(r.used for r in rows), 1)
+    pending = round(sum(r.pending for r in rows), 1)
+    entitled = D.CL_ENTITLEMENT * len(rows)
+    exhausted = [r for r in rows if r.remaining <= 0]
+    low = [r for r in rows if 0 < r.remaining <= D.CL_LOW_DAYS]
+    assigned = [r for r in rows if r.assigned_days]
+
+    def person(r: D.ClBalance) -> dict:
+        return {
+            "employeeId": r.who.id,
+            **D.person_row(r.who),
+            "used": round(r.used, 1),
+            "pending": round(r.pending, 1),
+            "remaining": round(r.remaining, 1),
+            "carryForwardDays": round(r.assigned_days, 1),
+        }
+
+    by_dept: dict[str, dict] = {}
+    for r in rows:
+        d = by_dept.setdefault(r.who.dept, {"label": r.who.dept, "employees": 0, "used": 0.0, "pending": 0.0})
+        d["employees"] += 1
+        d["used"] += r.used
+        d["pending"] += r.pending
+    dept_rows = sorted(
+        (
+            {
+                **d,
+                "used": round(d["used"], 1),
+                "pending": round(d["pending"], 1),
+                "usedPct": pct(d["used"], D.CL_ENTITLEMENT * d["employees"]),
+                "usedPerEmployee": round(d["used"] / d["employees"], 2) if d["employees"] else None,
+            }
+            for d in by_dept.values()
+        ),
+        key=lambda d: (-(d["usedPerEmployee"] or 0), d["label"].lower()),
+    )
+    ranked = sorted(rows, key=lambda r: (r.remaining, -r.used, r.who.code))
+    return {
+        "entitlement": D.CL_ENTITLEMENT,
+        "tracked": meta["tracked"],
+        "since": meta["since"],
+        "cutOver": meta["cutOver"],
+        "employees": len(rows),
+        "used": used,
+        "pending": pending,
+        "remaining": round(sum(r.remaining for r in rows), 1),
+        "usedPct": pct(used, entitled),
+        "exhausted": len(exhausted),
+        "low": len(low),
+        "lowDays": D.CL_LOW_DAYS,
+        "untouched": sum(1 for r in rows if not r.used and not r.pending),
+        "halfDays": sum(r.half_days for r in rows),
+        "carryForward": {
+            "employees": len(assigned),
+            "days": round(sum(r.assigned_days for r in rows), 1),
+        },
+        "byDepartment": dept_rows[:LIST_MAX],
+        "lowest": [person(r) for r in ranked if r.used or r.pending][:limit],
+    }
+
+
+def _casual_provenance(scope: Scope, year: int, casual: dict) -> dict:
+    return prov(
+        "leave-casual-balance",
+        "Casual Leave balance",
+        dataset="Casual leave requests, attendance edits waiting (a proposed Casual Leave), payroll settings",
+        definition=(
+            f"Every active staff member has {D.CL_ENTITLEMENT} Casual Leave days a calendar year from the cut-over "
+            f"({casual['cutOver']}); unused days lapse on 31 December. Approved and waiting requests both hold days (so "
+            "nobody can ask for more than is left), a half day is 0.5. Casual Leave HR gives for an absent or on-leave date "
+            "on the Casual Leave page's Carry Forward tab counts against the year whatever its date: it is shown as 'carry "
+            "forward'. The 12 is fixed: no extra days are ever added."
+        ),
+        formula="left = 12 − (approved + waiting Casual Leave days dated in the year, on/after the cut-over)",
+        rows=casual["employees"],
+        filters=[str(year), scope.describe()],
+        caveats=[
+            "A Casual Leave on a birthday that was not worked (the new birthday rule) uses no balance in the HRMS; that "
+            "case is not told apart here, so such a day shows as used.",
+            "Production employees are left out (Casual Leave is for staff).",
+        ],
     )
 
 
@@ -1465,6 +1584,27 @@ def _rejection_rows(apps: list[D.Application], key, limit: int) -> list[dict]:
     return rows[:limit]
 
 
+def _reject_reasons(apps: list[D.Application], limit: int = 6) -> dict:
+    """The reasons approvers gave for the leave requests of the period they rejected (required since 2026-11-21): the same
+    words in any case or spacing are one reason."""
+    rejected = [a for a in apps if a.status == "rejected"]
+    groups: dict[str, dict] = {}
+    for a in rejected:
+        if not a.remark:
+            continue
+        key = " ".join(a.remark.lower().split())
+        slot = groups.setdefault(key, {"key": key, "reason": a.remark.strip(), "count": 0})
+        slot["count"] += 1
+    with_reason = sum(g["count"] for g in groups.values())
+    rows = sorted(groups.values(), key=lambda g: (-g["count"], g["key"]))
+    return {
+        "rejected": len(rejected),
+        "withReason": with_reason,
+        "withoutReason": len(rejected) - with_reason,
+        "rows": [{**g, "sharePct": pct(g["count"], with_reason)} for g in rows[:limit]],
+    }
+
+
 @cached()
 def leave_approvals(scope: Scope, period: Period, limit: int = LIST_DEFAULT, today: date | None = None) -> dict:
     """The approval process: requests applied for in the period and what became of them (approved, rejected, still waiting,
@@ -1496,6 +1636,7 @@ def leave_approvals(scope: Scope, period: Period, limit: int = LIST_DEFAULT, tod
             "days": a.total,
             "halfDay": a.half,
             "appliedOn": _iso(a.applied),
+            "reasonCategory": REASON_LABELS.get(a.reason_category or ""),
             "waitingDays": max(0, (now - a.applied).days) if a.applied else None,
             "startsInDays": (a.start - now).days if a.start else None,
             "stage": a.stage,
@@ -1547,6 +1688,10 @@ def leave_approvals(scope: Scope, period: Period, limit: int = LIST_DEFAULT, tod
             "decisionTime": decision,
             "rejectionByType": _rejection_rows(cur_apps, lambda a: a.type_label, 8),
             "rejectionByDepartment": _rejection_rows(cur_apps, lambda a: a.who.dept, 8),
+            "rejectionByReason": _rejection_rows(
+                cur_apps, lambda a: REASON_LABELS.get(a.reason_category or "", NO_REASON_LABEL), 8
+            ),
+            "rejectReasons": _reject_reasons(cur_apps),
             "pending": {**pending, "rows": waiting, "total": pending["count"], "truncated": pending["count"] > limit},
             "previousPeriod": previous.to_json(),
         },
@@ -1558,6 +1703,360 @@ def leave_approvals(scope: Scope, period: Period, limit: int = LIST_DEFAULT, tod
             _pending_provenance(scope, pending["count"]),
         ],
         notes=notes,
+    )
+
+
+# ─── permissions (a tab of the HR Leave & Holiday page) ─────────────────────────────────────────────────────────
+
+PERMISSION_TYPES = dict(EmployeePermission.TYPE_CHOICES)
+UNTYPED_PERMISSION = "Type not set"
+#: A department is called out when this share of its approved permissions went beyond the monthly cap (min 5 approved).
+PERMISSION_EXCESS_WARN_PCT = 30.0
+PERMISSION_EXCESS_MIN = 5
+
+
+def _permission_rows(scope: Scope, lo: date, hi: date) -> tuple[list[dict], int]:
+    """Every permission dated in [lo, hi] for the people in scope, each with its place against the monthly cap: an approved
+    permission is ``within_cap`` while the employee has fewer earlier approved permissions in its calendar month than the
+    cap, else ``excess`` (attendance_final.bulk_permission_cap_status's rule; an excess one shifts nothing). Two queries."""
+    cap = permission_cap(load_settings())
+    month_start = lo.replace(day=1)
+    rows = list(
+        EmployeePermission.objects.filter(scope.employee_q("employee__"), date__gte=month_start, date__lte=hi)
+        .order_by("date", "id")
+        .values(
+            "id",
+            "employee_id",
+            "date",
+            "status",
+            "type",
+            "permission_time",
+            "reason",
+            "hr_comment",
+            "approval_trail",
+            "created_at",
+            *D.EMP_VALUES,
+        )
+    )
+    order: dict[tuple[int, int, int], int] = defaultdict(int)
+    out = []
+    for r in rows:
+        place = "not_applicable"
+        if r["status"] == "approved":
+            slot = (r["employee_id"], r["date"].year, r["date"].month)
+            place = "within_cap" if order[slot] < cap else "excess"
+            order[slot] += 1
+        if r["date"] < lo:
+            continue
+        slug = EmployeePermission.normalize_type(r["type"])
+        last = D.last_decision(r["approval_trail"]) if r["status"] in ("approved", "rejected") else {}
+        out.append(
+            {
+                "id": r["id"],
+                "who": D.who_from(r, r["employee_id"]),
+                "date": r["date"],
+                "status": r["status"],
+                "typeKey": slug or "untyped",
+                "type": PERMISSION_TYPES.get(slug or "", UNTYPED_PERMISSION),
+                "time": r["permission_time"].strftime("%H:%M") if r["permission_time"] else None,
+                "reason": (r["reason"] or "").strip() or None,
+                "remark": (str(last.get("comment") or "").strip() or (r["hr_comment"] or "").strip() or None)
+                if r["status"] in ("approved", "rejected")
+                else None,
+                "cap": place,
+                "applied": ist_date(r["created_at"]),
+            }
+        )
+    return out, cap
+
+
+@cached()
+def leave_permissions(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dict:
+    """Permissions dated in the period (Morning Late-In, Evening Early-Out, Middle One-Hour): how many were asked for,
+    approved, rejected and waiting, how many approved ones went beyond the monthly cap (they shift nothing), by type and
+    by department, against the previous period, and the people who used the cap up."""
+    limit = int_arg(limit, "limit", LIST_DEFAULT, 1, LIST_MAX)
+    previous = period.previous()
+    rows, cap = _permission_rows(scope, period.start, period.end)
+    prev_rows, _ = _permission_rows(scope, previous.start, previous.end)
+
+    def tally(items: list[dict]) -> dict:
+        c = Counter(i["status"] for i in items)
+        approved = c["approved"]
+        excess = sum(1 for i in items if i["cap"] == "excess")
+        return {
+            "requested": len(items),
+            "approved": approved,
+            "rejected": c["rejected"],
+            "pending": c["pending"],
+            "excess": excess,
+            "excessPct": pct(excess, approved),
+            "people": len({i["who"].id for i in items}),
+        }
+
+    cur, old = tally(rows), tally(prev_rows)
+    by_type: dict[str, dict] = {}
+    by_dept: dict[str, dict] = {}
+    at_cap: dict[int, dict] = {}
+    for i in rows:
+        t = by_type.setdefault(i["typeKey"], {"key": i["typeKey"], "label": i["type"], "items": []})
+        t["items"].append(i)
+        d = by_dept.setdefault(i["who"].dept, {"key": i["who"].dept, "label": i["who"].dept, "items": []})
+        d["items"].append(i)
+        if i["cap"] == "excess":
+            p = at_cap.setdefault(i["who"].id, {"who": i["who"], "excess": 0, "approved": 0})
+            p["excess"] += 1
+    for i in rows:
+        if i["status"] == "approved" and i["who"].id in at_cap:
+            at_cap[i["who"].id]["approved"] += 1
+
+    def group_rows(groups: dict[str, dict]) -> list[dict]:
+        out = [{"key": g["key"], "label": g["label"], **tally(g["items"])} for g in groups.values()]
+        out.sort(key=lambda r: (-r["requested"], r["label"].lower()))
+        return out
+
+    people = sorted(
+        (
+            {
+                "employeeId": p["who"].id,
+                **D.person_row(p["who"]),
+                "approved": p["approved"],
+                "excess": p["excess"],
+            }
+            for p in at_cap.values()
+        ),
+        key=lambda r: (-r["excess"], -r["approved"], r["employeeCode"]),
+    )
+    metrics = {k: _metric(cur[k], old[k]) for k in ("requested", "approved", "rejected", "excess", "excessPct")}
+    entry = prov(
+        "leave-permissions",
+        "Permissions",
+        dataset="Permission requests, payroll settings (the monthly cap)",
+        definition=(
+            "Permissions dated in the period, every status. An approved permission counts against the employee's monthly "
+            f"cap ({cap} a month): while the employee has had fewer approved permissions that month than the cap it is "
+            "within the cap and shifts the day's start or end (Morning Late-In / Evening Early-Out); beyond the cap it is "
+            "'over the cap' and shifts nothing (the day is judged as if there were no permission)."
+        ),
+        formula="over the cap = approved permissions after the first <cap> approved ones of the employee's calendar month",
+        rows=len(rows),
+        filters=_filters(scope, period),
+        caveats=["Every permission is a fixed 60 minutes; older rows may record another length."],
+    )
+    notes = [] if rows else [f"No permissions are dated in {period.label} for this selection."]
+    return envelope(
+        {
+            "cap": cap,
+            "totals": cur,
+            "metrics": metrics,
+            "byType": group_rows(by_type),
+            "byDepartment": group_rows(by_dept)[:LIST_MAX],
+            "overCap": people[:limit],
+            "overCapTotal": len(people),
+            "previousPeriod": previous.to_json(),
+        },
+        period=period,
+        scope=scope,
+        provenance=[entry],
+        notes=notes,
+    )
+
+
+# ─── the drill-down: the requests, days, people or permissions behind a figure ──────────────────────────────────
+
+
+def _page(items: list[dict], page, page_size) -> tuple[list[dict], int, int, int]:
+    page = int_arg(page, "page", 1, 1, 100_000)
+    size = int_arg(page_size, "pageSize", PAGE_SIZE_DEFAULT, 1, PAGE_SIZE_MAX)
+    start = (page - 1) * size
+    return items[start : start + size], page, size, max(1, -(-len(items) // size))
+
+
+def _matches(value: str | None, wanted: str | None) -> bool:
+    return not wanted or (value or "").lower() == wanted.strip().lower() or (wanted == NONE_KEY and not value)
+
+
+def _reason_key(category: str | None) -> str:
+    return category or "none"
+
+
+@cached()
+def leave_list(
+    scope: Scope,
+    period: Period,
+    what: str = "requests",
+    status: str | None = None,
+    type: str | None = None,
+    department: str | None = None,
+    unit: str | None = None,
+    reason: str | None = None,
+    notice: str | None = None,
+    day: str | None = None,
+    filter: str | None = None,
+    year: int | None = None,
+    page: int = 1,
+    page_size: int = PAGE_SIZE_DEFAULT,
+    today: date | None = None,
+) -> dict:
+    """The rows behind a figure on the Leave & Holiday Insights, a page at a time.
+
+    * ``requests``: leave requests applied for in the period (``status`` approved | rejected | pending | all; ``pending``
+      alone means waiting NOW, whatever date), filtered by leave ``type`` (label), ``department``, ``reason`` (sick |
+      emergency | personal | other | none) and ``notice=short`` (applied on or after the first day).
+    * ``days``: the approved leave (and Casual Leave) with days inside the period, by ``type`` (label), ``department``,
+      ``unit`` or ``reason`` (the reason group's label); ``filter=carry_forward`` keeps the Casual Leave HR gave on the Carry
+      Forward tab.
+    * ``out``: who is on approved leave on ``day`` (YYYY-MM-DD, today by default).
+    * ``cl``: staff by Casual Leave balance in ``year`` (this year by default; ``filter`` exhausted | low | carry_forward |
+      used), by ``department``.
+    * ``permissions``: permissions dated in the period (``status``; ``filter=excess`` over the monthly cap; ``type`` label)."""
+    what = (what or "requests").strip().lower()
+    if what not in LIST_WHATS:
+        raise MdParamError(f"'what' must be one of: {', '.join(LIST_WHATS)}.")
+    now = today or D.today()
+    items: list[dict] = []
+    title = ""
+    if what == "requests":
+        status = (status or "all").strip().lower()
+        if status not in ("all", "approved", "rejected", "pending"):
+            raise MdParamError("'status' must be all, approved, rejected or pending.")
+        apps = D.applications_pending(scope) if status == "pending" else D.applications_made(scope, period.start, period.end)
+        for a in apps:
+            if status not in ("all", "pending") and a.status != status:
+                continue
+            if not (_matches(a.type_label, type) and _matches(a.who.dept, department)):
+                continue
+            if reason and _reason_key(a.reason_category) != reason.strip().lower():
+                continue
+            if notice == "short" and not (a.notice is not None and a.notice <= UNPLANNED_NOTICE_DAYS):
+                continue
+            items.append(
+                {
+                    "key": f"leave-{a.id}",
+                    "requestId": a.id,
+                    "employeeId": a.who.id,
+                    **D.person_row(a.who),
+                    "type": a.type_label,
+                    "from": _iso(a.start),
+                    "to": _iso(a.end),
+                    "days": a.total,
+                    "halfDay": a.half_slot,
+                    "status": a.status,
+                    "appliedOn": _iso(a.applied),
+                    "noticeDays": a.notice,
+                    "waitingDays": max(0, (now - a.applied).days) if a.applied and a.status == "pending" else None,
+                    "stage": a.stage or None,
+                    "reasonCategory": REASON_LABELS.get(a.reason_category or ""),
+                    "reason": a.reason,
+                    "remark": a.remark,
+                    "decidedBy": a.decided_by,
+                }
+            )
+        items.sort(key=lambda r: (r["appliedOn"] or "", r["requestId"]), reverse=status != "pending")
+        title = "Leave requests"
+    elif what in ("days", "out"):
+        if what == "out":
+            target = _target_day(day, now)
+            lo = hi = target
+        else:
+            lo, hi = period.start, period.end
+        facts = D.load_facts(scope, lo, hi)
+        per_req: dict[int, float] = defaultdict(float)
+        for _eid, _d, weight, _type, rid in facts.between(lo, hi):
+            per_req[rid] += weight
+        for rid, days in per_req.items():
+            req = facts.reqs[rid]
+            who = facts.who[req.employee_id]
+            if what == "out" and who.status != "active":
+                continue
+            label = facts.types[req.type_key].label
+            group = reason_label(req)
+            if not (_matches(label, type) and _matches(who.dept, department) and _matches(who.unit, unit)):
+                continue
+            if reason and group.lower() != reason.strip().lower():
+                continue
+            if filter == "carry_forward" and not req.assigned:
+                continue
+            items.append(
+                {
+                    "key": f"{'cl' if rid < 0 else 'leave'}-{abs(rid)}",
+                    "requestId": abs(rid),
+                    "casual": rid < 0,
+                    "employeeId": who.id,
+                    **D.person_row(who),
+                    "type": label,
+                    "from": _iso(req.start),
+                    "to": _iso(req.end),
+                    "daysInPeriod": round(days, 1),
+                    "halfDay": req.slot if req.half else None,
+                    "reasonGroup": group,
+                    "carryForward": req.assigned,
+                    "appliedOn": _iso(req.applied),
+                }
+            )
+        items.sort(key=lambda r: (-r["daysInPeriod"], r["department"].lower(), r["employeeName"].lower()))
+        title = "On leave" if what == "out" else "Leave taken"
+    elif what == "cl":
+        cl_year = int_arg(year, "year", now.year, 2000, 2100)
+        rows, _meta = D.load_cl_balances(scope, cl_year)
+        for r in rows:
+            if not _matches(r.who.dept, department):
+                continue
+            if filter == "exhausted" and r.remaining > 0:
+                continue
+            if filter == "low" and not (0 < r.remaining <= D.CL_LOW_DAYS):
+                continue
+            if filter == "carry_forward" and not r.assigned_days:
+                continue
+            if filter == "used" and not (r.used or r.pending):
+                continue
+            items.append(
+                {
+                    "key": f"cl-{r.who.id}",
+                    "employeeId": r.who.id,
+                    **D.person_row(r.who),
+                    "used": round(r.used, 1),
+                    "pending": round(r.pending, 1),
+                    "remaining": round(r.remaining, 1),
+                    "carryForwardDays": round(r.assigned_days, 1),
+                    "carryForwardDates": r.assigned_dates,
+                }
+            )
+        items.sort(key=lambda r: (r["remaining"], -r["used"], r["employeeCode"]))
+        title = f"Casual Leave {cl_year}"
+    else:  # permissions
+        rows, _cap = _permission_rows(scope, period.start, period.end)
+        wanted = (status or "all").strip().lower()
+        for i in rows:
+            if wanted != "all" and i["status"] != wanted:
+                continue
+            if filter == "excess" and i["cap"] != "excess":
+                continue
+            if not (_matches(i["type"], type) and _matches(i["who"].dept, department)):
+                continue
+            items.append(
+                {
+                    "key": f"permission-{i['id']}",
+                    "requestId": i["id"],
+                    "employeeId": i["who"].id,
+                    **D.person_row(i["who"]),
+                    "type": i["type"],
+                    "date": _iso(i["date"]),
+                    "time": i["time"],
+                    "status": i["status"],
+                    "overCap": i["cap"] == "excess",
+                    "reason": i["reason"],
+                    "remark": i["remark"],
+                    "appliedOn": _iso(i["applied"]),
+                }
+            )
+        items.sort(key=lambda r: (r["date"], r["requestId"]), reverse=True)
+        title = "Permissions"
+    shown, page_no, size, pages = _page(items, page, page_size)
+    return envelope(
+        {"what": what, "title": title, "items": shown, "total": len(items), "page": page_no, "pageSize": size, "pages": pages},
+        period=period,
+        scope=scope,
     )
 
 
@@ -1669,6 +2168,21 @@ def leave_briefing(scope: Scope, period: Period, today: date | None = None) -> d
         if requests["decided"] >= REJECTION_MIN_DECIDED and rejection >= REJECTION_WARN_PCT:
             tone = "watch"
     sentences.append(_line("approvals", text + ".", tone))
+
+    permissions = leave_permissions(scope, period, 1)
+    p = permissions["totals"]
+    if p["requested"]:
+        text = (
+            f"{num(p['requested'])} {plural(p['requested'], 'permission')} dated in {period.label}, "
+            f"{num(p['approved'])} approved"
+        )
+        if p["excess"]:
+            text += (
+                f"; {num(p['excess'])} of the approved went beyond the monthly cap of {num(permissions['cap'])} "
+                "and shift nothing"
+            )
+        heavy = (p["excessPct"] or 0) >= PERMISSION_EXCESS_WARN_PCT and p["approved"] >= PERMISSION_EXCESS_MIN
+        sentences.append(_line("permissions", text + ".", "watch" if heavy else "neutral"))
 
     if holidays["upcoming"]:
         nxt = holidays["upcoming"][0]
@@ -2073,7 +2587,8 @@ TOOLS = [
     ),
     tool(
         "leave_breakdown",
-        "Leave days ranked by leave type, by department or by unit: days, share of all leave, the previous period, people "
+        "Leave days ranked by leave type, by department, by unit or by the reason the employee picked (Sick Leave, "
+        "Emergency, Personal, Other Reasons; Casual Leave is its own group): days, share of all leave, the previous period, people "
         "on leave and, for departments and units, days per employee and how it compares with the company average. Use for "
         "'which leave type is used most', 'which department takes the most leave' and 'compare units'. Small groups "
         "(fewer than 5 staff) are flagged.",
@@ -2106,8 +2621,10 @@ TOOLS = [
         "Yearly leave balances for the active staff: days allocated, days taken (recomputed from approved requests), days "
         "unused (the leave liability, in days not money), balances exhausted or running low, people who took more than "
         "they were allocated (named), days that carry over, and how far HR's balance ledger disagrees with the requests; by "
-        "leave type and by department. Use for 'how much leave is unused', 'who has used up their leave' and 'what is "
-        "our leave liability'. The year defaults to this year.",
+        "leave type and by department; plus Casual Leave's own year (12 days each: used, waiting, left, who has used it "
+        "up, and the days HR turned into Casual Leave on the Carry Forward tab). Use for 'how much leave is unused', 'who "
+        "has used up their leave', 'how much Casual Leave is left' and 'what is our leave liability'. The year defaults "
+        "to this year.",
         leave_balances,
         page=PAGE,
         period=None,
@@ -2141,6 +2658,18 @@ TOOLS = [
         period="last_90_days",
         extra={"limit": integer_param(f"How many upcoming holidays (default {UPCOMING_DEFAULT}, at most {UPCOMING_MAX})", minimum=1, maximum=UPCOMING_MAX)},
         defaults={"limit": UPCOMING_DEFAULT},
+    ),
+    tool(
+        "leave_permissions",
+        "Permissions for a period (Morning Late-In, Evening Early-Out, Middle One-Hour): how many were asked for, approved, "
+        "rejected and waiting, how many approved ones went beyond the monthly cap (those shift nothing), by type and by "
+        "department, against the previous period, and the people who went over the cap (named). Use for 'how many "
+        "permissions this month', 'who uses the most permissions', 'are people going over the permission limit'.",
+        leave_permissions,
+        page=PAGE,
+        period="last_30_days",
+        extra={"limit": _LIMIT},
+        defaults={"limit": LIST_DEFAULT},
     ),
     tool(
         "leave_approvals",

@@ -11,12 +11,14 @@ analytics/tea_break.py and returns its envelope.
   GET rule        what counts as an overrun, in plain words (no period or scope)
   GET attention   "needs your attention" for the selected period and scope
   GET story       the Insights tab's summary: a few plain sentences written from the figures above (no AI)
+  GET records     drill-down: the breaks behind a figure (?status=within|overrun|long|no_return|in_progress|refused,
+                  by=department|unit|type|gate&group=<row key>, employee=<id>, page=, pageSize=)
 """
 
 from django.urls import path
 
 from ..analytics import tea_break as tea
-from ..common import md_get, request_params, resolve_period, resolve_scope
+from ..common import MdParamError, md_get, request_params, resolve_period, resolve_scope
 
 DEFAULT_PERIOD = "last_30_days"
 
@@ -86,6 +88,30 @@ def story(request):
     return tea.tea_story(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
 
 
+def _whole(params: dict, name: str, default: int, low: int, high: int) -> int:
+    raw = params.get(name)
+    if raw in (None, ""):
+        return default
+    if not str(raw).strip().isdigit():
+        raise MdParamError(f"'{name}' must be a whole number, got '{raw}'.")
+    return max(low, min(high, int(str(raw).strip())))
+
+
+@md_get
+def records(request):
+    params = request_params(request)
+    return tea.tea_records(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        status=(params.get("status") or "").strip() or None,
+        group_by=(params.get("by") or "").strip() or None,
+        group=" ".join(str(params.get("group") or "").split())[:120] or None,
+        employee=_whole(params, "employee", 0, 0, 10**9) or None,
+        page=_whole(params, "page", 1, 1, 10_000),
+        page_size=_whole(params, "pageSize", 25, 1, 100),
+    )
+
+
 urlpatterns = [
     path("summary", summary),
     path("trend", trend),
@@ -96,4 +122,5 @@ urlpatterns = [
     path("rule", rule),
     path("attention", attention),
     path("story", story),
+    path("records", records),
 ]

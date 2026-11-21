@@ -292,6 +292,10 @@ class TeaBreakRule(models.Model):
     isn't a rule HR tunes, it's just when an open scan stops being plausible."""
 
     allowed_minutes = models.IntegerField(default=15, db_column="allowed_minutes")
+    # Owner 2026-11-21: after an employee's successful tea-break scan (out or back in), the same employee's next scan
+    # within this many minutes creates nothing and the gate shows "already scanned" (no duplicate breaks from a double
+    # scan); 0 switches the cooldown off.
+    scan_cooldown_minutes = models.IntegerField(default=5, db_default=5, db_column="scan_cooldown_minutes")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 
     class Meta:

@@ -7,7 +7,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 
 // The gate monitor in a browser-like DOM: the sign-in (no token sent, errors in plain words, already-signed-in forward,
 // why a sign-in ended), and the console (the gate's own token on every call, scanning by typed code and by the scanner,
-// an answer it does not know, the heartbeat, a sign-in that ends, Sign out to the gate's own page, the records view).
+// the colour the whole page takes for each answer and how it fades, the tea-break cooldown and return, an answer it does
+// not know, no connection, the heartbeat, a sign-in that ends, Sign out to the gate's own page, the records view).
 
 const h = vi.hoisted(() => ({ toast: vi.fn(), speak: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
@@ -17,7 +18,7 @@ vi.mock("./scanner", async (original) => ({
   speak: h.speak,
 }));
 
-import GateMonitorConsole from "./GateMonitorConsole";
+import GateMonitorConsole, { GLOW_MS } from "./GateMonitorConsole";
 import GateMonitorLogin from "./GateMonitorLogin";
 import { resetGateSessionEnd } from "./client";
 
@@ -362,8 +363,20 @@ describe("console", () => {
     expect(scan.body).toEqual({ qrToken: "P.1A.2B.SIGNATURE" });
     expect(scan.auth).toBe("Bearer gate-token");
     const banner = byTestId("scan-result")!;
-    expect(banner.dataset.tone).toBe("teal");
+    expect(banner.dataset.tone).toBe("green");
     expect(byTestId("scan-result-title")?.textContent).toBe("Allowed - exit recorded");
+    // the whole page answers: the page, the edge light and the scanner card take the colour
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("green");
+    expect(byTestId("scan-glow")?.dataset.gkTone).toBe("green");
+    expect(byTestId("scan-glow")?.dataset.on).toBe("true");
+    expect(byTestId("scan-card")?.dataset.on).toBe("true");
+    expect(byTestId("scan-zone")?.dataset.state).toBe("green");
+    expect(byTestId("scan-zone")?.textContent).toContain("Allowed - exit recorded");
+    expect(byTestId("scan-glyph")?.dataset.glyph).toBe("check");
+    // and says it, in words and aloud (colour is never the only signal)
+    expect(byTestId("scan-announce")?.textContent).toContain("Allowed - exit recorded. Rajesh Kumar.");
+    expect(byTestId("scan-announce")?.getAttribute("aria-live")).toBe("assertive");
+    expect(h.speak.mock.calls).toEqual([["Approved. You may go."]]);
     expect(banner.textContent).toContain("Rajesh Kumar");
     expect(banner.textContent).toContain("Bank, Peelamedu");
     expect(banner.textContent).toContain("Approved by");
@@ -371,6 +384,7 @@ describe("console", () => {
     expect(calls.some((c) => c.path === "/api/gate-monitor/summary")).toBe(true);
     await click(byTestId("scan-result-done"));
     expect(byTestId("scan-result")).toBeNull();
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("idle");
   });
 
   it("scans from the keyboard-wedge scanner anywhere on the page, once per pass", async () => {
@@ -433,7 +447,7 @@ describe("console", () => {
     );
     await settle();
     expect(byTestId("scan-result-title")?.textContent).toBe("Tea break started");
-    expect(byTestId("scan-result")?.dataset.tone).toBe("amber");
+    expect(byTestId("scan-result")?.dataset.tone).toBe("green");
     expect(h.speak.mock.calls).toEqual([["Tea break started."]]);
     // every scan reached the server once
     expect(calls.filter((c) => c.path === "/api/gate-monitor/scan").map((c) => c.body)).toEqual([
@@ -459,7 +473,9 @@ describe("console", () => {
     await type(q<HTMLInputElement>("#gate-code")!, "T.1.SIG");
     await submit(byTestId("code-form"));
     expect(byTestId("scan-result-title")?.textContent).toBe("Denied - no tea breaks at this gate");
-    expect(byTestId("scan-result")?.dataset.tone).toBe("rose");
+    expect(byTestId("scan-result")?.dataset.tone).toBe("red");
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("red");
+    expect(byTestId("scan-glyph")?.dataset.glyph).toBe("cross");
     expect(byTestId("scan-result")?.textContent).toContain("Tea break");
     await type(q<HTMLInputElement>("#gate-code")!, "T.2.SIG");
     await submit(byTestId("code-form"));
@@ -468,6 +484,120 @@ describe("console", () => {
     await submit(byTestId("code-form"));
     expect(byTestId("scan-result-title")?.textContent).toBe("Check with HR");
     expect(byTestId("scan-result-message")?.textContent).toBe("Server error");
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("neutral");
+  });
+
+  it("answers a repeat tea-break scan in the cooldown in orange, with when to scan again and a countdown", async () => {
+    signIn();
+    const now = Date.now();
+    answers["POST /api/gate-monitor/scan"] = () => ({
+      status: 409,
+      body: {
+        result: "cooldown",
+        kind: "tea_break",
+        lastAction: "out",
+        lastScanAt: new Date(now - 88_000).toISOString(),
+        retryAt: new Date(now + 212_000).toISOString(),
+        waitSeconds: 212,
+        cooldownMinutes: 5,
+        message: "Already scanned at 10:05 (tea break started). Scan again after 10:10.",
+        employee: { id: 4, name: "Priya S", employeeCode: "30111", department: "Weaving", photoUrl: null },
+      },
+    });
+    await mount("/gatemonitor/console");
+    await type(q<HTMLInputElement>("#gate-code")!, "T.1A.COOLDOWNCODE01");
+    await submit(byTestId("code-form"));
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("orange");
+    expect(byTestId("scan-result")?.dataset.result).toBe("cooldown");
+    expect(byTestId("scan-result")?.dataset.tone).toBe("orange");
+    expect(byTestId("scan-result-title")?.textContent).toBe("Already scanned - please wait");
+    expect(byTestId("scan-result-message")?.textContent).toMatch(
+      /^Already scanned at \d\d:\d\d - tea break started\. Scan again after \d\d:\d\d\.$/,
+    );
+    expect(byTestId("scan-zone-note")?.textContent).toBe(byTestId("scan-result-message")?.textContent);
+    expect(byTestId("scan-result-countdown")?.textContent).toMatch(/^Scan again in 3:3[0-2]$/);
+    expect(byTestId("scan-glyph")?.dataset.glyph).toBe("wait");
+    expect(byTestId("scan-result")?.textContent).toContain("Priya S");
+    expect(h.speak.mock.calls).toEqual([["Already scanned. Please wait."]]);
+  });
+
+  it("shows a tea-break return in its own colour, and a break over the allowed time as a warning", async () => {
+    signIn();
+    const replies: Answer[] = [
+      { status: 200, body: { result: "success", action: "out", kind: "tea_break", message: "Tea break started" } },
+      {
+        status: 200,
+        body: {
+          result: "success",
+          action: "in",
+          kind: "tea_break",
+          takenMinutes: 18,
+          allowedMinutes: 15,
+          message: "Tea break ended - 18 min, via Main Gate",
+          employee: { id: 4, name: "Priya S", employeeCode: "30111", department: "Weaving", photoUrl: null },
+        },
+      },
+    ];
+    answers["POST /api/gate-monitor/scan"] = () => replies.shift()!;
+    await mount("/gatemonitor/console");
+    await type(q<HTMLInputElement>("#gate-code")!, "T.1A.BREAKSTART001");
+    await submit(byTestId("code-form"));
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("green");
+    expect(byTestId("scan-result-title")?.textContent).toBe("Tea break started");
+    await type(q<HTMLInputElement>("#gate-code")!, "T.1A.BREAKBACK0001");
+    await submit(byTestId("code-form"));
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("return");
+    expect(byTestId("scan-glow")?.dataset.gkTone).toBe("return");
+    expect(byTestId("scan-glyph")?.dataset.glyph).toBe("return");
+    expect(byTestId("scan-result-title")?.textContent).toBe("Back from tea break - 18 min");
+    expect(byTestId("scan-result-warning")?.textContent).toContain("Over the allowed 15 min by 3 min");
+    expect(byTestId("scan-result")?.textContent).toContain("Time on break");
+    expect(h.speak.mock.calls.at(-1)).toEqual(["Tea break ended. Over the allowed time."]);
+  });
+
+  it("fades the page back to Ready after a few seconds and keeps the result until the next scan", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout"] });
+    signIn();
+    await mount("/gatemonitor/console");
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("idle");
+    expect(byTestId("scan-glow")).toBeNull(); // nothing lit before the first scan
+    await type(q<HTMLInputElement>("#gate-code")!, "P.1A.2B.SIGNATURE");
+    await submit(byTestId("code-form"));
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("green");
+    await act(async () => {
+      vi.advanceTimersByTime(GLOW_MS - 500);
+    });
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("green");
+    await act(async () => {
+      vi.advanceTimersByTime(600);
+    });
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("idle");
+    expect(byTestId("scan-glow")?.dataset.on).toBe("false");
+    expect(byTestId("scan-card")?.dataset.on).toBe("false");
+    expect(byTestId("scan-zone")?.dataset.state).toBe("idle");
+    expect(byTestId("scan-zone")?.textContent).toContain("Ready - scan a gate pass or tea-break QR");
+    // the detail stays
+    expect(byTestId("scan-result-title")?.textContent).toBe("Allowed - exit recorded");
+  });
+
+  it("shows no connection in grey when the scan cannot reach the server", async () => {
+    signIn();
+    await mount("/gatemonitor/console");
+    const real = globalThis.fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("/api/gate-monitor/scan")) throw new TypeError("Failed to fetch");
+        return real(url, init);
+      }),
+    );
+    await type(q<HTMLInputElement>("#gate-code")!, "P.1A.OFFLINECODE01");
+    await submit(byTestId("code-form"));
+    expect(byTestId("gate-monitor-console")?.dataset.scanTone).toBe("neutral");
+    expect(byTestId("scan-result-title")?.textContent).toBe("No connection");
+    expect(byTestId("scan-glyph")?.dataset.glyph).toBe("offline");
+    expect(byTestId("gate-connection")?.dataset.online).toBe("no");
+    expect(h.speak.mock.calls).toEqual([["No connection. Please try again."]]);
   });
 
   it("keeps a renewed token and checks the session again when the tab comes back", async () => {

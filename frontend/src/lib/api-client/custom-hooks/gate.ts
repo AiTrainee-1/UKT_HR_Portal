@@ -314,7 +314,13 @@ export type TeaBreakRecord = {
   remark: TeaBreakRemark;
 };
 
-export type TeaBreakRule = { allowedMinutes: number; updatedAt: string };
+export type TeaBreakRule = {
+  allowedMinutes: number;
+  /** Minutes after a successful tea-break scan in which the same employee's next scan records nothing (2026-11-21;
+   *  0 = off). An older server does not send it. */
+  scanCooldownMinutes?: number;
+  updatedAt: string;
+};
 
 export const getTeaBreakRuleQueryKey = () => ["/api/tea-break/rule"] as const;
 export const useTeaBreakRule = (options?: { enabled?: boolean }) =>
@@ -343,6 +349,19 @@ export const useUpdateTeaBreakRule = () => {
       void queryClient.invalidateQueries({ queryKey: ["/api/tea-break/records"] });
       void queryClient.invalidateQueries({ queryKey: getTeaBreakSummaryQueryKey() });
     },
+  });
+};
+
+/** Saves only the repeat-scan cooldown (no figure depends on it, so only the rule itself is refreshed). */
+export const useUpdateTeaBreakCooldown = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (scanCooldownMinutes: number) =>
+      customFetch<TeaBreakRule>("/api/tea-break/rule", {
+        method: "PUT",
+        body: JSON.stringify({ scanCooldownMinutes }),
+      }),
+    onSuccess: (rule) => queryClient.setQueryData(getTeaBreakRuleQueryKey(), rule),
   });
 };
 

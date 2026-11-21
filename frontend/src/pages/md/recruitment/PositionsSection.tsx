@@ -55,7 +55,14 @@ function columnsFor(staleAfter: number, maxDays: number): Column<OpenPosition>[]
 
 /** Open positions with how long each has waited (the stale ones flagged), and the staffing gap by department. The
  *  system does not record when a position is filled, so age is the honest measure of "how long positions stay open". */
-export default function PositionsSection({ query }: { query: QueryLike<RecruitmentPositions> }) {
+export default function PositionsSection({
+  query,
+  onOpen,
+}: {
+  query: QueryLike<RecruitmentPositions>;
+  /** Opens one position's details. */
+  onOpen?: (position: OpenPosition) => void;
+}) {
   const data = query.data;
   const staleAfter = data?.summary.staleAfterDays ?? 45;
   const maxDays = Math.max(0, ...(data?.positions ?? []).map((p) => p.daysOpen));
@@ -94,6 +101,7 @@ export default function PositionsSection({ query }: { query: QueryLike<Recruitme
                   rowKey={(p) => p.id}
                   initialSort={{ key: "open", dir: "desc" }}
                   pageSize={6}
+                  onRowClick={onOpen}
                 />
                 {data.positionsShown < data.summary.open && (
                   <p className="mt-2 text-[11px] text-md-ink-soft">

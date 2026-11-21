@@ -46,10 +46,12 @@ from ...models import (
     Designation,
     Employee,
     EmployeeDocument,
+    FactoryLabel,
     LeaveBalance,
     Promotion,
     SalaryIncrement,
 )
+from ...production_cycles import CYCLE_LABELS, CYCLES
 from ...reporting.definitions.employees_master_base import (
     BASIS_APPROX,
     age_on,
@@ -208,6 +210,13 @@ class Person:
     reason_text: str | None
     probation_end: date | None
     confirmed_on: date | None
+    # Employees -> Factory Employees (2026-11-20): an ordinary employee with the flag, grouped by a label
+    factory: bool = False
+    label_id: int | None = None
+    # Production pay cycle (weekly | biweekly | monthly | None = not assigned: no cycle's payroll includes them)
+    cycle: str | None = None
+    # PF / ESI / TDS category (pf_esi.py): co_emp | tds | none
+    statutory: str = "none"
 
 
 @dataclass
@@ -264,6 +273,11 @@ _PEOPLE_FIELDS = (
     "updated_at",
     "probation_end_date",
     "confirmation_date",
+    "is_factory",
+    "factory_label_id",
+    "production_pay_cycle",
+    "co_emp_enabled",
+    "tds_enabled",
 )
 
 
@@ -298,7 +312,9 @@ def load(scope: Scope, today: date) -> Workforce:
     stubs = {r[0]: SimpleNamespace(id=r[0], join_date=r[11], updated_at=r[12]) for r in rows}
     infos = exit_infos([stubs[r[0]] for r in rows if (r[7] or "") != "active"])
     wf = Workforce(today=today, people=[], lookups=load_lookups())
-    for id_, code, first, last, gender, dob, kind, status, dept, desig, branch, _join, _upd, prob, conf in rows:
+    for row in rows:
+        id_, code, first, last, gender, dob, kind, status, dept, desig, branch, _join, _upd, prob, conf = row[:15]
+        is_factory, label_id, cycle, co_emp, tds = row[15:]
         active = (status or "") == "active"
         kind = (kind or "").strip().lower()
         joined, state = join_date_of(stubs[id_])
@@ -336,6 +352,11 @@ def load(scope: Scope, today: date) -> Workforce:
                 reason_text=(res.reason if res is not None else None),
                 probation_end=prob,
                 confirmed_on=conf,
+                factory=bool(is_factory),
+                label_id=label_id if is_factory else None,
+                cycle=(cycle or None) if kind == "production" else None,
+                # a TDS employee never gets PF / ESI, even if bad data also set Co Emp (pf_esi.category_of)
+                statutory="tds" if tds else ("co_emp" if co_emp else "none"),
             )
         )
     return wf
@@ -648,6 +669,7 @@ def summary(scope: Scope, period: Period, *, today: date | None = None) -> dict:
                 "staff": kinds["staff"],
                 "production": kinds["production"],
                 "other": kinds["other"],
+                "factory": sum(1 for p in active if p.factory),
                 "opening": now.opening,
                 "closing": now.closing,
                 "change": change(now.closing, now.opening),
@@ -1440,6 +1462,333 @@ def directory(
                 caveats=[CAVEAT_EXIT_DATES],
             )
         ],
+    )
+
+
+# ─── the workforce as the HRMS groups it today: types, Factory Employees by label, pay cycles, PF / ESI / TDS ───
+
+STATUTORY_LABELS = {"co_emp": "Co Emp (PF and ESI)", "tds": "TDS", "none": "Neither"}
+NO_LABEL = "No label"
+NOT_ASSIGNED = "Not assigned"
+
+
+def _labels() -> dict[int, str]:
+    return dict(FactoryLabel.objects.order_by("sort_order", "name", "id").values_list("id", "name"))
+
+
+@cached()
+def workforce(scope: Scope, *, today: date | None = None) -> dict:
+    """How the HRMS groups the people here today (2026-11-20): staff and production, the Factory Employees (drivers,
+    housekeeping, security ...) by their label, the production pay cycle each production worker is paid on (Weekly,
+    BiWeekly, Monthly or none yet) and the PF / ESI / TDS category (Co Emp, TDS, neither)."""
+    today = today or ist_today()
+    wf = load(scope, today)
+    active = wf.active()
+    names = _labels()
+    kinds = Counter(p.kind for p in active)
+
+    factory = [p for p in active if p.factory]
+    by_label: dict[int | None, list[Person]] = defaultdict(list)
+    for p in factory:
+        by_label[p.label_id].append(p)
+    order = {lid: i for i, lid in enumerate(names)}
+    label_rows = [
+        {
+            "id": lid,
+            "label": names.get(lid, NO_LABEL) if lid else NO_LABEL,
+            "people": len(members),
+            "staff": sum(1 for p in members if p.kind == "staff"),
+            "production": sum(1 for p in members if p.kind == "production"),
+            "sharePct": pct(len(members), len(factory)),
+        }
+        for lid, members in sorted(by_label.items(), key=lambda kv: (kv[0] is None, -len(kv[1]), order.get(kv[0], 0)))
+    ]
+
+    production = [p for p in active if p.kind == "production"]
+    cycles = Counter(p.cycle if p.cycle in CYCLES else "none" for p in production)
+    cycle_rows = [
+        {
+            "key": key,
+            "label": CYCLE_LABELS.get(key, NOT_ASSIGNED),
+            "people": cycles[key],
+            "sharePct": pct(cycles[key], len(production)),
+        }
+        for key in (*CYCLES, "none")
+    ]
+    statutory = Counter(p.statutory for p in active)
+    statutory_rows = [
+        {"key": key, "label": label, "people": statutory[key], "sharePct": pct(statutory[key], len(active))}
+        for key, label in STATUTORY_LABELS.items()
+    ]
+    notes = _data_notes(wf)
+    if cycles["none"]:
+        notes.append(
+            f"{cycles['none']:,} production {'worker has' if cycles['none'] == 1 else 'workers have'} no pay cycle yet, so "
+            "no production payroll includes them until HR assigns one (Employees -> Production Employees)."
+        )
+    return envelope(
+        {
+            "asOf": today.isoformat(),
+            "active": len(active),
+            "types": {"staff": kinds["staff"], "production": kinds["production"], "other": kinds["other"]},
+            "factory": {"people": len(factory), "sharePct": pct(len(factory), len(active)), "labels": label_rows},
+            "cycles": {"production": len(production), "rows": cycle_rows, "unassigned": cycles["none"]},
+            "statutory": statutory_rows,
+        },
+        scope=scope,
+        provenance=[
+            prov(
+                "workforce-groups",
+                "How the workforce is grouped",
+                dataset="Employee records, factory labels",
+                definition=(
+                    "The people whose status is Active today. Factory Employees are ordinary employees marked on "
+                    "Employees -> Factory Employees, grouped by their label (the label is also their department and "
+                    "designation). The pay cycle is the production payroll a production worker is paid on; one with no "
+                    "cycle is in no production payroll yet. Co Emp employees get PF and ESI; TDS employees have tax "
+                    "deducted at source and no PF or ESI; the two never overlap."
+                ),
+                formula="counts of active employees per group; share = group ÷ its whole × 100",
+                rows=len(active),
+                filters=_unit_scope_text(scope),
+            )
+        ],
+        notes=notes,
+    )
+
+
+# ─── the people behind a figure (the Insights drill-down) ─────────────────────────────────────────────────────
+
+PEOPLE_GROUPS = ("active", "joiners", "leavers", "early", "factory", "cycle", "statutory")
+
+GROUP_TITLES = {
+    "active": "People here today",
+    "joiners": "Joiners",
+    "leavers": "Leavers",
+    "early": f"Leavers within {EARLY_EXIT_DAYS} days of joining",
+    "factory": "Factory Employees",
+    "cycle": "Production workers by pay cycle",
+    "statutory": "PF, ESI and TDS",
+}
+
+
+def _people_filter(group: str, value: str, period: Period) -> Callable[[Person], bool]:
+    value = (value or "").strip().lower()
+    if group == "active":
+        return lambda p: p.active
+    if group == "joiners":
+        return lambda p: p.joined is not None and period.start <= p.joined <= period.end
+    if group in ("leavers", "early"):
+        early = group == "early"
+        return lambda p: p.left is not None and period.start <= p.left <= period.end and (not early or _is_early(p))
+    if group == "factory":
+        if value in ("", "all"):
+            return lambda p: p.active and p.factory
+        if value == "none":
+            return lambda p: p.active and p.factory and p.label_id is None
+        if not value.isdigit():
+            raise MdParamError("For group=factory, 'value' is a label id, 'none' or 'all'.")
+        wanted = int(value)
+        return lambda p: p.active and p.factory and p.label_id == wanted
+    if group == "cycle":
+        if value not in (*CYCLES, "none"):
+            raise MdParamError(f"For group=cycle, 'value' is one of: {', '.join((*CYCLES, 'none'))}.")
+        return lambda p: p.active and p.kind == "production" and (p.cycle or "none") == value
+    if group == "statutory":
+        if value not in STATUTORY_LABELS:
+            raise MdParamError(f"For group=statutory, 'value' is one of: {', '.join(STATUTORY_LABELS)}.")
+        return lambda p: p.active and p.statutory == value
+    raise MdParamError(f"'group' must be one of: {', '.join(PEOPLE_GROUPS)}.")
+
+
+@cached()
+def people_list(
+    scope: Scope,
+    period: Period,
+    *,
+    group: str = "active",
+    value: str = "",
+    query: str | None = None,
+    page: int = 1,
+    page_size: int = 25,
+    today: date | None = None,
+) -> dict:
+    """The people behind one figure of the Employees Insights, a page at a time: who is here today, who joined or left
+    in the period (or left within 90 days of joining), the Factory Employees (of one label), the production workers on
+    one pay cycle, or the employees of one PF / ESI / TDS category. No pay is shown."""
+    today = today or ist_today()
+    group = (group or "active").strip().lower()
+    keep = _people_filter(group, value, _clamped(period, today))
+    page_size = max(1, min(int(page_size), 100))
+    wf = load(scope, today)
+    words = [w.lower() for w in (query or "").split()]
+    chosen = [
+        p for p in wf.people if keep(p) and all(w in p.name.lower() or w in (p.code or "").lower() for w in words)
+    ]
+    dated = group in ("joiners", "leavers", "early")
+    if dated:
+        when = (lambda p: p.joined) if group == "joiners" else (lambda p: p.left)
+        chosen.sort(key=lambda p: (when(p) or date.min, p.name.lower()), reverse=True)
+    else:
+        chosen.sort(key=lambda p: (p.name.lower(), p.code))
+    total = len(chosen)
+    pages = max(1, -(-total // page_size))
+    page = min(max(1, int(page)), pages)
+    names = _labels()
+    lk = wf.lookups
+    rows = []
+    for p in chosen[(page - 1) * page_size : page * page_size]:
+        end = p.left or today
+        months = months_between(p.joined, end) if p.joined and p.joined <= end else None
+        rows.append(
+            {
+                "id": p.id,
+                "name": p.name,
+                "code": p.code,
+                "type": p.kind,
+                "designation": lk.desig(p.desig_id),
+                "department": lk.dept(p.dept_id) if p.dept_id else None,
+                "unit": lk.unit(p.branch_id) if p.branch_id else None,
+                "joinDate": _iso(p.joined),
+                "leftOn": _iso(p.left),
+                "exitApproximate": (p.exit_basis == EXIT_APPROXIMATE) if p.left else None,
+                "tenure": tenure_text(months),
+                "status": "active" if p.active else "inactive",
+                "factoryLabel": (names.get(p.label_id, NO_LABEL) if p.label_id else NO_LABEL) if p.factory else None,
+                "cycle": CYCLE_LABELS.get(p.cycle, NOT_ASSIGNED) if p.kind == "production" else None,
+                "statutory": STATUTORY_LABELS[p.statutory],
+            }
+        )
+    return envelope(
+        {
+            "group": group,
+            "value": (value or "").strip().lower() or None,
+            "title": GROUP_TITLES[group],
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "pages": pages,
+            "rows": rows,
+        },
+        period=period if dated else None,
+        scope=scope,
+        provenance=[
+            prov(
+                "people-list",
+                "The people behind the figure",
+                dataset="Employee records and resignations",
+                definition=(
+                    "The same people the figure counts: joiners have a join date in the period, leavers an exit date in "
+                    "it (the approved resignation's last working day, else an approximate date), the rest are counted "
+                    "today. No pay is shown."
+                ),
+                formula="the figure's own rule, one page at a time",
+                rows=total,
+                filters=[GROUP_TITLES[group], *_unit_scope_text(scope)],
+                caveats=[CAVEAT_EXIT_DATES] if group in ("leavers", "early") else [],
+            )
+        ],
+        notes=_data_notes(wf) if dated else [],
+    )
+
+
+# ─── the plain-English summary of the Insights tab (fixed rules from the same figures; no AI) ─────────────────
+
+
+def _n(value: float | int | None) -> str:
+    return "n/a" if value is None else f"{value:,}"
+
+
+def _people(n: int) -> str:
+    return "person" if n == 1 else "people"
+
+
+@cached()
+def briefing(scope: Scope, period: Period, *, today: date | None = None) -> dict:
+    """Three to five sentences about the workforce for the chosen period and selection, every figure taken from the
+    summary and the workforce groups (the cards below), so the words can never disagree with them."""
+    today = today or ist_today()
+    s = summary(scope, period, today=today)
+    w = workforce(scope, today=today)
+    head, joiners, leavers = s["headcount"], s["joiners"], s["leavers"]
+    sentences: list[dict] = []
+
+    def line(id_: str, text: str, tone: str = "neutral") -> None:
+        sentences.append({"id": id_, "text": text, "tone": tone, "page": "employees"})
+
+    if head["current"]:
+        factory = head.get("factory") or 0
+        line(
+            "headcount",
+            f"{_n(head['current'])} {_people(head['current'])} are here today: {_n(head['staff'])} staff and "
+            f"{_n(head['production'])} production"
+            + (
+                f"; {_n(factory)} of them {'is a Factory Employee' if factory == 1 else 'are Factory Employees'}"
+                if factory
+                else ""
+            )
+            + ".",
+        )
+    label = s["period"]["label"]
+    if s["period"]["days"] > 0:
+        net = joiners["count"] - leavers["count"]
+        prev_days = s["previousPeriod"]["days"]
+        line(
+            "movement",
+            f"{label}: {_n(joiners['count'])} joined and {_n(leavers['count'])} left (net {'+' if net > 0 else ''}{net}), "
+            f"against {_n(joiners['previous'])} and {_n(leavers['previous'])} in the {prev_days} days before.",
+            "good" if net > 0 else ("watch" if net < 0 else "neutral"),
+        )
+    rate = s["attrition"]["pct"]
+    if rate is not None and leavers["count"]:
+        yearly = s["attrition"]["annualisedPct"]
+        line(
+            "attrition",
+            f"Attrition was {rate:.1f}% of the average headcount"
+            + (f" ({yearly:.1f}% a year at this pace)" if yearly is not None else "")
+            + ".",
+            "watch" if (yearly or 0) >= 20 else "neutral",
+        )
+    early = s["earlyAttrition"]["count"]
+    if early:
+        line(
+            "early",
+            f"{_n(early)} of the {_n(leavers['count'])} leavers left within {EARLY_EXIT_DAYS} days of joining.",
+            "watch",
+        )
+    unassigned = w["cycles"]["unassigned"]
+    if unassigned:
+        line(
+            "cycles",
+            f"{_n(unassigned)} production {'worker has' if unassigned == 1 else 'workers have'} no pay cycle, so no "
+            "production payroll includes them yet.",
+            "watch",
+        )
+    return envelope(
+        {
+            "briefing": {
+                "sentences": sentences,
+                "text": " ".join(x["text"] for x in sentences),
+                "ask": f"Give me a briefing on the workforce ({label}): headcount, joiners, leavers and attrition. "
+                "What stands out and why?",
+            }
+        },
+        period=_clamped(period, today),
+        scope=scope,
+        provenance=[
+            prov(
+                "employees-briefing",
+                "The summary",
+                dataset="The figures on this page",
+                definition=(
+                    "Written by fixed rules from the same figures as the cards (headcount, joiners, leavers, attrition, "
+                    "early leavers and the pay cycles). No AI is involved, so it says nothing the cards do not."
+                ),
+                formula="sentences built from the page's own numbers",
+                filters=[label, *_unit_scope_text(scope)],
+            )
+        ],
+        notes=s["notes"],
     )
 
 

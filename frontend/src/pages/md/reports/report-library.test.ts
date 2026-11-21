@@ -9,6 +9,8 @@ import {
   catalogFailure,
   categoryLabel,
   executiveFirst,
+  executiveHref,
+  libraryStats,
   libraryContext,
   libraryView,
   pickReports,
@@ -276,7 +278,7 @@ describe("what the assistant is told", () => {
   });
 
   it("offers the example question from the brief first", () => {
-    expect(ASK_EXAMPLES[0]).toBe("Which report shows overtime by department?");
+    expect(ASK_EXAMPLES[0]).toBe("Which report shows salary cost by department?");
   });
 });
 
@@ -292,5 +294,46 @@ describe("catalogFailure", () => {
     expect(catalogFailure(apiError(403))).toMatch(/cannot open the Report Center/);
     expect(catalogFailure(apiError(500))).toMatch(/server had a problem/);
     expect(catalogFailure(new TypeError("Failed to fetch"))).toMatch(/Check your connection/);
+  });
+});
+
+describe("the overview and the executive month (2026-11-21)", () => {
+  it("counts the Report Center's groups apart from the executive pack and the saved custom reports", () => {
+    const stats = libraryStats(library);
+    expect(stats.executive).toBe(1);
+    expect(stats.groups).toBe(library.categories.length);
+    expect(stats.listed).toBe(library.standard.length);
+    expect(stats.saved).toBe(0);
+    expect(stats.byGroup.map((g) => g.id)).toEqual(library.categories.map((c) => c.category.id));
+  });
+
+  it("opens an executive report for a month and a unit, and with its own defaults otherwise", () => {
+    const monthly = meta("md-monthly-payroll", "md", {
+      filters: [
+        { key: "period", kind: "period", label: "Month", required: true, multi: false, default: "2026-10" },
+        { key: "branch", kind: "branch", label: "Unit", required: false, multi: true, default: [] },
+      ],
+    });
+    const ranged = meta("md-department-scorecard", "md", {
+      filters: [
+        { key: "range", kind: "dateRange", label: "Period", required: true, multi: false, default: null, maxDays: 92 },
+      ],
+    });
+    const brief = meta("md-daily-brief", "md", {
+      filters: [
+        { key: "range", kind: "dateRange", label: "Day", required: true, multi: false, default: null, maxDays: 1 },
+      ],
+    });
+    const today = new Date(2026, 10, 21);
+    expect(executiveHref(monthly, null, "")).toBe("/md/reports?report=md-monthly-payroll");
+    expect(executiveHref(monthly, "2026-09", "2", today)).toBe(
+      "/md/reports?report=md-monthly-payroll&period=2026-09&branchIds=2&run=1",
+    );
+    // the current month runs up to today, never into the future
+    expect(executiveHref(ranged, "2026-11", "", today)).toBe(
+      "/md/reports?report=md-department-scorecard&dateFrom=2026-11-01&dateTo=2026-11-21&run=1",
+    );
+    // a one-day report cannot take a month: its own defaults
+    expect(executiveHref(brief, "2026-09", "", today)).toBe("/md/reports?report=md-daily-brief");
   });
 });

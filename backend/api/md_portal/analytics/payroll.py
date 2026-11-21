@@ -38,7 +38,11 @@ WHICH SLIPS COUNT (the question is "what did the company spend in the month"):
   set) is calculated by the engine but is not payroll yet: left out of every figure and counted apart
   (``newJoinersWaiting``), as on the statement. Once added, or released and paid on their own after the lock, they count
 * a held salary (``Payroll.on_hold``) IS counted: it is on the statement (Remarks HOLD), only not in the bank file
-* production slips have no hold / new-joiner step: every slip counts
+* production has no hold, but since 2026-11-16 (``production_period_workflow.py``) a worker who joined during a pay
+  period, or moved in from another cycle, is PARKED in the period's New Joiners (``Payroll.new_joiner_parked``) until HR
+  adds them: left out exactly like a waiting staff new joiner (counted apart as ``productionParked``)
+* HR's Excess / Detection (``payroll_excess.py``, 2026-11-20) is the slip's ``bonuses`` (excess - detection): it is
+  outside ``gross_salary`` and inside ``net_salary``, so the net-gap check below adds it back
 
 The Report Center's slip reports (Department-wise Salary Cost, Payroll Month Comparison, Salary Register) count every
 slip, so they match the figures here except in a month with a new joiner waiting to be added: there they are higher by
@@ -89,7 +93,7 @@ from django.db.models import (
     When,
 )
 from django.db.models.fields.json import KT
-from django.db.models.functions import Cast, Coalesce, ExtractMonth, ExtractYear, Greatest, Lower, Trim
+from django.db.models.functions import Abs, Cast, Coalesce, ExtractMonth, ExtractYear, Greatest, Lower, Trim
 from django.utils import timezone
 
 from ...clock import FACTORY_TZ, ist_today
@@ -269,14 +273,23 @@ def _waiting_rows() -> QuerySet:
     return Payroll.objects.filter(new_joiner_parked=True, added_to_payroll_at__isnull=True)
 
 
+def _parked_period_rows() -> QuerySet:
+    """Production payroll rows parked in their pay period's New Joiners (joined during the period, or moved in from
+    another cycle; production_period_workflow.park_if_needed): not in the period's payroll until HR adds them."""
+    return Payroll.objects.filter(new_joiner_parked=True, period_start__isnull=False)
+
+
 def _slips(scope: Scope, pairs: Iterable[Ym] | None = None, *, everyone: bool = False) -> QuerySet:
     """The slips the figures are made of: the scope's, without the staff slips of new joiners waiting to be added to
-    the payroll (``Payroll.new_joiner_parked``). People who have since left, held salaries and people paid separately
-    all count. ``everyone`` keeps the waiting new joiners too (the advances cross-check compares the slips with
-    recoveries of everyone)."""
+    the payroll and the production slips parked in their pay period's New Joiners (``Payroll.new_joiner_parked``).
+    People who have since left, held salaries and people paid separately all count. ``everyone`` keeps the waiting /
+    parked ones too (the advances cross-check compares the slips with recoveries of everyone)."""
     qs = SalarySlip.objects.filter(_slip_scope_q(scope))
     if not everyone:
-        qs = qs.filter(Q(period_start__isnull=False) | ~_staff_row_of_slip(_waiting_rows()))
+        qs = qs.filter(
+            Q(period_start__isnull=False, week_number__isnull=True) & ~_production_row_of_slip(_parked_period_rows())
+            | Q(period_start__isnull=True) & ~_staff_row_of_slip(_waiting_rows())
+        )
     return qs if pairs is None else qs.filter(_pairs_q(pairs))
 
 
@@ -311,9 +324,28 @@ _PF_WAGES = Cast(KT("breakdown_details__deductions__statutory__pfWages"), DEC)
 
 
 # How much a slip's NET was rounded up (owner 2026-11-10: payroll stores the NET rounded UP to the next whole rupee): the
-# part of net - (gross + OT - deductions) strictly between 0 and 1 rupee. 0 on a slip from before (stored to the paisa).
-_NET_DIFF = ExpressionWrapper(
+# part of net - (gross + OT [+ bonus] - deductions) strictly between 0 and 1 rupee. 0 on a slip from before (stored to the
+# paisa). HR's Excess / Detection (the slip's bonuses, 2026-11-20) is OUTSIDE gross_salary on the engines' slips; a slip
+# written the older way (the bonus inside the gross, as the MD demo data does) is read that way: per slip, whichever of
+# the two leaves the smaller difference.
+_NET_DIFF_OUT = ExpressionWrapper(
+    F("net_salary") - F("gross_salary") - F("ot_amount") - F("bonuses") + F("total_deductions"), output_field=DEC
+)
+_NET_DIFF_IN = ExpressionWrapper(
     F("net_salary") - F("gross_salary") - F("ot_amount") + F("total_deductions"), output_field=DEC
+)
+_NET_DIFF = Case(
+    When(bonuses=0, then=_NET_DIFF_IN),
+    When(net_out_abs__lte=Abs(_NET_DIFF_IN), then=_NET_DIFF_OUT),
+    default=_NET_DIFF_IN,
+    output_field=DEC,
+)
+# the slip's bonus when it is OUTSIDE its gross (the engines' slips since 2026-11-20), else 0 (none, or inside the gross)
+_BONUS_OUT = Case(
+    When(bonuses=0, then=Value(ZERO, output_field=DEC)),
+    When(net_out_abs__lte=Abs(_NET_DIFF_IN), then=F("bonuses")),
+    default=Value(ZERO, output_field=DEC),
+    output_field=DEC,
 )
 _NET_ROUND = Case(
     When(net_diff__gt=Decimal("0.005"), net_diff__lt=Decimal("0.995"), then=F("net_diff")),
@@ -324,8 +356,11 @@ _NET_ROUND = Case(
 
 def _annotated(qs: QuerySet) -> QuerySet:
     """The per-slip expressions the grouped queries sum over."""
-    return qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, eff_days=_EFFECTIVE_DAYS, net_diff=_NET_DIFF).annotate(
-        lop_days=_LOP_DAYS, net_round=_NET_ROUND
+    return (
+        qs.annotate(stype=SLIP_TYPE_SQL, late_amt=LATE_SQL, eff_days=_EFFECTIVE_DAYS, net_out=_NET_DIFF_OUT)
+        .annotate(net_out_abs=Abs(F("net_out")))
+        .annotate(net_diff=_NET_DIFF, bonus_out=_BONUS_OUT)
+        .annotate(lop_days=_LOP_DAYS, net_round=_NET_ROUND)
     )
 
 
@@ -338,6 +373,8 @@ def _aggs() -> dict[str, Any]:
         "salary": _sum("gross_salary"),
         "ot": _sum("ot_amount"),
         "oneoff": _sum(F("incentives") + F("bonuses")),
+        # HR's Excess / Detection (payroll_excess.py, 2026-11-20) where it is outside gross_salary (see _NET_DIFF)
+        "bonus": _sum("bonus_out"),
         # not "basic" / "hra": an alias with a field's name would make F("basic") below mean the aggregate
         "basic_amt": _sum("basic"),
         "hra_amt": _sum("hra"),
@@ -350,6 +387,7 @@ def _aggs() -> dict[str, Any]:
         "ded": _sum("total_deductions"),
         "net": _sum("net_salary"),
         "net_round": _sum("net_round"),
+        "net_diff": _sum("net_diff"),
         "lop_days": _sum("lop_days"),
         "tds_heads": Count("employee_id", distinct=True, filter=Q(tds_deduction__gt=0)),
         # the wages the employer estimates are worked on: the recorded PF wages, else the older slips' own basis (PF on
@@ -393,6 +431,7 @@ _SUM_KEYS = (
     "salary",
     "ot",
     "oneoff",
+    "bonus",
     "basic",
     "hra",
     "allow",
@@ -405,6 +444,7 @@ _SUM_KEYS = (
     "ded",
     "net",
     "net_round",
+    "net_diff",
     "lop_days",
 )
 _EMPLOYER_KEYS = ("employer_pf", "employer_esi")
@@ -669,6 +709,7 @@ def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Seq
                 waiting=Count("id", filter=waiting_q),
                 waiting_net=_sum(Case(When(waiting_q, then=F("final_salary")), default=zero, output_field=DEC)),
                 separately=Count("id", filter=Q(period_start__isnull=True, released_from__isnull=False)),
+                prod_parked=Count("id", filter=Q(period_start__isnull=False, new_joiner_parked=True)),
                 cleared_at=Max(
                     "payment_paid_at",
                     filter=Q(period_start__isnull=False, payment_status=Payroll.PAYMENT_PAID),
@@ -730,6 +771,8 @@ def _month_states(scope: Scope, pairs: Sequence[Ym], today: date, available: Seq
             "newJoinersWaiting": int(x.get("waiting") or 0),
             "newJoinersNet": money(x.get("waiting_net") or ZERO),
             "paidSeparately": int(x.get("separately") or 0),
+            # production workers parked in a pay period's New Joiners (not in any figure until HR adds them)
+            "productionParked": int(x.get("prod_parked") or 0),
         }
     return out
 
@@ -1728,11 +1771,15 @@ def _lines(spec: Sequence[tuple[str, str, str]], cur: dict, prev: dict | None, t
 def _with_derived(t: dict[str, Decimal]) -> dict[str, Decimal]:
     """The raw sums plus the totals and residuals the component lines need."""
     gross = t["salary"] + t["ot"]
-    other_earn = t["salary"] - t["basic"] - t["hra"] - t["allow"] - t["oneoff"]
+    # incentives are inside the salary earned; HR's Excess / Detection on the engines' slips is not (2026-11-20), so
+    # the "Incentives and bonuses" line is what is inside the gross
+    oneoff_in = t["oneoff"] - t["bonus"]
+    other_earn = t["salary"] - t["basic"] - t["hra"] - t["allow"] - oneoff_in
     other_ded = t["ded"] - t["pf"] - t["esi"] - t["tds"] - t["adv"] - t["late"]
     return {
         **t,
         "gross": gross,
+        "oneoff_in": oneoff_in,
         "other_earn": other_earn,
         "other_ded": other_ded,
         "net_calc": gross - t["ded"],
@@ -1835,7 +1882,7 @@ _EARNING_SPEC = (
     ("basic", "Basic pay", "basic"),
     ("hra", "HRA", "hra"),
     ("allowances", "Allowances", "allow"),
-    ("oneoffs", "Incentives and bonuses", "oneoff"),
+    ("oneoffs", "Incentives and bonuses", "oneoff_in"),
     ("other-earnings", "Not itemised on the slip", "other_earn"),
     ("overtime", "Overtime", "ot"),
 )
@@ -1870,8 +1917,9 @@ def _components(ctx: _Ctx) -> dict:
     cur = _with_derived(raw[ym])
     was = _with_derived(raw[prev]) if prev in raw else None
     states = _month_states(scope, [ym], ctx.today, ctx.available)[ym]
-    # the slips' rounding up of the NET to the whole rupee (2026-11-10) is not a gap
-    net_gap = cur["gross"] - cur["ded"] - cur["net"] + cur.get("net_round", ZERO)
+    # the slips' rounding up of the NET to the whole rupee (2026-11-10) is not a gap, nor is HR's Excess / Detection
+    # (2026-11-20: the slip's bonuses, outside the gross and inside the net; see _NET_DIFF)
+    net_gap = cur.get("net_round", ZERO) - cur.get("net_diff", ZERO)
     notes = []
     if states["provisionalSlips"]:
         notes.append(_provisional_note(states["provisionalSlips"], ym, ctx.ended))

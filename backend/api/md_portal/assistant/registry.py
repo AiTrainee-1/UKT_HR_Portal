@@ -27,6 +27,8 @@ TOOL_MODULES = (
     "requests",
     # questions about one employee (by name or code) and the people of one day (2026-11-13)
     "people",
+    # WhatsApp / SMS / email usage and cost (Communication usage & cost page, 2026-11-21)
+    "comms",
 )
 
 

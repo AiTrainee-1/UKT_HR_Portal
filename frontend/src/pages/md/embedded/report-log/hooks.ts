@@ -1,5 +1,15 @@
 import { useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
-import type { GroupBy, RlAttention, RlBreakdown, RlBriefing, RlExports, RlGaps, RlSummary, RlTrend } from "./types";
+import type {
+  GroupBy,
+  RlAttention,
+  RlBreakdown,
+  RlBriefing,
+  RlExports,
+  RlGaps,
+  RlScheduled,
+  RlSummary,
+  RlTrend,
+} from "./types";
 
 /** Every request the Insights tab makes, one per card, so a slow or failed one never blanks the others. The exports are
  *  company-wide (the audit trail has no unit or department), so they take the period only. */
@@ -12,5 +22,6 @@ export function useReportLogData(params: MdQueryParams, period: MdQueryParams, b
     gaps: useMdQuery<RlGaps>("reportlog/gaps", params),
     groups: useMdQuery<RlBreakdown>("reportlog/departments", { ...params, by, limit: 25 }),
     exports: useMdQuery<RlExports>("reportlog/exports", { ...period, limit: 10 }),
+    scheduled: useMdQuery<RlScheduled>("reportlog/scheduled", { ...period, limit: 10 }),
   };
 }

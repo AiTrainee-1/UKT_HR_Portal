@@ -48,12 +48,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
-from django.db.models import Count, Max, Min, OuterRef, Q, Subquery, TextField
+from django.db.models import Avg, Count, F, Max, Min, OuterRef, Q, Subquery, TextField
 from django.db.models.functions import ExtractHour, Lower, Trim, TruncDate
 from django.utils import timezone
 
 from ...clock import FACTORY_TZ
 from ...models import Branch, OutpassGateScan, OutpassRecord, OutpassRequest, VisitorVisit
+from ...outpass_visitor_views import VisitMinutes, average_minutes, whole_minutes
 from ...reporting.definitions import gate_outpass_common as GO
 from ...reporting.definitions import gate_visitor_tea_common as GV
 from ...reporting.formatting import indian_number
@@ -116,13 +117,44 @@ FEED_KINDS = ("all", "visits", "outpasses", "gate_form")
 NO_DEPARTMENT = "No department"
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
+#: The day check-out started to be recorded (HR or a reception desk, 18 Nov 2026). Visits before it never have one.
+CHECKOUT_SINCE = date(2026, 11, 18)
+#: A visitor inside for longer than this is a "long stay" (the HR Visitors page's "Inside over 2 h").
+LONG_STAY_MINUTES = 120
+#: "Visits are not being checked out": at least this share of the visits that could have a check-out have none ...
+NO_CHECKOUT_WARN_PCT = 50.0
+#: ... once there are at least this many such visits (fewer is too few to call a habit).
+NO_CHECKOUT_MIN_VISITS = 10
 NOTE_NO_CHECKOUT = (
-    "Check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception; QR self check-ins and older "
-    "visits have no check-out, so who is inside right now and how long a visitor stayed are not shown here."
+    "Check-out is recorded from 18 Nov 2026, by HR or a reception desk within 24 hours of the check-in. Time inside "
+    "counts checked-out visits only: a visit before 18 Nov 2026, or one nobody checked out, has no check-out and so "
+    "no time inside."
 )
 NOTE_NO_COMPANY = (
-    "The gate form does not ask for a company, so visits cannot be grouped by company: the person visited and the "
-    "stated purpose are shown instead."
+    "A company is asked only when HR or a reception desk registers the visit; QR self check-ins have none, so "
+    "'by company' covers those visits only."
+)
+#: How a visit was checked in (VisitorVisit.source), in the HR Visitors page's words.
+SOURCE_LABELS = {
+    VisitorVisit.SOURCE_QR: "QR self check-in",
+    VisitorVisit.SOURCE_HR: "Registered by HR",
+    VisitorVisit.SOURCE_RECEPTION: "Reception desk",
+}
+#: A visit's state, as the HR Visitors page words it (worked out, never stored).
+VISIT_STATUS_LABELS = {
+    "inside": "Inside",
+    "checked_out": "Checked out",
+    "not_checked_out": "Left without check-out",
+    # a visit from before check-out was recorded (18 Nov 2026): it could not have one, so it is none of the above
+    "before_checkout": "Before check-out was recorded",
+}
+#: How long a checked-out visit lasted: (key, label, from minutes inclusive, to minutes exclusive).
+STAY_BUCKETS: tuple[tuple[str, str, int, int | None], ...] = (
+    ("under_30", "Under 30 min", 0, 30),
+    ("30_60", "30 min to 1 hour", 30, 60),
+    ("1_2h", "1 to 2 hours", 60, 120),
+    ("2_4h", "2 to 4 hours", 120, 240),
+    ("over_4h", "4 hours or more", 240, None),
 )
 
 #: Why an outpass was taken. ``pass_type`` is the only structured reason (the written reason is free text).
@@ -494,6 +526,201 @@ def _heatmap(cells: list[tuple[date, int, int]]) -> dict:
     return {"weekdays": list(WEEKDAYS), "hours": list(range(24)), "values": values, "max": max(flat) if flat else 0}
 
 
+# ─── check-in and check-out (from 18 Nov 2026) ────────────────────────────────────────────────────────────────────
+#
+# The HR Visitors page's rules, never re-implemented: a visit is "checked out" once a check-out is recorded, "inside"
+# while it came today (India time) and has none, "left without check-out" on an earlier day with none. Time inside is
+# each visit's WHOLE minutes (seconds dropped) and an average is their mean rounded half up: outpass_visitor_views'
+# VisitMinutes (SQL) and average_minutes / whole_minutes (Python), so this page and the HR page can never disagree.
+
+
+def _day_start(today: date) -> datetime:
+    return datetime.combine(today, time.min, tzinfo=FACTORY_TZ)
+
+
+def _status_q(status: str, today: date) -> Q:
+    """The HR Visitors page's states, in SQL, with the visits from before check-out existed kept apart."""
+    start, since = _day_start(today), _day_start(CHECKOUT_SINCE)
+    if status == "checked_out":
+        return Q(checked_out_at__isnull=False)
+    if status == "inside":
+        return Q(checked_out_at__isnull=True, visited_at__gte=max(start, since))
+    if status == "not_checked_out":
+        return Q(checked_out_at__isnull=True, visited_at__lt=start, visited_at__gte=since)
+    if status == "before_checkout":
+        return Q(checked_out_at__isnull=True, visited_at__lt=since)
+    raise MdParamError(f"'status' must be one of: {', '.join(VISIT_STATUS_LABELS)}.")
+
+
+def _visit_status(checked_out_at: datetime | None, visited_at: datetime, today: date) -> str:
+    if checked_out_at is not None:
+        return "checked_out"
+    if visited_at < _day_start(CHECKOUT_SINCE):
+        return "before_checkout"
+    return "inside" if visited_at >= _day_start(today) else "not_checked_out"
+
+
+def _stay_minutes():
+    return VisitMinutes(F("checked_out_at") - F("visited_at"))
+
+
+def _checkout_totals(qs, now: datetime, today: date, *, detail: bool = True) -> dict:
+    """Check-in / check-out figures of a set of visits: two queries (the counts, then the minutes for the median and the
+    stay bands). The share checked out is of the visits made since check-out exists (CHECKOUT_SINCE)."""
+    start = _day_start(today)
+    since = _day_start(CHECKOUT_SINCE)
+    out_q = Q(checked_out_at__isnull=False)
+    # inside = came today with no check-out, counted only where check-out exists (from CHECKOUT_SINCE)
+    inside_q = Q(checked_out_at__isnull=True, visited_at__gte=max(start, since), visited_at__lte=now)
+    agg = qs.aggregate(
+        visits=Count("id"),
+        eligible=Count("id", filter=Q(visited_at__gte=since)),
+        checked_out=Count("id", filter=out_q),
+        inside=Count("id", filter=inside_q),
+        long_stay=Count("id", filter=inside_q & Q(visited_at__lt=now - timedelta(minutes=LONG_STAY_MINUTES))),
+        left_without=Count("id", filter=Q(checked_out_at__isnull=True, visited_at__gte=since, visited_at__lt=start)),
+        avg=Avg(_stay_minutes(), filter=out_q),
+    )
+    # the median and the stay bands need every visit's minutes: a second query, skipped when only the counts are wanted
+    minutes = (
+        sorted(int(m) for m in qs.filter(out_q).annotate(m=_stay_minutes()).values_list("m", flat=True))
+        if detail and agg["checked_out"]
+        else []
+    )
+    bands = []
+    for key, label, lo, hi in STAY_BUCKETS:
+        n = sum(1 for m in minutes if m >= lo and (hi is None or m < hi))
+        bands.append({"key": key, "label": label, "visits": n, "sharePct": pct(n, len(minutes))})
+    return {
+        "visits": agg["visits"],
+        "checkoutEligible": agg["eligible"],
+        "checkedOut": agg["checked_out"],
+        "checkedOutPct": pct(agg["checked_out"], agg["eligible"]),
+        "insideNow": agg["inside"],
+        "longStayNow": agg["long_stay"],
+        "leftWithoutCheckout": agg["left_without"],
+        "avgMinutesInside": average_minutes(agg["avg"]),
+        "medianMinutesInside": _median_minutes(minutes),
+        "longestMinutesInside": minutes[-1] if minutes else None,
+        "stayBands": bands,
+        "longStayFromMinutes": LONG_STAY_MINUTES,
+        "since": CHECKOUT_SINCE.isoformat(),
+    }
+
+
+def _checkout_for(qs, period: Period, visits: int, now: datetime, today: date, *, detail: bool = True) -> dict:
+    """_checkout_totals for a period, without a query when the period ends before check-out existed (CHECKOUT_SINCE):
+    then no visit can have one, and only the visit count is known."""
+    if period.end >= CHECKOUT_SINCE:
+        return _checkout_totals(qs, now, today, detail=detail)
+    return {
+        "visits": visits,
+        "checkoutEligible": 0,
+        "checkedOut": 0,
+        "checkedOutPct": None,
+        "insideNow": 0,
+        "longStayNow": 0,
+        "leftWithoutCheckout": 0,
+        "avgMinutesInside": None,
+        "medianMinutesInside": None,
+        "longestMinutesInside": None,
+        "stayBands": [{"key": k, "label": label, "visits": 0, "sharePct": None} for k, label, _lo, _hi in STAY_BUCKETS],
+        "longStayFromMinutes": LONG_STAY_MINUTES,
+        "since": CHECKOUT_SINCE.isoformat(),
+    }
+
+
+def _inside_snapshot(scope: Scope, now: datetime, today: date) -> dict:
+    """Who is inside right now, whatever the period: today's visits (India time) with no check-out, and how many of them
+    have been inside for more than LONG_STAY_MINUTES (the HR page's "Inside now" and "Inside over 2 h")."""
+    start = _day_start(today)
+    inside = Q(checked_out_at__isnull=True, visited_at__gte=max(start, _day_start(CHECKOUT_SINCE)), visited_at__lte=now)
+    agg = (
+        # only today's visits and yesterday's (a check-out today may close a visit of last evening: 24 hours at most)
+        VisitorVisit.objects.filter(_visit_scope_q(scope), visited_at__gte=start - timedelta(hours=24))
+        .order_by()
+        .aggregate(
+            insideNow=Count("id", filter=inside),
+            longStayNow=Count("id", filter=inside & Q(visited_at__lt=now - timedelta(minutes=LONG_STAY_MINUTES))),
+            checkedOutToday=Count("id", filter=Q(checked_out_at__gte=start, checked_out_at__lte=now)),
+            visitsToday=Count("id", filter=Q(visited_at__gte=start, visited_at__lte=now)),
+        )
+    )
+    return agg
+
+
+def _by_source(qs) -> list[dict]:
+    """Visits by how they were checked in (QR self check-in, HR, a reception desk), with their check-outs."""
+    rows = {
+        r["source"]: r
+        for r in qs.values("source")
+        .annotate(n=Count("id"), out=Count("id", filter=Q(checked_out_at__isnull=False)))
+        .annotate(avg=Avg(_stay_minutes(), filter=Q(checked_out_at__isnull=False)))
+        .order_by()
+    }
+    total = sum(r["n"] for r in rows.values())
+    return [
+        {
+            "key": key,
+            "label": label,
+            "visits": rows[key]["n"],
+            "sharePct": pct(rows[key]["n"], total),
+            "checkedOut": rows[key]["out"],
+            "avgMinutesInside": average_minutes(rows[key]["avg"]),
+        }
+        for key, label in SOURCE_LABELS.items()
+        if key in rows
+    ]
+
+
+def _by_desk(qs) -> list[dict]:
+    """Check-ins and check-outs per reception desk (visits HR registered or a QR check-in have no desk)."""
+    desks: dict[int, dict] = {}
+    for field, key in (("checked_in_desk", "checkIns"), ("checked_out_desk", "checkOuts")):
+        for r in (
+            qs.filter(**{f"{field}__isnull": False})
+            .values(f"{field}_id", f"{field}__name")
+            .annotate(n=Count("id"))
+            .order_by()
+        ):
+            slot = desks.setdefault(
+                r[f"{field}_id"],
+                {"deskId": r[f"{field}_id"], "desk": r[f"{field}__name"], "checkIns": 0, "checkOuts": 0},
+            )
+            slot[key] += r["n"]
+    return sorted(desks.values(), key=lambda d: (-(d["checkIns"] + d["checkOuts"]), d["desk"] or ""))
+
+
+def _by_company(qs, limit: int) -> dict:
+    """The companies visitors came from (only HR / reception registrations ask), case and spaces ignored."""
+    given = qs.exclude(company__isnull=True).exclude(company__regex=r"^\s*$")
+    rows = list(
+        given.annotate(ck=Lower(Trim("company")))
+        .values("ck")
+        .annotate(n=Count("id"), people=Count("visitor_id", distinct=True))
+        .order_by("-n", "ck")
+    )
+    shown = rows[:limit]
+    # a company is written as at its latest visit (one query for the rows shown, never a collation-dependent MIN)
+    spelling: dict[str, str] = {}
+    if shown:
+        for r in (
+            given.annotate(ck=Lower(Trim("company")), label=Trim("company"))
+            .filter(ck__in=[r["ck"] for r in shown])
+            .order_by("ck", "-visited_at", "-id")
+            .values("ck", "label")
+        ):
+            spelling.setdefault(r["ck"], r["label"])
+    return {
+        "visitsWithCompany": sum(r["n"] for r in rows),
+        "companies": len(rows),
+        "rows": [
+            {"company": _text(spelling.get(r["ck"], r["ck"]), 80), "visits": r["n"], "uniqueVisitors": r["people"]}
+            for r in shown
+        ],
+    }
+
+
 # ─── outpasses ────────────────────────────────────────────────────────────────────────────────────────────────────
 
 PASS_VALUES = (
@@ -514,6 +741,12 @@ PASS_VALUES = (
     "entered_at",
     "return_qr_generated_at",
     "expected_return_at",
+    # the gates (Manage Gates) and the reviewer's remark: a rejection carries its reason since 21 Nov 2026
+    "exit_gate_id",
+    "exit_gate__name",
+    "entry_gate__name",
+    "review_comment",
+    "reason",
 )
 
 
@@ -652,8 +885,9 @@ def _waiting_snapshot(scope: Scope, now: datetime) -> dict:
     }
 
 
-def _outside_now(scope: Scope, now: datetime, today: date) -> int:
-    """Employees who left today on a pass and have not been scanned back in (early dismissals do not return)."""
+def _outside_now(scope: Scope, now: datetime, today: date, *, overdue: bool = False) -> int:
+    """Employees who left today on a pass and have not been scanned back in (early dismissals do not return). With
+    ``overdue``: only those past the return time they gave (the Gate Pass In/Out tab's "Overdue")."""
     start = datetime.combine(today, time.min, tzinfo=FACTORY_TZ)
     qs = OutpassRequest.objects.filter(
         scope.employee_q("employee__"),
@@ -662,6 +896,8 @@ def _outside_now(scope: Scope, now: datetime, today: date) -> int:
         exited_at__lte=now,
         entered_at__isnull=True,
     ).exclude(pass_type="early_dismissal")
+    if overdue:
+        qs = qs.filter(expected_return_at__lt=now)
     return qs.order_by().count()
 
 
@@ -754,6 +990,56 @@ def _p_visits(rows: int | None, scope: Scope) -> dict:
             "A visitor is identified by the exact phone number typed at the gate: one person typed with and without "
             "+91 counts as two visitors.",
         ],
+    )
+
+
+def _p_checkout(rows: int | None) -> dict:
+    return prov(
+        "visits-checkout",
+        "Check-out and time inside",
+        dataset="Visitor check-ins and check-outs (HR Visitors page, reception desks)",
+        definition="Checked out = a check-out was recorded (by HR or the visit's reception desk, at most 24 hours after "
+        "the check-in). Inside = came today (India time) and not checked out. Left without check-out = an earlier day "
+        "with no check-out. Time inside = check-in to check-out in whole minutes (seconds dropped); the average is the "
+        "mean of those minutes rounded half up, the HR Visitors page's own rule.",
+        formula="checked out % = checked-out visits ÷ visits since 18 Nov 2026 · average time inside = mean whole "
+        "minutes of checked-out visits",
+        rows=rows,
+        filters=["Check-in time, factory (IST) calendar days", f"Check-out exists from {CHECKOUT_SINCE:%d %b %Y}"],
+        caveats=[
+            NOTE_NO_CHECKOUT,
+            f"Inside now and inside over {LONG_STAY_MINUTES // 60} h are a live count of today, whatever the period.",
+        ],
+    )
+
+
+def _p_sources(rows: int | None) -> dict:
+    return prov(
+        "visits-sources",
+        "How visits were checked in, desks and companies",
+        dataset="Visitor check-ins",
+        definition="QR self check-in = the visitor's own phone through the unit's visitor QR; Registered by HR = the HR "
+        "Visitors page; Reception desk = a reception desk login (Manage Reception). A company is asked only by HR and "
+        "the desks, so companies cover those visits only, grouped ignoring case and spaces.",
+        formula="visits per way in · check-ins and check-outs per desk · visits per company",
+        rows=rows,
+        filters=["Check-in time, factory (IST) calendar days"],
+        caveats=[NOTE_NO_COMPANY],
+    )
+
+
+def _p_gates(rows: int | None) -> dict:
+    return prov(
+        "outpass-gates",
+        "Gate passes by gate",
+        dataset="Gate pass requests with their exit and return scans (Manage Gates)",
+        definition="Each pass that went out, by the gate that scanned it out: came back = scanned back in (at any gate), "
+        "still out = left today and not back yet, never returned = left on an earlier day and never scanned back. "
+        "Time out is door to door, exit scan to return scan, for passes that came back.",
+        formula="per exit gate: passes out, back, still out, never returned, average minutes out (half up)",
+        rows=rows,
+        filters=["Employee-requested passes (On-Duty trips left out)", "Counted on the day the pass was requested"],
+        caveats=["A pass scanned out before gate logins existed has no gate: it is listed as 'Gate not recorded'."],
     )
 
 
@@ -1076,6 +1362,9 @@ def summary(scope: Scope, period: Period) -> dict:
     cur_qs, prev_qs = _visit_qs(scope, period), _visit_qs(scope, previous)
     cells = _visit_cells(cur_qs)
     v, pv = _visit_totals(cur_qs), _visit_totals(prev_qs)
+    co = _checkout_for(cur_qs, period, v["visits"], now, today)
+    pco = _checkout_for(prev_qs, previous, pv["visits"], now, today, detail=False)
+    inside = _inside_snapshot(scope, now, today)
     peak_hour, peak_day = _peaks(cells)
 
     cur_facts, cur_on_duty = _facts(_pass_rows(scope, period), now, today)
@@ -1095,6 +1384,17 @@ def summary(scope: Scope, period: Period) -> dict:
         "avgPerDay": _metric(_round1(v["visits"] / period.days), _round1(pv["visits"] / previous.days)),
         "peakHour": peak_hour,
         "peakDay": peak_day,
+        # check-out (from 18 Nov 2026): the period's visits, and a live picture of today
+        "checkedOut": _metric(co["checkedOut"], pco["checkedOut"]),
+        "checkedOutPct": _metric(co["checkedOutPct"], pco["checkedOutPct"]),
+        "avgMinutesInside": _metric(co["avgMinutesInside"], pco["avgMinutesInside"]),
+        "medianMinutesInside": co["medianMinutesInside"],
+        "leftWithoutCheckout": co["leftWithoutCheckout"],
+        "checkoutEligible": co["checkoutEligible"],
+        "insideNow": inside["insideNow"],
+        "longStayNow": inside["longStayNow"],
+        "checkedOutToday": inside["checkedOutToday"],
+        "visitsToday": inside["visitsToday"],
     }
     outpass = {
         "requests": m("requests", c, p),
@@ -1114,6 +1414,7 @@ def summary(scope: Scope, period: Period) -> dict:
         "onDutyTrips": _metric(cur_on_duty, prev_on_duty),
         "gateFormExits": _metric(cur_forms, prev_forms),
         "outsideNow": _outside_now(scope, now, today),
+        "overdueNow": _outside_now(scope, now, today, overdue=True),
         "waitingNow": {k: waiting[k] for k in ("waiting", "overOneDay", "oldestMinutes")},
     }
     notes = [
@@ -1129,6 +1430,7 @@ def summary(scope: Scope, period: Period) -> dict:
         scope=scope,
         provenance=[
             _p_visits(v["visits"], scope),
+            _p_checkout(co["visits"]),
             _p_peak(v["visits"]),
             _p_after_hours(v["visits"]),
             _p_repeat_visitors(v["repeatVisitors"], scaled_threshold(FREQUENT_VISITOR_PER_30_DAYS, period.days)),
@@ -1349,6 +1651,7 @@ def _repeat_visitor_rows(qs, minimum: int, limit: int) -> tuple[int, int, list[d
 def visitors_breakdown(scope: Scope, period: Period, *, limit: int = 10, include_heatmap: bool = True) -> dict:
     """Who is coming in: purposes, host departments, the most visited people, repeat visitors and the busiest times."""
     limit = max(1, min(MAX_LIST, limit))
+    now, today = _clock()
     qs = _visit_qs(scope, period)
     cells = _visit_cells(qs)
     totals = _visit_totals(qs)
@@ -1388,6 +1691,11 @@ def visitors_breakdown(scope: Scope, period: Period, *, limit: int = 10, include
         "busiestWeekday": {"weekday": WEEKDAYS[busiest_weekday[0]], "visits": busiest_weekday[1]}
         if busiest_weekday
         else None,
+        # from 18 Nov 2026: check-out and time inside, how visits came in, the desks and the companies
+        "checkout": _checkout_for(qs, period, total, now, today),
+        "sources": _by_source(qs),
+        "desks": _by_desk(qs),
+        "companies": _by_company(qs, limit),
     }
     if include_heatmap:
         data["heatmap"] = _heatmap(cells)
@@ -1397,6 +1705,8 @@ def visitors_breakdown(scope: Scope, period: Period, *, limit: int = 10, include
         scope=scope,
         provenance=[
             _p_visits(total, scope),
+            _p_checkout(total),
+            _p_sources(total),
             _p_purposes(total),
             _p_hosts(total),
             _p_repeat_visitors(repeat_n, minimum),
@@ -1503,6 +1813,44 @@ def _funnel(facts: list[PassFact], on_duty: int) -> dict:
     }
 
 
+NO_GATE = "Gate not recorded"
+
+
+def _by_gate(facts: list[PassFact]) -> list[dict]:
+    """The passes that went out, by the gate that scanned them out (Manage Gates), with how they came back."""
+    groups: dict[str, dict] = {}
+    for f in facts:
+        if f.row["exited_at"] is None:
+            continue
+        name = f.row["exit_gate__name"] or NO_GATE
+        g = groups.setdefault(
+            name,
+            {
+                "gateId": f.row["exit_gate_id"],
+                "gate": name,
+                "wentOut": 0,
+                "cameBack": 0,
+                "stillOut": 0,
+                "notReturned": 0,
+                "measured": [],
+            },
+        )
+        g["wentOut"] += 1
+        g["cameBack"] += f.row["entered_at"] is not None
+        g["stillOut"] += f.outcome == "outside_now"
+        g["notReturned"] += f.outcome == "not_returned"
+        if f.minutes is not None:
+            g["measured"].append(f.minutes)
+    rows = []
+    for g in groups.values():
+        measured = g.pop("measured")
+        rows.append(
+            {**g, "avgMinutesOut": GO.mean_minutes(measured), "minutesOut": sum(measured) if measured else None}
+        )
+    rows.sort(key=lambda r: (r["gate"] == NO_GATE, -r["wentOut"], r["gate"]))
+    return rows
+
+
 def _headcount_by_department(scope: Scope) -> dict[str, int]:
     rows = scope.employees(active=True).order_by().values("department__name").annotate(n=Count("id"))
     out: dict[str, int] = defaultdict(int)
@@ -1538,6 +1886,7 @@ def outpass_breakdown(scope: Scope, period: Period, *, limit: int = 10) -> dict:
             "byDepartment": departments[:limit],
             "departmentsTotal": len(departments),
             "byReason": _by_reason(facts),
+            "byGate": _by_gate(facts),
             "durations": _durations(facts),
             "totals": {
                 "minutesOut": metrics["minutesOut"],
@@ -1569,6 +1918,7 @@ def outpass_breakdown(scope: Scope, period: Period, *, limit: int = 10) -> dict:
             _p_waiting(waiting["waiting"]),
             _p_return_rate(metrics["returned"] + metrics["notReturned"]),
             _p_gate_scans(scans["attempts"]),
+            _p_gates(metrics["left"]),
         ],
         notes=notes,
     )
@@ -1805,6 +2155,37 @@ def _attention(data: dict, period: Period) -> list[dict]:
                 "ask": f"Which visitors came most often {when}, and why?",
             }
         )
+    inside = data.get("_insideNow") or {}
+    if inside.get("longStayNow"):
+        n = inside["longStayNow"]
+        items.append(
+            {
+                "id": "visitors.long-stay",
+                "severity": "warning",
+                "title": f"{n} {_plural(n, 'visitor has', 'visitors have')} been inside for over "
+                f"{LONG_STAY_MINUTES // 60} hours",
+                "detail": "Checked in today and not checked out yet: they may still be on the premises, or the "
+                "check-out was not recorded.",
+                "metric": f"{n} {_plural(n, 'visitor')}",
+                "page": PAGE_VISITORS,
+                "ask": f"Which visitors have been inside for more than {LONG_STAY_MINUTES // 60} hours today, and whom "
+                "did they come to see?",
+            }
+        )
+    checkout = data.get("_checkout") or {}
+    eligible, left = checkout.get("checkoutEligible") or 0, checkout.get("leftWithoutCheckout") or 0
+    if eligible >= NO_CHECKOUT_MIN_VISITS and (pct(left, eligible) or 0) >= NO_CHECKOUT_WARN_PCT:
+        items.append(
+            {
+                "id": "visitors.no-checkout",
+                "severity": "info",
+                "title": f"{left} of {eligible} visits {when} were never checked out",
+                "detail": "Reception or HR did not record when these visitors left, so their time inside is unknown.",
+                "metric": f"{pct(left, eligible):g}%",
+                "page": PAGE_VISITORS,
+                "ask": f"How many visits {when} were never checked out, and at which desks?",
+            }
+        )
     spike = data.get("visitorSpike")
     if spike:
         items.append(
@@ -2031,6 +2412,9 @@ def _exceptions_data(
         "frequentVisitors": {"total": frequent_n, "minimum": frequent_min, "rows": frequent_rows},
         "visitorSpike": spike,
         "improvement": improvement,
+        # check-out findings: only for a period that check-out exists in; "inside now" only when the period holds today
+        "_checkout": _checkout_for(_visit_qs(scope, period), period, 0, now, today, detail=False),
+        "_insideNow": _inside_snapshot(scope, now, today) if period.start <= today <= period.end else {},
         "_onDuty": on_duty,
         "_requests": len(facts),
         "_measured": len(measured),
@@ -2257,6 +2641,214 @@ def activity(
     )
 
 
+# ─── drill-down: the records behind a figure ──────────────────────────────────────────────────────────────────────
+
+VISIT_LIST_VALUES = (
+    "id",
+    "visited_at",
+    "checked_out_at",
+    "shown_name",
+    "purpose",
+    "whom_to_meet",
+    "meeting_employee_id",
+    "meeting_employee__employee_code",
+    "meeting_employee__first_name",
+    "meeting_employee__last_name",
+    "meeting_employee__department__name",
+    "company",
+    "source",
+    "people_count",
+    "branch__name",
+    "checked_in_desk__name",
+    "checked_out_desk__name",
+)
+#: A purpose filter is worked out in Python (the categories are keyword rules): at most this many visits are read.
+MAX_PURPOSE_SCAN = 5000
+
+
+def _page_args(page: int, page_size: int) -> tuple[int, int]:
+    return max(1, page), max(1, min(100, page_size))
+
+
+@cached()
+def visit_list(
+    scope: Scope,
+    period: Period,
+    *,
+    status: str | None = None,
+    purpose: str | None = None,
+    source: str | None = None,
+    desk: int | None = None,
+    host: int | None = None,
+    company: str | None = None,
+    after_hours: bool = False,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict:
+    """The visits behind a figure the MD clicked (checked out, inside, a purpose, a desk, a host, a company, after
+    hours), newest first, a page at a time. Names are as given at each visit; phone and Aadhaar are never sent."""
+    page, page_size = _page_args(page, page_size)
+    now, today = _clock()
+    qs = _visit_qs(scope, period)
+    filters: list[str] = []
+    if status:
+        qs = qs.filter(_status_q(status, today))
+        filters.append(VISIT_STATUS_LABELS[status])
+    if source:
+        if source not in SOURCE_LABELS:
+            raise MdParamError(f"'source' must be one of: {', '.join(SOURCE_LABELS)}.")
+        qs = qs.filter(source=source)
+        filters.append(SOURCE_LABELS[source])
+    if desk is not None:
+        qs = qs.filter(Q(checked_in_desk_id=desk) | Q(checked_out_desk_id=desk))
+        filters.append("One reception desk")
+    if host is not None:
+        qs = qs.filter(meeting_employee_id=host)
+        filters.append("One host")
+    if company:
+        qs = qs.annotate(ck=Lower(Trim("company"))).filter(ck=" ".join(company.split()).lower())
+        filters.append(f"Company: {_text(company, 60)}")
+    if after_hours:
+        qs = qs.annotate(h=_hour_expr()).filter(_after_hours_q())
+        filters.append(f"Before {_clock_label(VISIT_DAY_START_HOUR)} or from {_clock_label(VISIT_DAY_END_HOUR)}")
+    if purpose:
+        if purpose not in PURPOSE_LABEL:
+            raise MdParamError(f"'purpose' must be one of: {', '.join(PURPOSE_LABEL)}.")
+        ids = [
+            r["id"]
+            for r in qs.values("id", "purpose")[:MAX_PURPOSE_SCAN]
+            if classify_purpose(r["purpose"])[0] == purpose
+        ]
+        qs = qs.filter(id__in=ids)
+        filters.append(PURPOSE_LABEL[purpose])
+    total = qs.count()
+    start = (page - 1) * page_size
+    rows = _with_visit_name(qs).values(*VISIT_LIST_VALUES).order_by("-visited_at", "-id")[start : start + page_size]
+    items = []
+    for r in rows:
+        state = _visit_status(r["checked_out_at"], r["visited_at"], today)
+        end = r["checked_out_at"] if state == "checked_out" else (now if state == "inside" else None)
+        linked = r["meeting_employee_id"] is not None
+        items.append(
+            {
+                "visitId": r["id"],
+                "visitedAt": _stamp(r["visited_at"]),
+                "checkedOutAt": _stamp(r["checked_out_at"]),
+                "minutesInside": whole_minutes(r["visited_at"], end) if end is not None else None,
+                "status": state,
+                "statusLabel": VISIT_STATUS_LABELS[state],
+                "visitorName": r["shown_name"],
+                "purpose": _text(r["purpose"], 100),
+                "purposeCategory": classify_purpose(r["purpose"])[1],
+                "hostEmployeeId": r["meeting_employee_id"],
+                "hostName": _person(r["meeting_employee__first_name"], r["meeting_employee__last_name"])
+                if linked
+                else _text(r["whom_to_meet"], 80),
+                "hostDepartment": r["meeting_employee__department__name"] if linked else None,
+                "hostLinked": linked,
+                "company": _text(r["company"], 80),
+                "source": r["source"],
+                "sourceLabel": SOURCE_LABELS.get(r["source"], r["source"]),
+                "peopleCount": r["people_count"],
+                "unit": r["branch__name"],
+                "desk": r["checked_in_desk__name"],
+                "checkoutDesk": r["checked_out_desk__name"],
+            }
+        )
+    return envelope(
+        {
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "hasMore": start + page_size < total,
+            "filters": filters,
+            "items": items,
+        },
+        period=period,
+        scope=scope,
+        provenance=[_p_visits(total, scope), _p_checkout(total)],
+        notes=_scope_notes(scope),
+    )
+
+
+@cached()
+def pass_list(
+    scope: Scope,
+    period: Period,
+    *,
+    outcome: str | None = None,
+    department: str | None = None,
+    reason: str | None = None,
+    gate: str | None = None,
+    employee: int | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict:
+    """The gate passes behind a figure the MD clicked (an outcome, a department, a reason, an exit gate, one employee),
+    newest request first, a page at a time. Same population and rules as every outpass figure here (employee-requested
+    passes, counted on the day they were requested). A rejected pass carries the reason the reviewer gave."""
+    page, page_size = _page_args(page, page_size)
+    if outcome and outcome not in OUTCOME_LABELS:
+        raise MdParamError(f"'outcome' must be one of: {', '.join(OUTCOME_LABELS)}.")
+    if reason and reason not in REASON_LABEL:
+        raise MdParamError(f"'reason' must be one of: {', '.join(REASON_LABEL)}.")
+    now, today = _clock()
+    facts, _on_duty = _facts(_pass_rows(scope, period), now, today)
+    filters: list[str] = []
+    if outcome:
+        facts = [f for f in facts if f.outcome == outcome]
+        filters.append(OUTCOME_LABELS[outcome])
+    if department:
+        facts = [f for f in facts if (f.row["employee__department__name"] or NO_DEPARTMENT) == department]
+        filters.append(department)
+    if reason:
+        facts = [f for f in facts if f.reason == reason]
+        filters.append(REASON_LABEL[reason])
+    if gate:
+        facts = [f for f in facts if f.row["exited_at"] is not None and (f.row["exit_gate__name"] or NO_GATE) == gate]
+        filters.append(f"Out through {gate}")
+    if employee is not None:
+        facts = [f for f in facts if f.row["employee_id"] == employee]
+        filters.append("One employee")
+    facts.sort(key=lambda f: (f.row["created_at"], f.row["id"]), reverse=True)
+    start = (page - 1) * page_size
+    items = [
+        {
+            "passId": f.row["id"],
+            **_emp(f.row),
+            "passType": REASON_LABEL[f.reason],
+            "destination": _text(f.row["destination"], 80),
+            "reason": _text(f.row["reason"], 120),
+            "requestedAt": _stamp(f.row["created_at"]),
+            "approvedAt": _stamp(f.row["approved_at"]),
+            "exitedAt": _stamp(f.row["exited_at"]),
+            "enteredAt": _stamp(f.row["entered_at"]),
+            "expectedReturnAt": _stamp(f.row["expected_return_at"]),
+            "minutesOut": f.minutes,
+            "outcome": f.outcome,
+            "outcomeLabel": OUTCOME_LABELS[f.outcome],
+            "exitGate": f.row["exit_gate__name"],
+            "entryGate": f.row["entry_gate__name"],
+            "reviewComment": _text(f.row["review_comment"], 160) if f.row["status"] == "rejected" else None,
+        }
+        for f in facts[start : start + page_size]
+    ]
+    return envelope(
+        {
+            "page": page,
+            "pageSize": page_size,
+            "total": len(facts),
+            "hasMore": start + page_size < len(facts),
+            "filters": filters,
+            "items": items,
+        },
+        period=period,
+        scope=scope,
+        provenance=[_p_passes(len(facts)), _p_funnel(len(facts))],
+        notes=_scope_notes(scope),
+    )
+
+
 def day_snapshot(scope: Scope, day: date, *, limit: int = 15) -> dict:
     """Everything that happened at the gate on one factory day: who visited, who asked to leave, who used the form.
     Answers "who visited yesterday?". Lists are capped at ``limit`` (the totals are not)."""
@@ -2429,8 +3021,24 @@ def _visitor_lines(s: dict, findings: list[dict], period: Period) -> list[dict]:
         "; ".join(clauses) + "." if clauses else "Every visit was inside opening hours and nobody came more than once."
     )
     lines.append(_line("mix", text, "watch" if after else "neutral"))
+    eligible = v.get("checkoutEligible") or 0
+    if eligible:  # check-out exists from 18 Nov 2026: a sentence only when the period has visits that could have one
+        out = v["checkedOut"]["value"]
+        avg = v["avgMinutesInside"]["value"]
+        text = f"{_n(out)} of {_n(eligible)} {_plural(eligible, 'visit')} since check-out began were checked out"
+        text += f" ({_p_text(v['checkedOutPct']['value'])})" if v["checkedOutPct"]["value"] is not None else ""
+        text += f", staying {_hm(avg)} on average" if avg is not None else ""
+        inside, long_stay = v["insideNow"], v["longStayNow"]
+        if inside:
+            text += f"; {_n(inside)} {_plural(inside, 'visitor is', 'visitors are')} inside now"
+            text += f" ({_n(long_stay)} for over {LONG_STAY_MINUTES // 60} hours)" if long_stay else ""
+        lines.append(_line("checkout", text + ".", "watch" if long_stay else "neutral"))
     lines.append(tea.attention_line(findings, "visitors"))
     return lines
+
+
+def _p_text(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:g}%"
 
 
 @cached()
@@ -2447,7 +3055,7 @@ def story(scope: Scope, period: Period, focus: str = PAGE_OUTPASS) -> dict:
     wanted = (
         ("passes", "hours-out", "return-rate", "waiting")
         if outpass
-        else ("visits", "peak", "after-hours", "repeat-visitors")
+        else ("visits", "visits-checkout", "peak", "after-hours", "repeat-visitors")
     )
     who = "" if scope.is_everyone() else f" ({scope.describe()})"
     subject = "the outpass picture" if outpass else "visitor traffic"

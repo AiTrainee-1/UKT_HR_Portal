@@ -17,7 +17,8 @@ Every break lands in exactly one of three groups (they add up to "breaks taken")
 
 Overruns, the average, "within allowance" and the minutes lost use ONLY the measured group, so one missed scan cannot
 add hours to the headline. That is the Report Center's "Leave out long / unclosed breaks" switch turned on (the
-parity tests prove the figures are identical). The other two groups are never hidden: they are counted and reported
+parity tests prove the figures are identical; the HR Tea Break page counts every break, and the tests check that the
+two differ by exactly the long breaks). The other two groups are never hidden: they are counted and reported
 as coverage.
 
 Nothing here writes. The rule row is read with ``.filter(pk=1).first()`` (``TeaBreakRule.get()`` would INSERT it).
@@ -31,7 +32,7 @@ from django.db.models import Case, Count, F, IntegerField, Q, QuerySet, Sum, Val
 from django.db.models.functions import ExtractHour, ExtractIsoWeekDay, ExtractMinute
 
 from ...clock import FACTORY_TZ, ist_today
-from ...models import EmployeeShiftAssignment, ShiftTemplate, TeaBreakLog
+from ...models import EmployeeShiftAssignment, OutpassGateScan, ShiftTemplate, TeaBreakLog
 from ...reporting.definitions import gate_visitor_tea_common as C
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, prov
@@ -144,6 +145,16 @@ def _breaks(scope: Scope, start: date, end: date) -> QuerySet:
     return TeaBreakLog.objects.filter(scope.employee_q("employee__"), out_at__gte=lo, out_at__lt=hi)
 
 
+def _refused(scope: Scope, start: date, end: date) -> QuerySet:
+    """Tea-break codes a gate refused because it does not take tea breaks (Manage Gates, since 19 Nov 2026): denied gate
+    scans of type "tea". A refused scan never becomes a break, so it is counted beside the breaks, never inside them.
+    Same Indian-time days and the same employee scope as the breaks."""
+    lo, hi = C.ist_bounds(start, end)
+    return OutpassGateScan.objects.filter(
+        scope.employee_q("employee__"), scan_type=OutpassGateScan.SCAN_TYPE_TEA, scanned_at__gte=lo, scanned_at__lt=hi
+    ).order_by()
+
+
 def _measures(allowed: int, now: datetime, *, people: bool = True, days: bool = False) -> dict:
     """The aggregates every figure here is built from. measured / long / no-return partition the rows."""
     minutes = C.break_minutes()
@@ -235,7 +246,9 @@ def _provenance(allowed: int, scope: Scope, period: Period, *, rows: dict[str, i
     filters = [period.label, f"{period.start.isoformat()} to {period.end.isoformat()}", scope.describe()]
     same_rules = (
         "Same rule, rounding and Indian-time day as the HR Tea Break page and the Report Center's tea-break reports "
-        "(figures equal those reports with 'Leave out long / unclosed breaks' switched on)."
+        "(figures equal those reports with 'Leave out long / unclosed breaks' switched on). The HR page's Overtime also "
+        f"counts finished breaks over {SUSPECT_MINUTES} minutes (probably a missed scan); this page counts those on "
+        "their own."
     )
     return {
         "tea-breaks": prov(
@@ -321,6 +334,19 @@ def _provenance(allowed: int, scope: Scope, period: Period, *, rows: dict[str, i
                 "Headcount is today's active employees (there is no headcount history).",
                 "People who do not scan do not appear, so overrun figures describe the people who scan.",
             ],
+        ),
+        "tea-refused": prov(
+            "tea-refused",
+            "Refused at the gate",
+            dataset="Gate scans (Manage Gates)",
+            definition=(
+                "Tea-break codes scanned at a gate that does not take tea breaks: the gate refuses them, so no break "
+                "starts. Recorded since 19 Nov 2026. They are counted beside the breaks, never inside them."
+            ),
+            formula="refused tea-break scans in the period",
+            rows=rows.get("refused"),
+            filters=filters,
+            caveats=["A gate takes tea breaks or not as HR sets it on Manage Gates."],
         ),
         "tea-unmeasured": prov(
             "tea-unmeasured",
@@ -425,6 +451,8 @@ def tea_summary(scope: Scope, period: Period) -> dict:
     active = scope.employees().count()
     cur, prev = _figures(cur_raw, allowed), _figures(prev_raw, allowed)
     cov = _coverage(cur_raw, cur, active, period)
+    refused_now = _refused(scope, period.start, period.end).count()
+    refused_before = _refused(scope, previous.start, previous.end).count()
 
     def metric(key: str) -> dict:
         return {"value": cur[key], "previous": prev[key], "change": change(cur[key], prev[key])}
@@ -448,6 +476,7 @@ def tea_summary(scope: Scope, period: Period) -> dict:
             "overruns": cur["overruns"],
             "active": active,
             "unmeasured": cov["unmeasured"],
+            "refused": refused_now,
         },
     )
     return envelope(
@@ -458,12 +487,18 @@ def tea_summary(scope: Scope, period: Period) -> dict:
             "withinAllowance": cur["measured"] - cur["overruns"] if cur["measured"] else None,
             "previousPeriod": previous.to_json(),
             "coverage": cov,
+            "refused": {
+                "value": refused_now,
+                "previous": refused_before,
+                "change": change(refused_now, refused_before),
+            },
         },
         period=period,
         scope=scope,
         provenance=_pick(
             prov_all,
             "tea-breaks",
+            "tea-refused",
             "tea-overrun",
             "tea-minutes-lost",
             "tea-average",
@@ -632,6 +667,8 @@ _GROUPS = {
     "department": ("employee__department__name", "department__name", "No department"),
     "unit": ("employee__branch__name", "branch__name", "No unit"),
     "type": ("employee__employment_type", "employment_type", "Not set"),
+    # the gate the break started at (Manage Gates): a place, not a team, so it has no headcount
+    "gate": ("out_gate__name", None, "Gate not recorded"),
 }
 _TYPE_LABEL = {"staff": "Staff", "production": "Production"}
 NONE_KEY = "__none__"
@@ -748,20 +785,34 @@ def tea_departments(scope: Scope, period: Period, by: str = "department", limit:
 
     cur = _grouped(scope, period.start, period.end, log_field, allowed, now)
     prev = _grouped(scope, previous.start, previous.end, log_field, allowed, now)
-    heads = dict(scope.employees().values_list(emp_field).annotate(n=Count("id")).order_by())
+    heads = dict(scope.employees().values_list(emp_field).annotate(n=Count("id")).order_by()) if emp_field else {}
+    refused = (
+        dict(_refused(scope, period.start, period.end).values_list("gate__name").annotate(n=Count("id")).order_by())
+        if by == "gate"
+        else {}
+    )
 
     total_raw = _zero()
     for raw in cur.values():
         _add(total_raw, raw)
     total_lost = _figures(total_raw, allowed)["minutesLost"] or 0
     rows = []
-    for grp in set(cur) | set(heads):
+    for grp in set(cur) | set(heads) | set(refused):
         key = NONE_KEY if grp is None or grp == "" else str(grp)
         label = (
             none_label if key == NONE_KEY else (_TYPE_LABEL.get(grp, str(grp).title()) if by == "type" else str(grp))
         )
         rows.append(
-            _group_row(key, label, cur.get(grp), prev.get(grp), allowed, total_lost, headcount=heads.get(grp, 0))
+            _group_row(
+                key,
+                label,
+                cur.get(grp),
+                prev.get(grp),
+                allowed,
+                total_lost,
+                headcount=heads.get(grp, 0) if emp_field else None,
+                extra={"refused": refused.get(grp, 0)} if by == "gate" else None,
+            )
         )
 
     entries = _group_prov_entries(allowed, scope, period, total_raw)
@@ -771,8 +822,9 @@ def tea_departments(scope: Scope, period: Period, by: str = "department", limit:
         dataset="Gate tea-break scans, employee list",
         definition=(
             "Breaks are grouped by the department, unit or type each employee belongs to today (there is no history "
-            "of transfers). A department with the same name in several units is one department. Ranked by minutes "
-            "lost, biggest first."
+            "of transfers), or by the gate the break started at. A department with the same name in several units is "
+            "one department. Ranked by minutes lost, biggest first. By gate, refused tea-break scans are shown beside "
+            "each gate's breaks."
         ),
         formula="minutes lost per group; share = group minutes lost ÷ all minutes lost; participation = active employees "
         "with a break ÷ active employees in the group",
@@ -1173,6 +1225,7 @@ def tea_offenders(
         taken, when = worst.get(r["employee_id"], (None, None))
         out_rows.append(
             {
+                "employeeId": r["employee_id"],
                 "employeeCode": r["employee__employee_code"],
                 "employeeName": C.person_name(r["employee__first_name"], r["employee__last_name"]),
                 "department": r["employee__department__name"] or "No department",
@@ -1231,6 +1284,179 @@ def tea_offenders(
 
 
 # ─── the rule, in plain words ───────────────────────────────────────────────────────────────────────────────────
+
+
+# ─── drill-down: the breaks behind a figure ─────────────────────────────────────────────────────────────────────
+
+#: What a break is, for the list (the page's three groups, with "measured" split by the allowance).
+RECORD_STATUS_LABELS = {
+    "within": "Within the allowance",
+    "overrun": "Over the allowance",
+    "long": f"Over {SUSPECT_MINUTES} min (scan probably missed)",
+    "no_return": "No return scan",
+    "in_progress": "On break now",
+    "refused": "Refused at the gate",
+}
+RECORD_GROUPS = tuple(_GROUPS)
+
+
+def _record_status_q(status: str, allowed: int, now: datetime) -> Q:
+    measured = C.within_q(SUSPECT_MINUTES)
+    return {
+        "within": measured & C.within_q(allowed),
+        "overrun": measured & C.long_q(allowed),
+        "long": C.long_q(SUSPECT_MINUTES),
+        "no_return": C.open_q(),
+        "in_progress": C.in_progress_q(now),
+    }[status]
+
+
+def _record_status(in_at: datetime | None, taken: int, remark: str, allowed: int) -> str:
+    """The list's word for one break (``taken`` / ``remark`` from gate_visitor_tea_common.tea_metrics)."""
+    if in_at is None:
+        return "in_progress" if remark == "in_progress" else "no_return"
+    if taken > SUSPECT_MINUTES:
+        return "long"
+    return "overrun" if taken > allowed else "within"
+
+
+def _local(dt: datetime | None) -> str | None:
+    return C.to_ist(dt).replace(tzinfo=None).isoformat(timespec="seconds") if dt is not None else None
+
+
+def _group_q(group_by: str, group: str) -> Q:
+    log_field = _GROUPS[group_by][0]
+    if group == NONE_KEY:
+        return Q(**{f"{log_field}__isnull": True}) | Q(**{log_field: ""})
+    if group_by == "type":
+        return Q(**{log_field: group.lower()})
+    return Q(**{log_field: group})
+
+
+@cached()
+def tea_records(
+    scope: Scope,
+    period: Period,
+    *,
+    status: str | None = None,
+    group_by: str | None = None,
+    group: str | None = None,
+    employee: int | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict:
+    """The breaks behind a figure the MD clicked (overruns, long breaks, no return, a department / unit / type / gate,
+    one employee), newest first, a page at a time; ``status=refused`` lists the tea-break codes a gate refused."""
+    page, page_size = max(1, page), max(1, min(100, page_size))
+    if status and status not in RECORD_STATUS_LABELS:
+        raise MdParamError(f"'status' must be one of: {', '.join(RECORD_STATUS_LABELS)}.")
+    if group_by and group_by not in RECORD_GROUPS:
+        raise MdParamError(f"'by' must be one of: {', '.join(RECORD_GROUPS)}.")
+    allowed, rule_at, now = _context()
+    filters: list[str] = []
+    start = (page - 1) * page_size
+    person = (
+        "employee_id",
+        "employee__employee_code",
+        "employee__first_name",
+        "employee__last_name",
+        "employee__department__name",
+    )
+
+    def who(r: dict) -> dict:
+        return {
+            "employeeId": r["employee_id"],
+            "employeeCode": r["employee__employee_code"],
+            "employeeName": C.person_name(r["employee__first_name"], r["employee__last_name"]) or None,
+            "department": r["employee__department__name"] or "No department",
+        }
+
+    if status == "refused":
+        qs = _refused(scope, period.start, period.end)
+        filters.append(RECORD_STATUS_LABELS["refused"])
+        if group_by == "gate" and group:
+            qs = qs.filter(Q(gate__isnull=True) if group == NONE_KEY else Q(gate__name=group))
+            filters.append(group if group != NONE_KEY else _GROUPS["gate"][2])
+        if employee is not None:
+            qs = qs.filter(employee_id=employee)
+            filters.append("One employee")
+        total = qs.count()
+        rows = qs.values("id", "scanned_at", "gate__name", *person).order_by("-scanned_at", "-id")[
+            start : start + page_size
+        ]
+        items = [
+            {
+                "id": f"scan-{r['id']}",
+                **who(r),
+                "date": C.to_ist(r["scanned_at"]).date().isoformat(),
+                "outAt": _local(r["scanned_at"]),
+                "inAt": None,
+                "minutes": None,
+                "overMinutes": None,
+                "status": "refused",
+                "statusLabel": RECORD_STATUS_LABELS["refused"],
+                "outGate": r["gate__name"],
+                "inGate": None,
+            }
+            for r in rows
+        ]
+    else:
+        qs = _breaks(scope, period.start, period.end).order_by()
+        if status:
+            qs = qs.filter(_record_status_q(status, allowed, now))
+            filters.append(RECORD_STATUS_LABELS[status])
+        if group_by and group:
+            qs = qs.filter(_group_q(group_by, group))
+            filters.append(
+                _GROUPS[group_by][2]
+                if group == NONE_KEY
+                else (_TYPE_LABEL.get(group.lower(), group) if group_by == "type" else group)
+            )
+        if employee is not None:
+            qs = qs.filter(employee_id=employee)
+            filters.append("One employee")
+        total = qs.count()
+        rows = qs.values("id", "out_at", "in_at", "out_gate__name", "in_gate__name", *person).order_by(
+            "-out_at", "-id"
+        )[start : start + page_size]
+        items = []
+        for r in rows:
+            taken, remark = C.tea_metrics(r["out_at"], r["in_at"], allowed, now)
+            done = r["in_at"] is not None
+            state = _record_status(r["in_at"], taken, remark, allowed)
+            items.append(
+                {
+                    "id": f"break-{r['id']}",
+                    **who(r),
+                    "date": C.to_ist(r["out_at"]).date().isoformat(),
+                    "outAt": _local(r["out_at"]),
+                    "inAt": _local(r["in_at"]),
+                    "minutes": taken if done else None,
+                    "overMinutes": max(0, taken - allowed) if done and taken <= SUSPECT_MINUTES else None,
+                    "status": state,
+                    "statusLabel": RECORD_STATUS_LABELS[state],
+                    "outGate": r["out_gate__name"],
+                    "inGate": r["in_gate__name"],
+                }
+            )
+    entries = _provenance(allowed, scope, period, rows={"breaks": total})
+    return envelope(
+        {
+            "allowedMinutes": allowed,
+            "page": page,
+            "pageSize": page_size,
+            "total": total,
+            "hasMore": start + page_size < total,
+            "filters": filters,
+            "items": items,
+        },
+        period=period,
+        scope=scope,
+        provenance=_pick(
+            entries, "tea-breaks", "tea-overrun", "tea-refused" if status == "refused" else "tea-unmeasured"
+        ),
+        notes=_rule_notes(allowed, rule_at),
+    )
 
 
 @cached(30)

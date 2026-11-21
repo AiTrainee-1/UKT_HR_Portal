@@ -20,6 +20,7 @@ import { Router } from "wouter";
 import { memoryLocation } from "wouter/memory-location";
 import { vi } from "vitest";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { preloadMdShell } from "@/components/md/shell/loader";
 
 /** What a fixture answers: any JSON value, or `{ status, body }` for a non-200 response. */
 type Reply = string | number | boolean | null | object;
@@ -155,6 +156,8 @@ export async function renderMdPage(
     }
   };
 
+  // The MD shell is a chunk of its own (components/md/shell/loader.ts): in, before the page renders, as in the browser
+  await preloadMdShell();
   await act(async () => {
     root.render(
       <QueryClientProvider client={queryClient}>

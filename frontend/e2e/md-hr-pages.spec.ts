@@ -334,7 +334,8 @@ test("the MD only views requests: no Approve or Reject on Leave, Requests or the
 
     // the dashboard (redesigned 2026-11-13) only counts them in its welcome card, with no way to decide anything
     await open(page, "/md/dashboard");
-    await expect(page.getByTestId("md-home-pulse")).toContainText("requests waiting");
+    // 2026-11-21: the waiting requests are a tile of the figure band (a link to Requests, no decision)
+    await expect(page.getByTestId("md-home-kpi-waiting")).toContainText("Requests waiting");
     await expect(decisionButtons(page.getByTestId("md-dashboard-page"))).toHaveCount(0);
 
     // and the server says no to every way of deciding, editing or deleting them

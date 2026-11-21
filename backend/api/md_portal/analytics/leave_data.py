@@ -12,7 +12,14 @@ on the Attendance page or in the assistant can never disagree:
 * a half-day request counts 0.5 on its single date;
 * when two requests cover the same employee-day, only the first one (lowest id) counts;
 * **production** employees are left out: the attendance engine ignores leave for them;
-* **casual leave** (its own system: one paid day per request) is added as the type "Casual leave (paid day)".
+* **casual leave** (its own system, a paid day) is added as the type "Casual leave": a full day is 1, a half day (first or
+  second half of the shift, since 2026-11-04) is 0.5, as cl_balance.PORTION_DAYS counts it.
+
+Casual Leave has its own yearly balance since 2026-11-02 (cl_balance.py): 12 days a calendar year from the cut-over
+(PayrollSettings.cl_balance_since), pending and approved days both hold balance, a half day is 0.5, and a Casual Leave HR
+gives for an absent / on-leave date on the Carry Forward tab (approval trail ``via: "carry_forward"``) counts whatever its
+date. ``load_cl_balances`` reads that balance directly (cl_balance's own helpers read settings through ``get()``, which may
+create a row and cannot run inside the MD's read-only transaction).
 
 Leave requests keep their dates as TEXT (``start_date`` / ``end_date``), so the overlap is decided on the ISO strings in
 SQL and the days are expanded in Python: the number of queries never depends on the number of requests.
@@ -29,7 +36,14 @@ from types import SimpleNamespace
 from django.db.models import Count
 
 from ...clock import ist_today
-from ...models import CasualLeaveRequest, Holiday, LeaveBalance, LeaveRequest
+from ...models import (
+    AttendanceOverrideRequest,
+    CasualLeaveRequest,
+    Holiday,
+    LeaveBalance,
+    LeaveRequest,
+    PayrollSettings,
+)
 from ...reporting.definitions.requests_leave_common import (
     LeaveTypeCatalog,
     ist_bounds,
@@ -44,7 +58,7 @@ from ...reporting.formatting import parse_date
 from ..common import MdParamError, Scope
 
 CASUAL_KEY = "casual-paid"
-CASUAL_LABEL = "Casual leave (paid day)"
+CASUAL_LABEL = "Casual leave"
 NO_DEPARTMENT = "No department"
 NO_UNIT = "No unit"
 NONE_KEY = "__none__"
@@ -220,6 +234,8 @@ class Req:
     half: bool
     slot: str | None
     applied: date | None  # the factory date it was applied for
+    reason_category: str | None = None  # sick | emergency | personal | other (the apps' reason picker), None if not given
+    assigned: bool = False  # a Casual Leave HR gave for an absent / on-leave date (Carry Forward tab)
 
     @property
     def notice(self) -> int | None:
@@ -269,6 +285,7 @@ def load_facts(scope: Scope, lo: date, hi: date) -> Facts:
             "total_days",
             "is_half_day",
             "half_day_slot",
+            "reason_category",
             "created_at",
             *EMP_VALUES,
         )
@@ -307,30 +324,139 @@ def load_facts(scope: Scope, lo: date, hi: date) -> Facts:
                 half=bool(row["is_half_day"]),
                 slot=row["half_day_slot"],
                 applied=ist_date(row["created_at"]),
+                reason_category=row["reason_category"] or None,
             )
 
     casual = (
         CasualLeaveRequest.objects.filter(scope.employee_q("employee__"), status="approved", date__gte=lo, date__lte=hi)
         .order_by("id")
-        .values("id", "employee_id", "date", "created_at", *EMP_VALUES)
+        .values("id", "employee_id", "date", "portion", "approval_trail", "created_at", *EMP_VALUES)
     )
     for row in casual:
         eid = row["employee_id"]
         facts.who.setdefault(eid, who_from(row, eid))
         facts.types.setdefault(CASUAL_KEY, type_meta(CASUAL_KEY, CASUAL_LABEL, None, True))
-        facts.days.append((eid, row["date"], 1.0, CASUAL_KEY, -row["id"]))
+        weight = portion_days(row["portion"])
+        facts.days.append((eid, row["date"], weight, CASUAL_KEY, -row["id"]))
         facts.reqs[-row["id"]] = Req(
             id=-row["id"],
             employee_id=eid,
             type_key=CASUAL_KEY,
             start=row["date"],
             end=row["date"],
-            total=1.0,
-            half=False,
-            slot=None,
+            total=weight,
+            half=weight < 1,
+            slot=row["portion"] if weight < 1 else None,
             applied=ist_date(row["created_at"]),
+            assigned=is_carry_forward(row["approval_trail"]),
         )
     return facts
+
+
+# ─── Casual Leave: portions, carry-forward and the yearly balance (cl_balance.py, read directly) ─────────────────
+
+CL_ENTITLEMENT = 12
+CL_HALF_PORTIONS = ("first_half", "second_half")
+CL_PORTION_LABEL = {"full": "Full day", "first_half": "Half day (first half)", "second_half": "Half day (second half)"}
+CL_ASSIGN_VIA = "carry_forward"
+CL_DEFAULT_SINCE = date(2026, 11, 2)
+#: A balance this close to nothing is "running low".
+CL_LOW_DAYS = 2.0
+
+
+def portion_days(portion: str | None) -> float:
+    """A Casual Leave's days: 0.5 for a first / second half, 1 for a full day (or an older row with no portion)."""
+    return 0.5 if portion in CL_HALF_PORTIONS else 1.0
+
+
+def is_carry_forward(trail) -> bool:
+    """A Casual Leave HR gave for an absent / on-leave date on the Carry Forward tab (cl_balance.is_assigned_cl)."""
+    return isinstance(trail, list) and any(isinstance(e, dict) and str(e.get("via") or "") == CL_ASSIGN_VIA for e in trail)
+
+
+def cl_cut_over() -> date:
+    """The day Casual Leave started counting against the yearly balance (PayrollSettings.cl_balance_since), read without
+    creating the settings row."""
+    value = PayrollSettings.objects.filter(pk=1).values_list("cl_balance_since", flat=True).first()
+    if isinstance(value, str):
+        value = date.fromisoformat(value[:10])
+    return value or CL_DEFAULT_SINCE
+
+
+@dataclass
+class ClBalance:
+    """One staff member's Casual Leave year."""
+
+    who: Who
+    used: float = 0.0  # approved days that count against the year
+    pending: float = 0.0  # days held by requests (or HR attendance-edit proposals) still waiting
+    assigned_days: float = 0.0  # of `used`: given by HR for absent / on-leave dates (Carry Forward)
+    assigned_dates: list[str] = field(default_factory=list)
+    half_days: int = 0  # half-day Casual Leave pieces among them
+
+    @property
+    def remaining(self) -> float:
+        return max(0.0, CL_ENTITLEMENT - self.used - self.pending)
+
+
+_PEOPLE_VALUES = (
+    "id",
+    "employee_code",
+    "first_name",
+    "last_name",
+    "employment_type",
+    "status",
+    "department__name",
+    "branch__name",
+)
+
+
+def load_cl_balances(scope: Scope, year: int) -> tuple[list[ClBalance], dict]:
+    """The Casual Leave balance of every active staff member in ``scope`` for ``year`` (cl_balance.balance_json's rule:
+    12 days; approved + pending days dated in the year count from max(cut-over, 1 January), a Carry Forward Casual Leave
+    whatever its date; a half day 0.5). Four queries (settings, people, Casual Leave, pending HR proposals). A Casual Leave
+    on a not-worked birthday under the new birthday rule uses no balance in the HRMS; it is not told apart here.
+    Returns (rows, meta) with meta = {"cutOver", "since", "tracked"}."""
+    cut_over = cl_cut_over()
+    first = max(cut_over, date(year, 1, 1))
+    last = date(year, 12, 31)
+    meta = {"cutOver": cut_over.isoformat(), "since": first.isoformat() if first <= last else None, "tracked": first <= last}
+    rows: dict[int, ClBalance] = {}
+    for p in scope.employees().exclude(employment_type="production").order_by("id").values(*_PEOPLE_VALUES):
+        shim = {f"employee__{k}": v for k, v in p.items() if k != "id"}
+        rows[p["id"]] = ClBalance(who=who_from(shim, p["id"]))
+    if not rows or first > last:
+        return list(rows.values()), meta
+    for cl in (
+        CasualLeaveRequest.objects.filter(
+            employee_id__in=list(rows), date__gte=date(year, 1, 1), date__lte=last, status__in=("pending", "approved")
+        )
+        .order_by("date", "id")
+        .values("employee_id", "date", "portion", "status", "approval_trail")
+    ):
+        assigned = is_carry_forward(cl["approval_trail"])
+        if cl["date"] < first and not assigned:
+            continue
+        row = rows[cl["employee_id"]]
+        days = portion_days(cl["portion"])
+        if cl["status"] == "approved":
+            row.used += days
+        else:
+            row.pending += days
+        if assigned:
+            row.assigned_days += days
+            row.assigned_dates.append(cl["date"].isoformat())
+        if days < 1:
+            row.half_days += 1
+    for req in AttendanceOverrideRequest.objects.filter(
+        employee_id__in=list(rows),
+        date__gte=first,
+        date__lte=last,
+        status=AttendanceOverrideRequest.STATUS_PENDING,
+        requested_values__option="casual_leave",
+    ).values("employee_id", "requested_values"):
+        rows[req["employee_id"]].pending += portion_days((req["requested_values"] or {}).get("portion"))
+    return list(rows.values()), meta
 
 
 # ─── headcount and working days (the denominators) ──────────────────────────────────────────────────────────────
@@ -406,6 +532,11 @@ class Application:
     decided_at: datetime | None  # when the last recorded decision was made (None for older requests)
     stage: str  # who has approved so far, in words
     notice: int | None
+    reason_category: str | None = None  # sick | emergency | personal | other, None when not given
+    reason: str | None = None  # what the employee wrote
+    remark: str | None = None  # the decision's remark (the rejection reason of a rejected request)
+    decided_by: str | None = None
+    half_slot: str | None = None  # morning | afternoon for a half-day leave
 
 
 def _decision_time(trail) -> datetime | None:
@@ -424,6 +555,16 @@ def _decision_time(trail) -> datetime | None:
             continue
         return moment if moment.tzinfo else None
     return None
+
+
+def last_decision(trail) -> dict:
+    """The last approve / reject entry of an approval trail ({} when there is none)."""
+    if not isinstance(trail, list):
+        return {}
+    for entry in reversed(trail):
+        if isinstance(entry, dict) and entry.get("decision") in ("approved", "rejected"):
+            return entry
+    return {}
 
 
 def _stage(trail, status: str) -> str:
@@ -453,6 +594,11 @@ _APP_VALUES = (
     "is_half_day",
     "created_at",
     "approval_trail",
+    "reason_category",
+    "reason",
+    "hr_comment",
+    "approved_by",
+    "half_day_slot",
     *EMP_VALUES,
 )
 
@@ -465,6 +611,9 @@ def _application(row: dict, catalog: LeaveTypeCatalog) -> Application:
     applied = ist_date(applied_at)
     status = status_key(row["status"])
     start = span[0] if span else None
+    decided = status in ("approved", "rejected")
+    last = last_decision(row["approval_trail"]) if decided else {}
+    remark = (str(last.get("comment") or "").strip() or (row["hr_comment"] or "").strip() or None) if decided else None
     return Application(
         id=row["id"],
         who=who_from(row, row["employee_id"]),
@@ -480,6 +629,11 @@ def _application(row: dict, catalog: LeaveTypeCatalog) -> Application:
         decided_at=_decision_time(row["approval_trail"]) if status in ("approved", "rejected") else None,
         stage=_stage(row["approval_trail"], status),
         notice=(start - applied).days if start and applied else None,
+        reason_category=row["reason_category"] or None,
+        reason=(row["reason"] or "").strip() or None,
+        remark=remark,
+        decided_by=(str(last.get("by") or "").strip() or (row["approved_by"] or "").strip() or None) if decided else None,
+        half_slot=row["half_day_slot"] if row["is_half_day"] else None,
     )
 
 

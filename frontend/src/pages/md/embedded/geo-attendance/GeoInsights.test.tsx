@@ -4,6 +4,7 @@ import { getAssistantState } from "@/lib/md/assistant-store";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../../testing/renderMdPage";
 import * as fx from "./fixtures";
 import GeoInsights, { Strip } from "./index";
+import * as tfx from "./tracking-fixtures";
 
 // jsdom has no layout, so recharts' ResponsiveContainer would draw nothing (and warn). Give the chart a fixed size so the
 // page's real chart configuration is rendered and a wrong series or axis setting fails here.
@@ -20,6 +21,7 @@ let page: RenderedPage | undefined;
 afterEach(() => {
   page?.unmount();
   page = undefined;
+  window.history.replaceState(null, "", "/");
 });
 
 // A tab with ten requests, a chart and Radix popovers is slow to settle on a busy machine: leave room.
@@ -40,6 +42,9 @@ const FIXTURES: Fixtures = {
   [`${BASE}/unusual`]: fx.unusual,
   [`${BASE}/people`]: fx.people,
   [`${BASE}/live`]: fx.live,
+  [`${BASE}/tracking`]: tfx.tracking,
+  [`${BASE}/alerts`]: (params: URLSearchParams) => tfx.alerts(params),
+  [`${BASE}/person`]: tfx.person,
 };
 
 const EMPTY: Fixtures = {
@@ -54,13 +59,17 @@ const EMPTY: Fixtures = {
   [`${BASE}/unusual`]: fx.emptyUnusual,
   [`${BASE}/people`]: fx.emptyPeople,
   [`${BASE}/live`]: fx.emptyLive,
+  [`${BASE}/tracking`]: tfx.emptyTracking,
 };
 
 const text = (selector: string) => page?.container.querySelector(selector)?.textContent ?? null;
 const kpi = (id: string) => text(`[data-testid="md-geo-kpi-${id}-value"]`);
 const row = (id: string) => page?.container.querySelector(`[data-testid="${id}"]`)?.textContent ?? "";
 
-async function open(fixtures: Fixtures = FIXTURES) {
+/** Opens the tab on the last 30 days (the address carries the filter, as a shared link would): the hand-counted figures
+ *  are for that period. `search` overrides it ("" = the tab's own default, the running month). */
+async function open(fixtures: Fixtures = FIXTURES, search = "?i.period=last_30_days") {
+  window.history.replaceState(null, "", `/md/geo-attendance${search}`);
   page = await renderMdPage(GeoInsights, fixtures, { path: "/md/geo-attendance" });
   return page;
 }
@@ -305,6 +314,57 @@ describe("Geo Attendance insights", () => {
     expect(text('[data-testid="md-geo-notes"]')).toContain(
       "No on-duty sessions, on-duty punches or office geo punches",
     );
+  });
+
+  it("opens on the running month by default and steps back a month", async () => {
+    const p = await open(FIXTURES, "");
+    expect(p.requests()).toContain(`${BASE}/summary?period=this_month`);
+    expect(p.requests()).toContain(`${BASE}/tracking?period=this_month`);
+    await p.click('[data-testid="month-prev"]');
+    const asked = p.requests().filter((r) => r.startsWith(`${BASE}/summary?month=`));
+    expect(asked).toHaveLength(1);
+    expect(window.location.search).toContain("i.month=");
+  });
+
+  it("shows the On-Duty tracking and the automatic alerts", async () => {
+    await open();
+    expect(text('[data-testid="md-geo-tracking-journeys-value"]')).toBe("3");
+    expect(text('[data-testid="md-geo-tracking-km-value"]')).toBe("64.0 km");
+    expect(text('[data-testid="md-geo-tracking-alerts-value"]')).toBe("4");
+    expect(text('[data-testid="md-geo-tracking-kinds"]')).toContain("Location turned off");
+    expect(text('[data-testid="md-geo-tracking-open"]')).toContain("1 open right now");
+    expect(text('[data-testid="md-geo-tracking-person-A"]')).toContain("3 alerts");
+  });
+
+  it("drills from an alert kind to its episodes and on to the person's month", async () => {
+    const p = await open();
+    await p.click('[data-testid="md-geo-tracking-kinds"] li:nth-of-type(3) button'); // Missing Geo-Punch
+    expect(p.requests()).toContain(
+      `${BASE}/alerts?period=last_30_days&kind=missing_punch&status=all&page=1&pageSize=25`,
+    );
+    const sheet = () => document.querySelector('[data-testid="md-geo-alerts-sheet"]');
+    expect(sheet()?.textContent).toContain("Asha Test · Missing Geo-Punch");
+    expect(sheet()?.textContent).toContain("HOD told: Esha Test");
+    await act(async () => {
+      document.querySelector<HTMLElement>('[data-testid="md-geo-alert-2"] button')?.click();
+    });
+    await p.settle();
+    expect(p.requests()).toContain(`${BASE}/person?period=last_30_days&employee=101`);
+    const person = document.querySelector('[data-testid="md-geo-person-sheet"]');
+    expect(person?.textContent).toContain("Asha Test");
+    expect(person?.textContent).toContain("15.2 km, 3 stops");
+    expect(person?.textContent).toContain("Missing Geo-Punch");
+  });
+
+  it("opens the escalated alerts from their tile", async () => {
+    const p = await open();
+    await p.click('[data-testid="md-geo-tracking-escalated"]');
+    expect(p.requests()).toContain(`${BASE}/alerts?period=last_30_days&status=escalated&page=1&pageSize=25`);
+  });
+
+  it("says when nothing was tracked", async () => {
+    const p = await open({ ...FIXTURES, [`${BASE}/tracking`]: tfx.emptyTracking });
+    expect(p.container.querySelector('[data-testid="md-geo-tracking-empty"]')).not.toBeNull();
   });
 
   it("draws a weekly trend for a long period and explains the weekly points", async () => {

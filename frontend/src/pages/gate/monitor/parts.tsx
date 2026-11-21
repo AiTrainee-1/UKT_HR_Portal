@@ -1,38 +1,37 @@
-// The pieces of the gate monitor console: the top bar's clock / connection / scanner / voice, the scan card, the big
-// result banner, today's counters and the latest scans. Flat cards (a 1px border, no shadow, no gradient, no blur) so the
-// Clean theme has nothing to undo; touch targets are at least 44 px.
+// The pieces of the gate monitor console around the scanner: the top bar's clock / connection / scanner / voice, today's
+// counters, the latest scans and the person block. Drawn for the kiosk's deep slate page (gate-kiosk.css): quiet glass
+// panels, light words, colour only where it means something. Touch targets are at least 44 px.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
-  AlertTriangle,
   CheckCircle2,
   Clock3,
   Coffee,
   DoorOpen,
   History,
-  Keyboard,
   LogIn,
-  MapPin,
   ScanLine,
-  ShieldCheck,
   ShieldX,
   Usb,
-  UserCheck,
   Volume2,
   VolumeX,
   WifiOff,
-  XCircle,
 } from "lucide-react";
-import type { GateMonitorRecord, GateMonitorSummary, GateScanResult } from "@/lib/api-client/custom-hooks/gate-monitor";
+import type { GateMonitorRecord, GateMonitorSummary } from "@/lib/api-client/custom-hooks/gate-monitor";
+import { initials } from "@/components/payroll/kit/format";
 import { cn } from "@/lib/utils";
-import { PersonCell } from "@/pages/hr/outpass-visitors/kit/PersonCell";
-import { StatTile } from "@/pages/hr/outpass-visitors/kit/StatTile";
-import { StatusChip } from "@/pages/hr/outpass-visitors/kit/StatusChip";
-import { fmtDateTime, fmtTime, fmtWhen } from "@/pages/hr/outpass-visitors/kit/fmt";
-import { describeScan, formatApprover, recordTypeShort, type ScanTone } from "./scan-result";
+import { fmtCount, fmtDate, fmtDateTime, fmtTime, fmtWhen, NONE } from "@/pages/hr/outpass-visitors/kit/fmt";
+import { recordTypeShort } from "./scan-result";
 import { setVoiceEnabled, voiceEnabled, type ScannerStatus } from "./scanner";
 
+/** A light card (the Gate records sheet). */
 export const CARD = "rounded-2xl border border-slate-200 bg-white";
+/** A glass panel on the kiosk's dark page. */
+export const PANEL = "gk-panel";
+/** A pill of the top bar: 44 px high, quiet on the dark page. */
+export const PILL =
+  "inline-flex h-11 items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] px-3 text-sm font-semibold " +
+  "text-slate-200 outline-none focus-visible:ring-2 focus-visible:ring-sky-300/70";
 
 // ── top bar ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -43,13 +42,12 @@ export function LiveClock() {
     return () => clearInterval(id);
   }, []);
   return (
-    <span
-      className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold tabular-nums text-slate-800"
-      title={fmtDateTime(now, { year: true })}
-      data-testid="gate-clock"
-    >
-      <Clock3 size={15} className="text-slate-500" aria-hidden="true" />
-      <time dateTime={now.toISOString()}>{fmtTime(now)}</time>
+    <span className={cn(PILL, "tabular-nums")} title={fmtDateTime(now, { year: true })} data-testid="gate-clock">
+      <Clock3 size={15} className="text-slate-400" aria-hidden="true" />
+      <time dateTime={now.toISOString()} className="text-base font-bold text-white">
+        {fmtTime(now)}
+      </time>
+      <span className="hidden text-xs font-medium text-slate-400 md:inline">{fmtDate(now)}</span>
     </span>
   );
 }
@@ -59,14 +57,15 @@ export function ConnectionDot({ online }: { online: boolean }) {
     <span
       role="status"
       className={cn(
-        "inline-flex h-11 items-center gap-2 rounded-lg border px-3 text-xs font-semibold",
-        online ? "border-teal-200 bg-teal-50 text-teal-800" : "border-rose-200 bg-rose-50 text-rose-700",
+        PILL,
+        "text-xs",
+        online ? "border-emerald-400/25 text-emerald-200" : "border-rose-400/35 bg-rose-500/10 text-rose-200",
       )}
       data-testid="gate-connection"
       data-online={online ? "yes" : "no"}
     >
       {online ? (
-        <span className="size-2 rounded-full bg-teal-500" aria-hidden="true" />
+        <span className="gk-live-dot size-2 rounded-full bg-emerald-400 text-emerald-400" aria-hidden="true" />
       ) : (
         <WifiOff size={14} aria-hidden="true" />
       )}
@@ -76,10 +75,10 @@ export function ConnectionDot({ online }: { online: boolean }) {
 }
 
 export function ScannerBadge({ status, onPair }: { status: ScannerStatus; onPair: () => void }) {
-  const base = "hidden h-11 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold sm:inline-flex";
+  const base = cn(PILL, "hidden text-xs sm:inline-flex");
   if (status === "connected") {
     return (
-      <span className={cn(base, "border-teal-200 bg-teal-50 text-teal-800")} data-testid="scanner-badge">
+      <span className={cn(base, "border-emerald-400/25 text-emerald-200")} data-testid="scanner-badge">
         <Usb size={14} aria-hidden="true" /> Scanner connected
       </span>
     );
@@ -89,7 +88,7 @@ export function ScannerBadge({ status, onPair }: { status: ScannerStatus; onPair
       <button
         type="button"
         onClick={onPair}
-        className={cn(base, "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100")}
+        className={cn(base, "hover:bg-white/[0.09] hover:text-white")}
         title="Pair a scanner. Some scanners are not listed here (they look like a keyboard) and still scan fine."
         data-testid="scanner-badge"
       >
@@ -98,7 +97,7 @@ export function ScannerBadge({ status, onPair }: { status: ScannerStatus; onPair
     );
   }
   return (
-    <span className={cn(base, "border-slate-200 bg-white text-slate-600")} data-testid="scanner-badge">
+    <span className={base} data-testid="scanner-badge">
       <ScanLine size={14} aria-hidden="true" /> Scanner ready
     </span>
   );
@@ -117,24 +116,17 @@ export function VoiceToggle() {
       aria-pressed={on}
       aria-label={on ? "Voice on. Turn the voice off" : "Voice off. Turn the voice on"}
       title={on ? "Voice on" : "Voice off"}
-      className="inline-flex size-11 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      className={cn(
+        PILL,
+        "gk-voice w-11 justify-center px-0 hover:bg-white/[0.09] hover:text-white",
+        !on && "text-slate-400",
+      )}
       data-testid="voice-toggle"
     >
       {on ? <Volume2 size={17} aria-hidden="true" /> : <VolumeX size={17} aria-hidden="true" />}
     </button>
   );
 }
-
-// ── scan card ────────────────────────────────────────────────────────────────────────────────────────────────────
-
-const ZONE_TONE: Record<ScanTone | "idle" | "busy", string> = {
-  idle: "border-slate-300 bg-slate-50 text-slate-700",
-  busy: "border-primary/50 bg-primary/5 text-slate-800",
-  teal: "border-teal-400 bg-teal-50 text-teal-800",
-  amber: "border-amber-400 bg-amber-50 text-amber-800",
-  rose: "border-rose-400 bg-rose-50 text-rose-700",
-  slate: "border-slate-400 bg-slate-100 text-slate-700",
-};
 
 export function takesLabel(allowOutpass: boolean, allowTeaBreak: boolean): string {
   if (allowOutpass && allowTeaBreak) return "Gate passes and tea breaks";
@@ -143,250 +135,160 @@ export function takesLabel(allowOutpass: boolean, allowTeaBreak: boolean): strin
   return "Nothing is set up to scan here";
 }
 
-export function ScanCard({
-  flash,
-  busy,
-  takes,
-  onSubmitCode,
+// ── a person on the dark page ────────────────────────────────────────────────────────────────────────────────────
+
+/** The photo (or the initials when there is none or it does not load), the name, the code and the department. */
+export function KioskPerson({
+  name,
+  code,
+  sub,
+  photoUrl,
+  size = 72,
 }: {
-  /** The tone of the last answer for a moment after a scan, else idle. */
-  flash: ScanTone | "idle";
-  busy: boolean;
-  /** What this gate takes: "Gate passes and tea breaks". */
-  takes: string;
-  onSubmitCode: (code: string) => void;
+  name: string | null | undefined;
+  code?: string | null;
+  sub?: string | null;
+  photoUrl?: string | null;
+  size?: number;
 }) {
-  const [code, setCode] = useState("");
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    const value = code.trim();
-    if (!value || busy) return;
-    onSubmitCode(value);
-    setCode("");
-  };
-  const tone = busy ? "busy" : flash;
+  const [broken, setBroken] = useState<string | null>(null);
+  const showPhoto = !!photoUrl && broken !== photoUrl;
+  const label = name?.trim() || "Unknown";
   return (
-    <section aria-labelledby="gate-scan-title" className={cn(CARD, "p-4 sm:p-5")} data-testid="scan-card">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <ScanLine size={20} className="text-primary" aria-hidden="true" />
-        <h2 id="gate-scan-title" className="text-lg font-bold text-slate-900">
-          Scan a pass
-        </h2>
-        <span className="ml-auto rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600">
-          {takes}
-        </span>
-      </div>
-      <div
-        className={cn(
-          "mt-4 flex min-h-[150px] flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 text-center transition-colors",
-          ZONE_TONE[tone],
-        )}
-        data-testid="scan-zone"
-        data-state={tone}
-      >
-        <span className="flex size-12 items-center justify-center rounded-full border border-current/20 bg-white">
-          {tone === "teal" ? (
-            <CheckCircle2 size={24} aria-hidden="true" />
-          ) : tone === "rose" ? (
-            <XCircle size={24} aria-hidden="true" />
-          ) : tone === "amber" ? (
-            <Coffee size={24} aria-hidden="true" />
-          ) : (
-            <ScanLine size={24} aria-hidden="true" className={tone === "busy" ? "animate-pulse" : undefined} />
-          )}
-        </span>
-        <p className="text-base font-semibold">
-          {busy ? "Checking the code…" : "Ready - scan a gate pass or tea-break QR"}
-        </p>
-        <p className="text-sm opacity-80">Hold the QR code under the scanner. The result shows below.</p>
-      </div>
-      <form onSubmit={submit} className="mt-4 flex gap-2" data-testid="code-form">
-        <label htmlFor="gate-code" className="sr-only">
-          Type the pass code
-        </label>
-        <div className="relative min-w-0 flex-1">
-          <Keyboard
-            size={17}
-            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
-            aria-hidden="true"
-          />
-          <input
-            id="gate-code"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="Or type the pass code"
-            autoComplete="off"
-            autoCapitalize="characters"
-            spellCheck={false}
-            className="h-12 w-full min-w-0 rounded-lg border border-slate-200 bg-white pl-10 pr-3 font-mono text-base text-slate-900 outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/50"
-            data-testid="code-input"
-          />
-        </div>
-        <button
-          type="submit"
-          disabled={busy || !code.trim()}
-          className="h-12 shrink-0 rounded-lg bg-primary px-5 text-base font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
-          data-testid="code-check"
+    <div className="flex min-w-0 items-center gap-4">
+      {showPhoto ? (
+        <img
+          src={photoUrl!}
+          alt=""
+          onError={() => setBroken(photoUrl!)}
+          className="shrink-0 rounded-2xl border border-white/[0.15] bg-slate-800 object-cover"
+          style={{ width: size, height: size }}
+        />
+      ) : (
+        <span
+          className="inline-flex shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-slate-800 text-xl font-bold text-slate-200"
+          style={{ width: size, height: size }}
+          aria-hidden="true"
         >
-          Check
-        </button>
-      </form>
-    </section>
-  );
-}
-
-// ── result banner ────────────────────────────────────────────────────────────────────────────────────────────────
-
-const BANNER_TONE: Record<ScanTone, { box: string; title: string; icon: typeof CheckCircle2 }> = {
-  teal: { box: "border-teal-300 bg-teal-50", title: "text-teal-800", icon: ShieldCheck },
-  amber: { box: "border-amber-300 bg-amber-50", title: "text-amber-800", icon: Coffee },
-  rose: { box: "border-rose-300 bg-rose-50", title: "text-rose-700", icon: ShieldX },
-  slate: { box: "border-slate-300 bg-slate-50", title: "text-slate-800", icon: AlertTriangle },
-};
-
-function Field({ icon: Icon, label, children }: { icon?: typeof MapPin; label: string; children: ReactNode }) {
-  return (
-    <div className="min-w-0 rounded-lg border border-white bg-white/80 px-3 py-2">
-      <p className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-        {Icon && <Icon size={12} aria-hidden="true" />}
-        {label}
-      </p>
-      <p className="mt-0.5 truncate text-sm font-semibold text-slate-900">{children}</p>
-    </div>
-  );
-}
-
-export function ResultBanner({
-  result,
-  at,
-  onDone,
-}: {
-  result: GateScanResult | null;
-  /** When the scan was answered. */
-  at: Date | null;
-  onDone: () => void;
-}) {
-  if (!result) {
-    return (
-      <section
-        className="flex min-h-[120px] flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-slate-200 px-4 py-8 text-center text-slate-500"
-        aria-live="polite"
-        data-testid="scan-result-empty"
-      >
-        <ScanLine size={22} aria-hidden="true" />
-        <p className="text-sm">The result of the next scan shows here.</p>
-      </section>
-    );
-  }
-  const view = describeScan(result);
-  const tone = BANNER_TONE[view.tone];
-  const Icon = tone.icon;
-  const emp = result.employee;
-  const approver = formatApprover(result.approverRole, result.approvedBy);
-  const details: { key: string; icon?: typeof MapPin; label: string; value: ReactNode }[] = [];
-  if (result.destination) details.push({ key: "dest", icon: MapPin, label: "Destination", value: result.destination });
-  if (result.reason) details.push({ key: "reason", label: "Reason", value: result.reason });
-  if (approver) details.push({ key: "appr", icon: UserCheck, label: "Approved by", value: approver });
-  if (result.expiresAt && !result.exitedAt) {
-    details.push({ key: "exp", icon: Clock3, label: "Valid till", value: fmtDateTime(result.expiresAt) });
-  }
-  if (result.exitedAt) {
-    const where = result.gateName ? ` · ${result.gateName}` : "";
-    details.push({ key: "out", icon: DoorOpen, label: "Went out", value: `${fmtDateTime(result.exitedAt)}${where}` });
-  }
-  if (result.enteredAt) {
-    const where = result.entryGateName ? ` · ${result.entryGateName}` : "";
-    details.push({ key: "in", icon: LogIn, label: "Came back", value: `${fmtDateTime(result.enteredAt)}${where}` });
-  }
-  return (
-    <section
-      className={cn("rounded-2xl border-2 p-4 sm:p-5", tone.box)}
-      aria-live="assertive"
-      data-testid="scan-result"
-      data-result={result.result}
-      data-tone={view.tone}
-    >
-      <div className="flex flex-wrap items-start gap-3">
-        <Icon size={28} className={cn("mt-0.5 shrink-0", tone.title)} aria-hidden="true" />
-        <div className="min-w-0 flex-1">
-          <p className={cn("text-xl font-bold leading-tight sm:text-2xl", tone.title)} data-testid="scan-result-title">
-            {view.title}
+          {initials(label)}
+        </span>
+      )}
+      <div className="min-w-0 leading-tight">
+        <p className="truncate text-lg font-bold text-white sm:text-xl" title={label}>
+          {label}
+        </p>
+        {(code || sub) && (
+          <p className="mt-1 truncate text-sm text-slate-400" title={[code, sub].filter(Boolean).join(" · ")}>
+            {code && <span className="font-mono text-slate-300">{code}</span>}
+            {code && sub ? " · " : ""}
+            {sub}
           </p>
-          <p className="mt-1 text-sm text-slate-700" data-testid="scan-result-message">
-            {result.message}
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          {view.kindLabel && (
-            <span className="rounded-md border border-slate-200 bg-white px-2 py-0.5 text-xs font-bold uppercase tracking-wide text-slate-700">
-              {view.kindLabel}
-            </span>
-          )}
-          {at && <span className="text-xs tabular-nums text-slate-500">at {fmtTime(at)}</span>}
-        </div>
+        )}
       </div>
-      {emp && (
-        <div className="mt-4 flex min-w-0 items-center gap-3 rounded-xl bg-white/80 p-3">
-          <PersonCell name={emp.name} code={emp.employeeCode} sub={emp.department} photoUrl={emp.photoUrl} size={64} />
-        </div>
-      )}
-      {details.length > 0 && (
-        <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          {details.map((d) => (
-            <Field key={d.key} icon={d.icon} label={d.label}>
-              {d.value}
-            </Field>
-          ))}
-        </div>
-      )}
-      <button
-        type="button"
-        onClick={onDone}
-        className="mt-4 inline-flex h-11 items-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-        data-testid="scan-result-done"
-      >
-        Done
-      </button>
-    </section>
+    </div>
   );
 }
 
 // ── today at this gate ───────────────────────────────────────────────────────────────────────────────────────────
 
+type StatTone = "green" | "return" | "red";
+
+function KioskStat({
+  label,
+  value,
+  icon: Icon,
+  tone,
+  loading,
+  emphasis = false,
+  hint,
+  testId,
+}: {
+  label: string;
+  value: number | undefined;
+  icon: typeof DoorOpen;
+  tone: StatTone;
+  loading: boolean;
+  emphasis?: boolean;
+  hint?: ReactNode;
+  testId: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "min-w-0 rounded-2xl border bg-white/[0.03] p-3 sm:p-4",
+        emphasis ? "border-red-400/35" : "border-white/[0.07]",
+      )}
+      data-testid={testId}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <p
+          className="min-w-0 truncate text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400"
+          data-testid={`${testId}-label`}
+        >
+          {label}
+        </p>
+        <span
+          className="gk-tone-tile inline-flex size-8 shrink-0 items-center justify-center rounded-xl"
+          data-gk-tone={tone}
+          aria-hidden="true"
+        >
+          <Icon size={16} />
+        </span>
+      </div>
+      <p
+        className={cn(
+          "mt-1 text-3xl font-bold leading-none tabular-nums sm:text-[2rem]",
+          emphasis ? "text-red-300" : "text-white",
+        )}
+        data-testid={`${testId}-value`}
+      >
+        {loading && value === undefined ? (
+          <span className="inline-block h-7 w-12 animate-pulse rounded-md bg-white/10" aria-label="Loading" />
+        ) : value === undefined ? (
+          NONE
+        ) : (
+          fmtCount(value)
+        )}
+      </p>
+      {hint && <p className="mt-1.5 truncate text-xs font-medium text-slate-400">{hint}</p>}
+    </div>
+  );
+}
+
 export function TodayCounters({ summary, loading }: { summary: GateMonitorSummary | undefined; loading: boolean }) {
   const denied = summary?.denied ?? 0;
   return (
-    <div className="grid grid-cols-2 gap-2" data-testid="today-counters">
-      <StatTile
+    <div className="grid grid-cols-2 gap-2.5" data-testid="today-counters">
+      <KioskStat
         label="Exits"
         value={summary?.exits}
         icon={DoorOpen}
-        tone="teal"
+        tone="green"
         loading={loading}
         testId="today-exits"
       />
-      <StatTile
+      <KioskStat
         label="Returns"
         value={summary?.returns}
         icon={LogIn}
-        tone="teal"
+        tone="green"
         loading={loading}
         testId="today-returns"
       />
-      <StatTile
+      <KioskStat
         label="Tea breaks"
         value={summary?.teaOut}
         icon={Coffee}
-        tone="amber"
+        tone="return"
         loading={loading}
         testId="today-tea"
-        hint={summary && summary.teaOutNow > 0 ? `${summary.teaOutNow} on break` : undefined}
+        hint={summary && summary.teaOutNow > 0 ? `${summary.teaOutNow} on break now` : undefined}
       />
-      <StatTile
+      <KioskStat
         label="Denied"
         value={summary?.denied}
         icon={ShieldX}
-        tone="rose"
+        tone="red"
         emphasis={denied > 0}
         loading={loading}
         testId="today-denied"
@@ -396,13 +298,6 @@ export function TodayCounters({ summary, loading }: { summary: GateMonitorSummar
 }
 
 // ── latest scans ─────────────────────────────────────────────────────────────────────────────────────────────────
-
-const TYPE_CHIP: Record<string, string> = {
-  exit: "border-sky-200 bg-sky-50 text-sky-800",
-  return: "border-indigo-200 bg-indigo-50 text-indigo-700",
-  tea_out: "border-amber-200 bg-amber-50 text-amber-800",
-  tea_in: "border-amber-200 bg-amber-50 text-amber-800",
-};
 
 export function LatestScans({
   rows,
@@ -416,26 +311,26 @@ export function LatestScans({
   onSeeAll: () => void;
 }) {
   return (
-    <section aria-labelledby="gate-latest-title" className={cn(CARD, "p-4")} data-testid="latest-scans">
+    <section aria-labelledby="gate-latest-title" className={cn(PANEL, "p-4 sm:p-5")} data-testid="latest-scans">
       <div className="flex items-center gap-2">
-        <History size={18} className="text-primary" aria-hidden="true" />
-        <h2 id="gate-latest-title" className="text-base font-bold text-slate-900">
+        <History size={18} className="text-sky-300" aria-hidden="true" />
+        <h2 id="gate-latest-title" className="text-base font-bold text-white">
           Latest scans
         </h2>
         <button
           type="button"
           onClick={onSeeAll}
-          className="ml-auto inline-flex h-11 items-center rounded-lg px-2 text-sm font-semibold text-primary hover:bg-primary/10"
+          className="ml-auto inline-flex h-11 items-center rounded-xl px-3 text-sm font-semibold text-sky-300 outline-none hover:bg-white/[0.06] hover:text-sky-200 focus-visible:ring-2 focus-visible:ring-sky-300/70"
         >
           See all records
         </button>
       </div>
       {error ? (
-        <p className="mt-3 text-sm text-rose-700">{error}</p>
+        <p className="mt-3 text-sm text-rose-300">{error}</p>
       ) : loading && !rows ? (
-        <p className="mt-3 text-sm text-slate-500">Loading…</p>
+        <p className="mt-3 text-sm text-slate-400">Loading…</p>
       ) : !rows || rows.length === 0 ? (
-        <p className="mt-3 rounded-lg border border-dashed border-slate-200 px-3 py-6 text-center text-sm text-slate-500">
+        <p className="mt-3 rounded-2xl border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-400">
           Nothing scanned at this gate today yet.
         </p>
       ) : (
@@ -447,26 +342,21 @@ export function LatestScans({
             return (
               <li
                 key={r.id}
-                className="flex min-w-0 items-center gap-3 rounded-xl border border-slate-100 bg-slate-50 px-3 py-2"
+                className="flex min-w-0 items-center gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.03] px-3 py-2.5"
                 data-testid="latest-row"
               >
-                <span className="w-12 shrink-0 text-sm font-semibold tabular-nums text-slate-700">{time}</span>
+                <span className="w-11 shrink-0 text-sm font-bold tabular-nums text-slate-200">{time}</span>
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-semibold text-slate-900" title={r.employee?.name ?? undefined}>
+                  <p className="truncate text-sm font-semibold text-white" title={r.employee?.name ?? undefined}>
                     {r.employee?.name ?? "Unknown code"}
                     {r.employee?.employeeCode && (
-                      <span className="ml-1.5 font-mono text-xs font-normal text-slate-500">
+                      <span className="ml-1.5 font-mono text-xs font-normal text-slate-400">
                         {r.employee.employeeCode}
                       </span>
                     )}
                   </p>
-                  <p className="flex min-w-0 items-center gap-1.5 text-xs text-slate-600">
-                    <span
-                      className={cn(
-                        "shrink-0 rounded border px-1.5 py-px text-[11px] font-semibold",
-                        TYPE_CHIP[r.type] ?? "border-slate-200 bg-white text-slate-600",
-                      )}
-                    >
+                  <p className="flex min-w-0 items-center gap-1.5 text-xs text-slate-400">
+                    <span className="shrink-0 rounded-md border border-white/10 bg-white/[0.05] px-1.5 py-px text-[11px] font-semibold text-slate-200">
                       {recordTypeShort(r)}
                     </span>
                     <span className="truncate" title={detail ?? undefined}>
@@ -474,7 +364,15 @@ export function LatestScans({
                     </span>
                   </p>
                 </div>
-                <StatusChip tone={denied ? "rose" : "teal"}>{denied ? "Denied" : "Allowed"}</StatusChip>
+                <span
+                  className={cn(
+                    "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-1 text-xs font-semibold",
+                    denied ? "bg-red-500/15 text-red-200" : "bg-emerald-500/15 text-emerald-200",
+                  )}
+                >
+                  {denied ? <ShieldX size={13} aria-hidden="true" /> : <CheckCircle2 size={13} aria-hidden="true" />}
+                  {denied ? "Denied" : "Allowed"}
+                </span>
               </li>
             );
           })}

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Search, SearchX, Sparkles, X } from "lucide-rea
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import { EmptyBlock } from "@/components/md/kit/states";
 import { Input } from "@/components/ui/input";
+import { useUrlParams } from "@/lib/md/url-filters";
 import { useReportPrefs } from "@/lib/report-prefs";
 import { cn } from "@/lib/utils";
 import { iconFor } from "@/pages/hr/report-center/report-icons";
@@ -45,8 +46,13 @@ const GRID =
  * browsing leaves them out; a search, or choosing a category, looks at everything.
  */
 export function ReportLibrary({ library }: { library: Library }) {
-  const [query, setQuery] = useState("");
-  const [categoryId, setCategoryId] = useState<string | null>(null);
+  // the search and the group chip live in the address (?q=&group=), so a refresh or Back keeps them (2026-11-21)
+  const [params, update] = useUrlParams();
+  const query = params.get("q") ?? "";
+  const chosen = params.get("group");
+  const categoryId = chosen && library.allCategories.some((c) => c.id === chosen) ? chosen : null;
+  const setQuery = (text: string) => update({ q: text || null });
+  const setCategoryId = (id: string | null) => update({ group: id });
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const { favorites } = useReportPrefs();
   const view = useMemo(() => libraryView(library, query, categoryId), [library, query, categoryId]);
@@ -85,7 +91,7 @@ export function ReportLibrary({ library }: { library: Library }) {
         <Input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search every report - try “overtime”, “late”, “salary”, “visitor”…"
+          placeholder="Search every report - try “late”, “salary”, “leave”, “shift”…"
           aria-label="Search reports"
           data-testid="md-report-search"
           className="md-money-search h-12 pl-11 pr-11 text-sm"
@@ -151,7 +157,7 @@ export function ReportLibrary({ library }: { library: Library }) {
         view.groups.length === 0 ? (
           <div className="md-panel">
             <EmptyBlock icon={SearchX} title={`No report matches “${text}”`} testId="md-report-no-match">
-              Try a shorter word, such as “late”, “salary” or “visitor”, or ask the assistant which report to use.
+              Try a shorter word, such as “late”, “salary” or “shift”, or ask the assistant which report to use.
             </EmptyBlock>
           </div>
         ) : (

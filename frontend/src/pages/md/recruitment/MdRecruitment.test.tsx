@@ -1,5 +1,6 @@
 import { cloneElement, type ReactElement } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { preloadMdShell } from "@/components/md/shell/loader";
 import { getAssistantState } from "@/lib/md/assistant-store";
 import MdRecruitment from "../MdRecruitment";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../testing/renderMdPage";
@@ -25,6 +26,9 @@ vi.mock("recharts", async (importOriginal) => {
 });
 
 let page: RenderedPage | undefined;
+
+// the MD shell is a lazy chunk (components/md/shell/loader.ts): have it in before the first page renders
+beforeAll(() => preloadMdShell(), 60_000);
 
 afterEach(() => {
   page?.unmount();
@@ -384,3 +388,70 @@ describe("the Recruitment page", { timeout: 30_000 }, () => {
     ).toContain("covers staff only");
   });
 });
+
+describe(
+  "Recruitment: filters in the address, the overview and details on click (2026-11-21)",
+  { timeout: 30_000 },
+  () => {
+    it("leads with a two-sentence overview of the period", async () => {
+      page = await render();
+      const overview = text('[data-testid="md-recruitment-overview"]');
+      expect(overview).toMatch(/^In the last 90 days, /);
+      expect(overview).toContain("Now: 4 positions open (2 too long), 3 resignations waiting for a decision");
+    });
+
+    it("reads the month, the scope and the part shown from the address, and asks only for that part", async () => {
+      page = await renderMdPage(MdRecruitment, FIXTURES, {
+        path: "/md/recruitment?month=2026-09&branch=1&view=resignations",
+      });
+      const asked = page.requests();
+      expect(
+        asked.some(
+          (r) => r.startsWith("/api/md/recruitment/summary?") && r.includes("month=2026-09") && r.includes("branch=1"),
+        ),
+      ).toBe(true);
+      expect(asked.some((r) => r.startsWith("/api/md/recruitment/resignations?") && r.includes("month=2026-09"))).toBe(
+        true,
+      );
+      for (const name of ["funnel", "sources", "positions", "joiners", "trend"]) {
+        expect(
+          asked.some((r) => r.startsWith(`/api/md/recruitment/${name}`)),
+          name,
+        ).toBe(false);
+      }
+      expect(
+        page.container.querySelector('[data-testid="md-recruitment-view-resignations"]')?.getAttribute("aria-checked"),
+      ).toBe("true");
+      expect(page.container.querySelector('[data-testid="md-recruitment-positions"]')).toBeNull();
+      await page.click('[data-testid="md-recruitment-view-all"]');
+      expect(page.requests().some((r) => r.startsWith("/api/md/recruitment/positions"))).toBe(true);
+    });
+
+    it("lists what was decided in the period, with who decided and a rejection's reason", async () => {
+      page = await render();
+      const decisions = text('[data-testid="md-recruitment-decisions"]');
+      expect(decisions).toContain("Rejected");
+      expect(decisions).toContain("Priya Head (Department Head)");
+      expect(decisions).toContain("Reason: “Peak season, please stay till December”");
+    });
+
+    it("opens a resignation in full, with its steps and only the group of its reason", async () => {
+      page = await render();
+      await page.click('[data-testid="md-recruitment-pending-table"] tbody tr');
+      expect(page.requests()).toContain("/api/md/recruitment/resignations/11");
+      const sheet = document.body.querySelector('[data-testid="md-recruitment-resignation-sheet"]');
+      expect(sheet?.textContent).toContain("Submitted at");
+      expect(sheet?.textContent).toContain("25 Sep 2026, 10:04:09 am");
+      expect(sheet?.textContent).toContain("Better pay or another job");
+      expect(sheet?.querySelector('a[href="/md/employees/1"]')).not.toBeNull();
+    });
+
+    it("opens a position with its applicants by stage and its department's staffing gap", async () => {
+      page = await render();
+      await page.click('[data-testid="md-recruitment-positions-table"] tbody tr');
+      const sheet = document.body.querySelector('[data-testid="md-recruitment-position-sheet"]');
+      expect(sheet?.textContent).toContain("Posted");
+      expect(sheet?.textContent).toContain("Applicants by stage");
+    });
+  },
+);

@@ -1,8 +1,8 @@
 import { useEffect, useId, useState } from "react";
-import { Clock3, Save } from "lucide-react";
+import { Clock3, Repeat, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
-import { useTeaBreakRule, useUpdateTeaBreakRule } from "@/lib/api-client/custom-hooks";
+import { useTeaBreakRule, useUpdateTeaBreakCooldown, useUpdateTeaBreakRule } from "@/lib/api-client/custom-hooks";
 import { useLevel } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { fmtDateTime } from "../kit";
@@ -131,6 +131,8 @@ export function TeaBreakRuleCard() {
           {!canEdit && " Your role can see the rule but not change it."}
         </p>
 
+        <CooldownSetting canEdit={canEdit} loading={isLoading} saved={rule?.scanCooldownMinutes} />
+
         <ul className="space-y-1.5 rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <li>Back within the allowed minutes: on time. Longer: overtime, with the minutes over shown.</li>
           <li>
@@ -144,5 +146,118 @@ export function TeaBreakRuleCard() {
         </ul>
       </div>
     </section>
+  );
+}
+
+const MAX_COOLDOWN = 60;
+
+/**
+ * The repeat-scan cooldown (owner 2026-11-21): after an employee's tea-break scan is recorded (out or back in), the same
+ * employee's next scan within these minutes records nothing and the gate shows "already scanned" in orange. Stops double
+ * scans from making 0-minute breaks. 0 switches it off; 5 is the default.
+ */
+function CooldownSetting({ canEdit, loading, saved }: { canEdit: boolean; loading: boolean; saved?: number }) {
+  const { toast } = useToast();
+  const update = useUpdateTeaBreakCooldown();
+  const [value, setValue] = useState("");
+  const inputId = "tea-break-scan-cooldown";
+  const hintId = useId();
+
+  useEffect(() => {
+    if (saved !== undefined) setValue(String(saved));
+  }, [saved]);
+
+  const parsed = Number(value);
+  const valid = value.trim() !== "" && Number.isInteger(parsed) && parsed >= 0 && parsed <= MAX_COOLDOWN;
+
+  const save = async () => {
+    if (!valid) {
+      toast({ title: `Enter a whole number of minutes from 0 to ${MAX_COOLDOWN}`, variant: "destructive" });
+      return;
+    }
+    try {
+      const rule = await update.mutateAsync(parsed);
+      toast({
+        title: "Repeat-scan cooldown saved",
+        description: rule.scanCooldownMinutes
+          ? `A second scan within ${rule.scanCooldownMinutes} min of the last one records nothing.`
+          : "The cooldown is off: every scan is recorded.",
+      });
+    } catch (err) {
+      toast({
+        title: "Could not save the cooldown",
+        description: err instanceof Error ? err.message : "Try again in a minute.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-slate-200/80 px-4 py-3" data-testid="tea-break-cooldown">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700">
+          <Repeat size={16} aria-hidden="true" />
+        </span>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <p className="text-sm font-semibold text-slate-900">Repeat-scan cooldown</p>
+            <p className="text-sm text-slate-500">
+              After a tea-break scan is recorded, the same employee&apos;s next scan within this time records nothing
+              and the gate shows &quot;already scanned&quot;. The return is recorded once it has passed.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="flex items-center gap-2">
+              <label htmlFor={inputId} className="sr-only">
+                Repeat-scan cooldown in minutes
+              </label>
+              <input
+                id={inputId}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={MAX_COOLDOWN}
+                step={1}
+                value={value}
+                disabled={!canEdit || loading || saved === undefined}
+                aria-describedby={hintId}
+                aria-invalid={value !== "" && !valid}
+                onChange={(e) => setValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canEdit && !update.isPending) {
+                    e.preventDefault();
+                    void save();
+                  }
+                }}
+                className={cn(
+                  "h-11 w-24 rounded-lg border bg-white px-3 text-base tabular-nums text-slate-900 outline-none sm:h-10",
+                  "focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/50 disabled:bg-slate-50",
+                  value !== "" && !valid ? "border-rose-400" : "border-slate-200",
+                )}
+                data-testid="tea-break-cooldown-input"
+              />
+              <span className="text-sm text-slate-500">min</span>
+            </div>
+            {canEdit && (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 gap-1.5 sm:h-10"
+                disabled={update.isPending || loading || saved === undefined}
+                onClick={() => void save()}
+                data-testid="tea-break-cooldown-save"
+              >
+                <Save size={15} aria-hidden="true" /> {update.isPending ? "Saving…" : "Save cooldown"}
+              </Button>
+            )}
+          </div>
+          <p id={hintId} className={cn("text-xs", value !== "" && !valid ? "text-rose-700" : "text-slate-500")}>
+            {value !== "" && !valid
+              ? `Enter a whole number of minutes from 0 to ${MAX_COOLDOWN}.`
+              : "0 switches it off. 5 minutes is the starting value."}
+          </p>
+        </div>
+      </div>
+    </div>
   );
 }

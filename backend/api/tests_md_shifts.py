@@ -542,7 +542,9 @@ class ChangesTests(World):
         self.assertEqual(c["granularity"], "week")
         self.assertEqual(sum(p["started"] for p in c["points"]), c["totals"]["started"])
         self.assertEqual(c["points"][0]["date"], "2026-06-29")  # weeks start on Monday
-        self.assertEqual(c["totals"]["first"], 2 + 13)  # everyone assigned on 1 Aug except the moved / renewed ones
+        # first assignments: the 14 who started on 1 Aug (A B C D E F G I K M N O P, and L: a past period keeps the
+        # people who have since left) + Q and R on 8 Oct
+        self.assertEqual(c["totals"]["first"], 14 + 2)
 
     def test_each_shift_gains_and_loses_people(self):
         flows = by_label(self.changes(**CHG)["byShift"])
@@ -635,7 +637,8 @@ class AttendanceTests(World):
     def test_scope_narrows_the_days(self):
         staff = self.att(scope_of(type="staff"), **W)
         self.assertEqual({r["label"] for r in staff["rows"]}, {"General", "No shift assigned"})
-        self.assertEqual(staff["overall"]["workedDays"], 5 + 7 + 0)  # F; H and Q (the shift column is unchanged)
+        # F 5 + H 5 + Q 4 (two days with no shift, two on General): the staff's own days, whatever shift they were on
+        self.assertEqual(staff["overall"]["workedDays"], 5 + 5 + 4)
         unit2 = self.att(scope_of(branch="Unit 2"), **W)
         self.assertEqual([(r["label"], r["workedDays"]) for r in unit2["rows"]], [("Morning (Unit 2)", 5)])
 
@@ -782,7 +785,13 @@ class AttentionTests(World):
                 moves.create(employee=e, shift=self.evening, effective_from=d(9, 11))
                 moves.create(employee=e, shift=self.morning1, effective_from=d(9, 20))
             items = S.shifts_attention(Scope(), period(**{"from": "2026-09-17", "to": "2026-09-30"}), today=TODAY)["items"]
-            self.assertNotIn("shifts.changes", self.ids(items), "the earlier window has moves of its own now")
+            # now 4 moves (N twice, M and O back to Morning on 20 Sep) against 2 the fortnight before (M and O to Evening
+            # on 11 Sep): exactly double, which the rule ("at least double") calls a spike
+            item = next(i for i in items if i["id"] == "shifts.changes")
+            self.assertEqual(item["title"], "Shift changes jumped to 4 from 2")
+            with mock.patch.object(S, "CHANGE_SPIKE_RATIO", 2.5):
+                items = S.shifts_attention(Scope(), period(**{"from": "2026-09-17", "to": "2026-09-30"}), today=TODAY)
+                self.assertNotIn("shifts.changes", self.ids(items["items"]), "4 is not 2.5 times 2")
             # CHG against the previous 17..30 Sep: 2 moves against (2 + 2) is not a doubling
             self.assertNotIn("shifts.changes", self.ids(S.shifts_attention(Scope(), period(**CHG), today=TODAY)["items"]))
 
@@ -890,7 +899,9 @@ class RouteTests(World):
         self.assertEqual(self.get_ok("coverage", branch="Unit 2")["total"], 1)
         self.assertEqual(self.get_ok("unassigned", type="staff")["total"], 2)
         self.assertEqual(self.get_ok("summary", department="stitching", **CHG)["employees"]["active"], 6)  # fuzzy, one department
-        self.assertIn("Matched department", " ".join(self.get_ok("summary", department="stitching", **CHG)["notes"]))
+        # an exact name in another case says nothing (common.resolve_scope); a typo is matched and said
+        self.assertNotIn("Matched department", " ".join(self.get_ok("summary", department="stitching", **CHG)["notes"]))
+        self.assertIn("Matched department", " ".join(self.get_ok("summary", department="stiching", **CHG)["notes"]))
 
     def test_the_default_period_is_the_last_30_days(self):
         self.assertEqual(self.get_ok("summary")["period"]["label"], "Last 30 days")
@@ -1010,3 +1021,153 @@ class ToolTests(World):
                 result = self.run_tool(name)
                 json.dumps(result)  # plain JSON: no dates or Decimals
                 self.assertTrue(result["provenance"])
+
+
+# ─── production under the production rules (2026-11-16) and the people on a shift (2026-11-21) ───────────────────────
+
+
+class ProductionRulesTests(World):
+    """The same company once the production rules are in force (from 1 Sep 2026): production workers are judged by the
+    default production shifts of Settings (Day, Night) or a special shift, never by their old templates.
+
+      Special shift "Boiler": M from 1 Oct (open: on it today)   O from 20 Oct (starts later)   P 1 Sep..10 Oct (ended)
+
+      TODAY: staff on templates General F G K Q R = 5, no shift H I = 2 (J is production: on the production shifts);
+             production 10 = Boiler M 1 + the default shifts 9 (A B C D E J N O P)  -> 15 of 17 on a shift
+      CHG (1..14 Oct): the production template moves and renewals are left out (after 1 Sep they change nothing):
+             Q and R General 8 Oct (first) = 2 starts; M's Boiler 1 Oct is a special start
+      W (5..9 Oct): A B C D E are production -> "Production shifts (Settings)": 24 worked of 25, 4 late = 16.7 %, 96.0 %
+             General F + Q (8, 9 Oct) 7 worked, 1 late = 14.3 %; no shift H + Q (6, 7 Oct) 7 worked, 2 late = 28.6 %
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        from .models import ProductionShiftConfig, ProductionShiftGroup, ProductionSpecialShiftAssignment
+
+        ProductionShiftConfig.objects.update_or_create(
+            pk=1, defaults={"rules_enabled": True, "rules_effective_from": d(9, 1)}
+        )
+        ProductionShiftGroup.objects.all().delete()  # the migration's seed: replaced by a known pair
+
+        def group(label, kind, start, special=False, applies="mon_sat", order=0):
+            return ProductionShiftGroup.objects.create(
+                label=label,
+                kind=kind,
+                applies_on=applies,
+                start_time=start,
+                first_punch_from=time(start.hour - 2 if start.hour >= 2 else 0),
+                first_punch_to=time(min(start.hour + 3, 23)),
+                is_special=special,
+                order=order,
+            )
+
+        cls.day = group("Day", "day", time(8, 30), order=1)
+        cls.night = group("Night", "night", time(21), order=2)
+        cls.boiler = group("Boiler", "custom", time(7), special=True, applies="all", order=3)
+        ProductionSpecialShiftAssignment.objects.create(employee=cls.M, group=cls.boiler, effective_from=d(10, 1))
+        ProductionSpecialShiftAssignment.objects.create(employee=cls.O, group=cls.boiler, effective_from=d(10, 20))
+        ProductionSpecialShiftAssignment.objects.create(
+            employee=cls.P, group=cls.boiler, effective_from=d(9, 1), effective_to=d(10, 10)
+        )
+
+    def test_production_workers_are_on_the_production_shifts_never_without_one(self):
+        c = S.shifts_coverage(Scope(), today=TODAY)
+        self.assertEqual((c["total"], c["onShift"], c["noShift"]["people"]), (17, 15, 2))
+        self.assertEqual(
+            [(s["label"], s["people"], s["source"]) for s in c["shifts"]],
+            [("Production shifts (Settings)", 9, "production"), ("General", 5, "template"), ("Boiler (special)", 1, "special")],
+        )
+        boiler = by_label(c["shifts"])["Boiler (special)"]
+        self.assertEqual((boiler["key"], boiler["start"]), (f"special-{self.boiler.id}", "07:00"))
+        # the retired production templates are not "the shifts" any more: the production groups are
+        self.assertEqual(c["templates"], {"active": 1, "inUse": 1, "unused": 0, "staff": 1, "production": 3})
+        self.assertEqual(c["balance"], [])  # one staff shift: nothing to compare; groups are picked by the first punch
+        p = c["production"]
+        self.assertEqual(
+            (p["inForce"], p["effectiveFrom"], p["workers"], p["onDefaults"], p["onSpecial"]),
+            (True, "2026-09-01", 10, 9, 1),
+        )
+        self.assertEqual([(g["label"], g["start"], g["appliesOnText"]) for g in p["defaults"]], [("Day", "08:30", "Monday to Saturday"), ("Night", "21:00", "Monday to Saturday")])
+        self.assertEqual([(g["label"], g["people"]) for g in p["specials"]], [("Boiler", 1)])
+        cells = {(x["shift"], x["department"]): x["people"] for x in c["cells"]}
+        self.assertEqual(cells[("production", "Cutting")], 3)  # A B N (M is on Boiler)
+        self.assertEqual(cells[("production", "Stitching")], 6)  # C D E J O P (both units' Stitching)
+        self.assertEqual(cells[(f"special-{self.boiler.id}", "Cutting")], 1)  # M
+        self.assertEqual(sum(cells.values()), c["total"])
+        self.assertIn("production shifts of Settings", " ".join(c["notes"]))
+
+    def test_unassigned_and_watch_leave_production_to_the_rules(self):
+        u = S.shifts_unassigned(Scope(), today=TODAY)
+        self.assertEqual((u["active"], u["total"], u["startsLater"], u["neverHadShift"], u["endedWithout"]), (17, 2, 0, 1, 1))
+        self.assertEqual([r["employeeCode"] for r in u["rows"]], ["H", "I"])
+        w = S.shifts_watch(Scope(), today=TODAY)
+        self.assertEqual((w["endingSoon"]["count"], w["overlapping"]["count"], w["startsLater"]["count"]), (1, 0, 1))  # F; D is production; G
+
+    def test_changes_leave_out_the_retired_templates_and_count_special_starts(self):
+        t = S.shifts_changes(Scope(), period(**CHG), today=TODAY)["totals"]
+        self.assertEqual((t["first"], t["moved"], t["renewed"], t["started"], t["specialStarts"]), (2, 0, 0, 2, 1))
+        self.assertEqual(t["previous"]["started"], 0)  # N's two moves in September were on a production template
+
+    def test_attendance_files_production_days_under_the_production_shifts(self):
+        a = S.shifts_attendance(Scope(), period(**W), today=TODAY)
+        got = {r["label"]: (r["people"], r["workedDays"], r["scheduledDays"], r["lateDays"], r["latePct"]) for r in a["rows"]}
+        self.assertEqual(
+            got,
+            {
+                "Production shifts (Settings)": (5, 24, 25, 4, 16.7),
+                "General": (2, 7, 7, 1, 14.3),
+                "No shift assigned": (2, 7, 7, 2, 28.6),
+            },
+        )
+        self.assertEqual(a["overall"]["workedDays"], 38)  # the same days, filed differently
+
+    def test_summary_and_briefing_say_so(self):
+        s = S.shifts_summary(Scope(), period(**CHG), today=TODAY)
+        self.assertEqual(s["employees"]["noShift"], 2)
+        self.assertEqual(s["production"], {"inForce": True, "workers": 10, "onSpecial": 1, "defaults": 2, "specials": 1})
+        sentences = {x["id"]: x for x in S.shifts_briefing(Scope(), period(**CHG), today=TODAY)["briefing"]["sentences"]}
+        self.assertEqual(
+            sentences["production"]["text"],
+            "10 production workers follow the production shifts of Settings (Day, Night); 1 is on a special shift.",
+        )
+        self.assertEqual(sentences["balance"]["text"], "The biggest shift is General with 5 people (29% of everyone).")
+
+    def test_the_people_on_a_shift(self):
+        prod = self.get_ok("people", shift="production")
+        self.assertEqual(prod["total"], 9)
+        self.assertEqual([r["employeeCode"] for r in prod["rows"]], ["A", "B", "C", "D", "E", "J", "N", "O", "P"])
+        self.assertEqual(prod["shift"]["label"], "Production shifts (Settings)")
+        boiler = self.get_ok("people", shift=f"special-{self.boiler.id}")
+        self.assertEqual([(r["employeeCode"], r["since"], r["until"]) for r in boiler["rows"]], [("M", "2026-10-01", None)])
+        general = self.get_ok("people", shift=str(self.general.id))
+        self.assertEqual([r["employeeCode"] for r in general["rows"]], ["F", "G", "K", "Q", "R"])
+        f = general["rows"][0]
+        self.assertEqual((f["since"], f["until"], f["department"]), ("2026-08-01", "2026-10-20", "Admin"))
+        self.assertEqual([r["employeeCode"] for r in self.get_ok("people", shift="none")["rows"]], ["H", "I"])
+        morning = self.get_ok("people", shift=str(self.morning1.id))
+        self.assertEqual(morning["total"], 0)  # a retired production template: nobody is on it any more
+        self.assertIn("Nobody in this selection", " ".join(morning["notes"]))
+        paged = self.get_ok("people", shift="production", pageSize=4, page=3)
+        self.assertEqual((paged["pages"], paged["page"], [r["employeeCode"] for r in paged["rows"]]), (3, 3, ["P"]))
+        self.assertEqual(self.get_ok("people", shift="production", branch="Unit 2")["total"], 1)  # E
+
+
+class ShiftPeopleLegacyTests(World):
+    """Before the production rules are in force (the world as built: the migration's effective date is later than TODAY)
+    production workers are read from their templates."""
+
+    def test_the_people_on_a_template(self):
+        body = self.get_ok("people", shift=str(self.morning1.id))
+        self.assertEqual([r["employeeCode"] for r in body["rows"]], ["A", "M", "N", "O", "P"])
+        n = next(r for r in body["rows"] if r["employeeCode"] == "N")
+        self.assertEqual(n["since"], "2026-09-26")
+        self.assertEqual(body["shift"]["label"], "Morning (Unit 1)")
+        self.assertFalse(S.shifts_coverage(Scope(), today=TODAY)["production"]["inForce"])
+
+    def test_a_bad_or_unusable_shift_is_a_readable_400(self):
+        for value, text in (("", "'shift' must be"), ("night", "'shift' must be"), ("production", "not in force")):
+            with self.subTest(shift=value), at():
+                r = self.get(f"{BASE}/people", shift=value)
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(text, r.json()["error"])

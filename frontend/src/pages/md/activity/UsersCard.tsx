@@ -13,7 +13,12 @@ const COLUMNS: Column<UserRow>[] = [
   {
     key: "person",
     header: "Person",
-    cell: (u) => <PersonCell name={u.userName} role={u.role} />,
+    cell: (u) => (
+      <PersonCell
+        name={u.userName}
+        role={[u.kind && u.kind !== "Admin" ? u.kind : null, u.role].filter(Boolean).join(" · ") || null}
+      />
+    ),
     sortValue: (u) => u.userName.toLowerCase(),
   },
   {
@@ -87,7 +92,7 @@ export default function UsersCard({
   return (
     <SectionCard
       title="Who is doing the work"
-      subtitle="Actions by person. Select a person to see their sensitive actions below"
+      subtitle="Actions by person. Select a person to narrow the whole page to them"
       provenance={u?.provenance}
       loading={q.isPending}
       actions={<AskAiButton question={ask.users(label)} />}

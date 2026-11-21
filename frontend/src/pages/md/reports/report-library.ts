@@ -19,9 +19,9 @@ export const PREVIEW_PER_CATEGORY = 6;
 
 /** Questions the "Ask AI" entry offers (short, so each fits one line on a phone). */
 export const ASK_EXAMPLES = [
-  "Which report shows overtime by department?",
-  "Which report shows monthly salary cost?",
-  "Where can I see who came late this week?",
+  "Which report shows salary cost by department?",
+  "Where can I see who came late this month?",
+  "Which report shows each employee's leave?",
 ];
 
 export type Library = {
@@ -237,4 +237,69 @@ export function reportContext(
 export function askAboutReport(spec: ReportMeta, data: ReportRunResult | undefined): string {
   const filters = (data?.filters ?? []).map((f) => `${f.label}: ${f.value}`).join(", ");
   return `Explain the "${spec.title}" report${filters ? ` (${filters})` : ""}: what stands out, and what should I look at first?`;
+}
+
+// ── the overview and the executive month (2026-11-21) ───────────────────────────────────────────────────────────────
+
+/** The Report Center's saved custom reports (Customise); the MD opens them read-only. */
+export const CUSTOMISE_CATEGORY = "customise";
+
+export type LibraryStats = {
+  executive: number;
+  /** The listed reports outside the MD's own and the saved custom ones (the Report Center's groups). */
+  listed: number;
+  /** The Report Center's groups that hold reports (Customise and the MD's own left out). */
+  groups: number;
+  saved: number;
+  byGroup: { id: string; label: string; count: number }[];
+};
+
+export function libraryStats(library: Library): LibraryStats {
+  const groups = library.categories.filter((c) => c.category.id !== CUSTOMISE_CATEGORY);
+  const saved = library.categories.find((c) => c.category.id === CUSTOMISE_CATEGORY)?.count ?? 0;
+  return {
+    executive: library.executive.length,
+    listed: groups.reduce((n, c) => n + c.count, 0),
+    groups: groups.length,
+    saved,
+    byGroup: groups.map((c) => ({ id: c.category.id, label: c.category.label, count: c.count })),
+  };
+}
+
+const two = (n: number) => String(n).padStart(2, "0");
+const isoDay = (d: Date) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+
+/**
+ * Where an executive report opens for a chosen month and unit: its month filter set to that month (or its date range to
+ * the month's days, up to today and within the report's longest range), its unit filter to that unit, and run at once.
+ * A report whose filters cannot take the month (a one-day brief, a week) opens with its own defaults.
+ */
+export function executiveHref(report: ReportMeta, month: string | null, branchId: string, today = new Date()): string {
+  const q = new URLSearchParams({ report: report.id });
+  let applied = false;
+  if (month) {
+    const [y, m] = month.split("-").map(Number);
+    const first = `${month}-01`;
+    const last = isoDay(new Date(y, m, 0));
+    const end = last > isoDay(today) ? isoDay(today) : last;
+    for (const f of report.filters) {
+      if (f.kind === "period") {
+        q.set("period", month);
+        applied = true;
+      } else if (f.kind === "dateRange" && end >= first) {
+        const days = Math.round((Date.parse(end) - Date.parse(first)) / 86_400_000) + 1;
+        if (!f.maxDays || days <= f.maxDays) {
+          q.set("dateFrom", first);
+          q.set("dateTo", end);
+          applied = true;
+        }
+      }
+    }
+  }
+  if (branchId && report.filters.some((f) => f.kind === "branch")) {
+    q.set("branchIds", branchId);
+    applied = true;
+  }
+  if (applied) q.set("run", "1");
+  return `${MD_REPORTS_PATH}?${q.toString()}`;
 }

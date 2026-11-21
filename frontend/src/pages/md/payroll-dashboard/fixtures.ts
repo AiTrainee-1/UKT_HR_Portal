@@ -5,12 +5,16 @@
 
 import type {
   PayChange,
+  PayDepartmentOption,
   PayDepartmentRow,
   PayDepartmentsResponse,
   PayFigures,
   PayMonthRow,
   PayMonthState,
+  PayMonthWorkflow,
   PayMonthlyResponse,
+  PayYearBlock,
+  PayYearly,
   PayPeopleResponse,
   PayPersonMonth,
   PayPersonResponse,
@@ -250,7 +254,9 @@ export function slipFor(seed: Seed, ym: string): Slip | null {
     const lossOfPay = r2(salary - earned);
     const late = lateDays >= 3 ? r2(dailyRate / 4) : 0;
     const overtime = k % 3 === 0 ? 1200 + (i % 3) * 400 : 0;
-    const bonus = bonusMonth ? r2(salary * 0.0833) : 0;
+    const excess = bonusMonth ? r2(salary * 0.0833) : latest && k === 0 ? 1000 : 0;
+    const detection = latest && k === 0 ? 400 : 0;
+    const bonus = r2(excess - detection);
     const pf = Math.min(1800, r2(earned * 0.5 * 0.12));
     const esi = earned <= 21000 ? r2(earned * 0.0075) : 0;
     const tds = salary >= 40000 ? 1500 : 0;
@@ -269,6 +275,8 @@ export function slipFor(seed: Seed, ym: string): Slip | null {
       attendanceDeduction: r2(lossOfPay + late),
       overtime,
       bonus,
+      excess,
+      detection,
       deductions: { pf, esi, tds, advance, late, other, total },
       netPaid,
       employerPfEsi,
@@ -331,6 +339,8 @@ export function slipFor(seed: Seed, ym: string): Slip | null {
     attendanceDeduction: late,
     overtime,
     bonus,
+    excess: bonus,
+    detection: 0,
     deductions: { pf, esi, tds: 0, advance, late, other, total },
     netPaid,
     employerPfEsi,
@@ -365,6 +375,8 @@ export function addUp(blocks: PayFigures[]): PayFigures {
     attendanceDeduction: sum((f) => f.attendanceDeduction),
     overtime: sum((f) => f.overtime),
     bonus: sum((f) => f.bonus),
+    excess: sum((f) => f.excess),
+    detection: sum((f) => f.detection),
     deductions: {
       pf: sum((f) => f.deductions.pf),
       esi: sum((f) => f.deductions.esi),
@@ -394,6 +406,8 @@ const figuresOf = (slip: Slip): PayFigures => ({
   attendanceDeduction: slip.attendanceDeduction,
   overtime: slip.overtime,
   bonus: slip.bonus,
+  excess: slip.excess,
+  detection: slip.detection,
   deductions: slip.deductions,
   netPaid: slip.netPaid,
   employerPfEsi: slip.employerPfEsi,
@@ -435,12 +449,136 @@ const scopeFrom = (params: URLSearchParams): Scope => ({
   type: params.get("type"),
 });
 
+/** The month in HR's workflow: the latest month is Payroll Done with the payment pending, every other month paid. */
+function workflowOf(ym: string, seeds: Seed[], all: (Slip | null)[]): PayMonthWorkflow {
+  const latest = ym === LATEST;
+  const slips = all.filter((s): s is Slip => !!s);
+  const net = r2(slips.reduce((a, s) => a + s.netPaid, 0));
+  const held = slips.filter((s) => s.onHold);
+  const left = seeds.filter((p, i) => p.status !== "active" && all[i]);
+  const leftNet = r2(left.reduce((a, p) => a + (slipFor(p, ym)?.netPaid ?? 0), 0));
+  const next = MONTHS[monthIndex(ym) + 1] ?? "2026-11";
+  return {
+    staffState: latest ? "finalized" : "paid",
+    productionState: null,
+    locked: true,
+    finalizedAt: latest ? "2026-11-03T10:00:00" : `${next}-05T10:00:00`,
+    markedPaidAt: latest ? null : `${next}-06T11:00:00`,
+    paymentPendingDays: latest ? 11 : null,
+    daysToPay: latest ? null : 1,
+    slips: slips.length,
+    paidSlips: latest ? 0 : slips.length,
+    unpaidSlips: latest ? slips.length : 0,
+    unpaidNet: latest ? net : 0,
+    clearedSlips: slips.length,
+    provisionalSlips: 0,
+    onHold: held.length,
+    onHoldNet: r2(held.reduce((a, s) => a + s.netPaid, 0)),
+    newJoinersWaiting: latest ? 1 : 0,
+    newJoinersNet: latest ? 9000 : 0,
+    paidSeparately: 0,
+    productionParked: 0,
+    leftSince: left.length,
+    leftSinceNet: leftNet,
+  };
+}
+
 function monthRow(ym: string, scope: Scope): PayMonthRow | null {
-  const slips = PEOPLE.filter((p) => inScope(p, scope))
-    .map((p) => slipFor(p, ym))
-    .filter((s): s is Slip => !!s);
+  const seeds = PEOPLE.filter((p) => inScope(p, scope));
+  const all = seeds.map((p) => slipFor(p, ym));
+  const slips = all.filter((s): s is Slip => !!s);
   if (slips.length === 0) return null;
-  return { ...addUp(slips.map(figuresOf)), month: ym, label: label(ym), status: statusOf(ym) };
+  return {
+    ...addUp(slips.map(figuresOf)),
+    month: ym,
+    label: label(ym),
+    status: statusOf(ym),
+    workflow: workflowOf(ym, seeds, all),
+  };
+}
+
+function yearBlock(year: number, from: string, to: string, scope: Scope): PayYearBlock | null {
+  const months = MONTHS.filter((m) => m >= from && m <= to && Number(m.slice(0, 4)) === year);
+  const rows = months.map((m) => monthRow(m, scope)).filter((r): r is PayMonthRow => !!r);
+  if (rows.length === 0) return null;
+  const people = new Set(PEOPLE.filter((p) => inScope(p, scope) && months.some((m) => slipFor(p, m))).map((p) => p.id));
+  return {
+    ...addUp(rows),
+    employees: people.size,
+    year,
+    label: `${year} (${label(from).slice(0, 3)}-${label(to).slice(0, 3)})`,
+    from,
+    to,
+    months: rows.length,
+  };
+}
+
+function yearlyOf(month: string, scope: Scope): PayYearly {
+  const year = Number(month.slice(0, 4));
+  const mm = month.slice(5, 7);
+  const current = yearBlock(year, `${year}-01`, month, scope);
+  const previous = yearBlock(year - 1, `${year - 1}-01`, `${year - 1}-${mm}`, scope);
+  const previousFull = yearBlock(year - 1, `${year - 1}-01`, `${year - 1}-12`, scope);
+  const same = monthRow(`${year - 1}-${mm}`, scope);
+  const now = monthRow(month, scope);
+  const point = (r: PayMonthRow | null) =>
+    r ? { companyCost: r.companyCost, netPaid: r.netPaid, employees: r.employees } : null;
+  return {
+    current,
+    previous,
+    previousFull,
+    change:
+      current && previous
+        ? {
+            companyCost: changeOf(current.companyCost, previous.companyCost),
+            earnedSalary: changeOf(current.earnedSalary, previous.earnedSalary),
+            netPaid: changeOf(current.netPaid, previous.netPaid),
+            deductions: changeOf(current.deductions.total, previous.deductions.total),
+            bonus: changeOf(current.bonus, previous.bonus),
+            employees: changeOf(current.employees, previous.employees),
+          }
+        : null,
+    sameMonthLastYear: same,
+    sameMonthChange:
+      same && now
+        ? {
+            companyCost: changeOf(now.companyCost, same.companyCost),
+            earnedSalary: changeOf(now.earnedSalary, same.earnedSalary),
+            netPaid: changeOf(now.netPaid, same.netPaid),
+            attendanceDeduction: changeOf(now.attendanceDeduction, same.attendanceDeduction),
+            clAmount: changeOf(now.clAmount, same.clAmount),
+            employees: changeOf(now.employees, same.employees),
+          }
+        : null,
+    months: MONTH_NAMES.map((name, i) => {
+      const m = String(i + 1).padStart(2, "0");
+      const cur = `${year}-${m}` <= month ? monthRow(`${year}-${m}`, scope) : null;
+      return { month: i + 1, label: name, current: point(cur), previous: point(monthRow(`${year - 1}-${m}`, scope)) };
+    }),
+  };
+}
+
+/** The ids the shell's org fixture gives these departments (renderMdPage SHELL_FIXTURES); the others get their own. */
+const DEPARTMENT_IDS: Record<string, number> = {
+  Stitching: 10,
+  Cutting: 11,
+  Accounts: 12,
+  Packing: 13,
+  Maintenance: 14,
+};
+
+/** The departments of the fixture's people of the scope's kind, one per name and unit (the filter's options). */
+export function departmentOptions(scope: Scope): PayDepartmentOption[] {
+  const seen = new Map<string, PayDepartmentOption>();
+  const mine = PEOPLE.filter(
+    (x) => (!scope.type || x.type === scope.type) && (!scope.branch || String(x.branchId) === scope.branch),
+  );
+  for (const p of mine) {
+    const key = `${p.department}|${p.branchId}`;
+    if (!seen.has(key))
+      seen.set(key, { id: DEPARTMENT_IDS[p.department] ?? 900 + seen.size, name: p.department, branchId: p.branchId });
+  }
+  return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function changeOf(current: number | null, previous: number | null): PayChange {
@@ -463,6 +601,9 @@ export function monthlyFixture(params: URLSearchParams = new URLSearchParams()):
       current: null,
       previous: null,
       change: null,
+      yearly: null,
+      notIncluded: null,
+      departments: departmentOptions(scope),
       available: [],
       scope: echo(scope),
       notes: [],
@@ -490,6 +631,20 @@ export function monthlyFixture(params: URLSearchParams = new URLSearchParams()):
     current,
     previous,
     change,
+    yearly: current ? yearlyOf(month, scope) : null,
+    notIncluded:
+      current && scope.type !== "production"
+        ? {
+            count: 2,
+            noSalary: 1,
+            notGenerated: 1,
+            people: [
+              { employeeId: 301, code: "STF101", name: "Iniya Mohan", department: "Accounts", reason: "not_generated" },
+              { employeeId: 302, code: "STF102", name: "Jeeva R", department: "Packing", reason: "no_salary" },
+            ],
+          }
+        : null,
+    departments: departmentOptions(scope),
     available,
     scope: echo(scope),
     notes: [],
@@ -670,6 +825,9 @@ export const EMPTY_MONTHLY: PayMonthlyResponse = {
   current: null,
   previous: null,
   change: null,
+  yearly: null,
+  notIncluded: null,
+  departments: [],
   available: [],
   scope: { branch: null, department: null, type: null },
   notes: [],

@@ -1,5 +1,6 @@
-// The MD Payroll page (/md/payroll) as a whole: its title row, its three tabs, what it asks the server for, and what it
-// tells the assistant. The tabs themselves are tested in payroll-dashboard/PayrollDashboard.test.tsx.
+// The MD Payroll page (/md/payroll) as a whole, Staff side: its title row, its three tabs, what it asks the server for,
+// and what it tells the assistant. The tabs themselves are tested in payroll-dashboard/PayrollDashboard.test.tsx, the
+// Production side in payroll-dashboard/production/Production.test.tsx.
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { getAssistantState } from "@/lib/md/assistant-store";
@@ -21,10 +22,12 @@ describe("Payroll page", () => {
   it("has the portal's title row and opens on the Monthly tab", async () => {
     page = await openPayroll();
     expect(textOf(page, "md-page-title")).toBe("Payroll");
-    expect(textOf(page, "md-page-header")).toContain("What the company spends on salaries");
+    expect(textOf(page, "md-page-header")).toContain("Staff salaries month by month");
     expect(by(page, "md-live")).not.toBeNull();
     expect(by(page, "md-refresh")).not.toBeNull();
-    expect(by(page, "md-payroll")?.dataset.view).toBe("monthly");
+    expect(by(page, "md-payroll")?.dataset.kind).toBe("staff");
+    expect(by(page, "md-pay-staff")?.dataset.view).toBe("monthly");
+    expect([...page.container.querySelectorAll('[data-testid="md-pay-kind"] [role="tab"]')].length).toBe(2);
     expect(
       [...page.container.querySelectorAll('[data-testid="md-pay-tabs"] [role="tab"]')].map((t) => t.textContent),
     ).toEqual(["Monthly", "Departments", "Employees"]);
@@ -49,7 +52,7 @@ describe("Payroll page", () => {
     page.unmount();
 
     page = await openPayroll("/md/payroll?employee=104");
-    expect(by(page, "md-payroll")?.dataset.view).toBe("employee");
+    expect(by(page, "md-pay-staff")?.dataset.view).toBe("employee");
     expect(textOf(page, "md-pay-profile-name")).toBe("Deepak Kumar");
     expect(url(page)).toBe("/md/payroll?employee=104");
   });
@@ -58,24 +61,33 @@ describe("Payroll page", () => {
     page = await openPayroll();
     expect(context()).toMatchObject({
       page: "payroll",
-      title: "Payroll",
-      filters: { View: "Monthly", Month: "Oct 2026", Scope: "All units · all departments · staff and production" },
+      title: "Staff payroll",
+      filters: {
+        Payroll: "Staff (monthly)",
+        View: "Monthly",
+        Month: "Oct 2026",
+        Scope: "All units · all departments · staff only",
+      },
       summary: {
-        "Company cost": "₹5.7 L",
-        "Net paid": "₹4.9 L",
+        "Company cost": "₹3.8 L",
+        "Net paid": "₹3.3 L",
         "CL days": "5",
+        "Excess added by HR": "₹1,000",
+        "Detection taken off by HR": "₹400",
         "Payroll status": "Payment pending",
-        "Company cost against the month before": "₹5.7 L (-2.9% on the month before)",
+        "Company cost against the month before": "₹3.8 L (-4% on the month before)",
+        "Salaries on hold": "1 (₹17,252)",
+        "Staff not included": "2",
       },
     });
 
     await page.click('[data-testid="md-pay-tab-departments"]');
     expect(context()?.filters?.View).toBe("Departments");
-    expect(context()?.summary).toMatchObject({ Departments: 5, "Largest department": "Cutting: ₹1.6 L (29.1%)" });
+    expect(context()?.summary).toMatchObject({ Departments: 4, "Largest department": "Cutting: ₹1.5 L (39.6%)" });
 
     await page.click('[data-testid="md-pay-tab-employees"]');
     expect(context()?.filters?.View).toBe("Employees");
-    expect(context()?.summary).toMatchObject({ Employees: "29", "Net paid": "₹4.9 L" });
+    expect(context()?.summary).toMatchObject({ Employees: "16", "Net paid": "₹3.3 L" });
 
     await page.click('[data-testid="row-101"]');
     expect(context()?.filters).toMatchObject({
@@ -90,7 +102,7 @@ describe("Payroll page", () => {
   });
 
   it("names the unit in the assistant's scope", async () => {
-    page = await openPayroll("/md/payroll?branch=2&type=staff");
+    page = await openPayroll("/md/payroll?branch=2");
     expect(context()?.filters?.Scope).toBe("Head Office · all departments · staff only");
   });
 

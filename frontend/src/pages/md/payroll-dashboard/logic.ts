@@ -1,10 +1,13 @@
-// Pure logic of the MD Payroll page (/md/payroll): the page state in the address, the figures the cards derive from the
-// contract (types.ts), chart rows, sorting and paging. No React here, so it is unit-tested on its own (logic.test.ts).
+// Pure logic of the MD Payroll page (/md/payroll), STAFF side: the page state in the address, the figures the cards derive
+// from the contract (types.ts), chart rows, sorting and paging. No React here, so it is unit-tested on its own
+// (logic.test.ts). The Production side has its own (production/logic.ts); `kindOf` says which side an address opens.
 
 import { changeTone, inr, inrCompact, monthText, num, signed, type Tone } from "@/lib/md/format";
 import type { ScopeChoice } from "@/lib/md/period";
+import type { MdOrg } from "@/lib/md/types";
 import type {
   PayChange,
+  PayDepartmentOption,
   PayDepartmentRow,
   PayFigures,
   PayMonthRow,
@@ -65,7 +68,17 @@ export const PEOPLE_SORT_LABEL: Record<PeopleSort, string> = {
 };
 
 export type SortDir = "asc" | "desc";
-export type EmploymentType = "" | "staff" | "production";
+
+/** Staff (monthly payroll) or Production (pay cycles and periods): the two sides of the page, like the HRMS. */
+export type PayKind = "staff" | "production";
+
+/** Which side an address opens: ?kind=production, or an older link's ?type=production; else Staff. */
+export function kindOf(search: string): PayKind {
+  const p = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const kind = p.get("kind");
+  if (kind === "production" || (kind == null && p.get("type") === "production")) return "production";
+  return "staff";
+}
 
 export type DashState = {
   view: DashView;
@@ -75,7 +88,6 @@ export type DashState = {
   branch: string;
   /** a department NAME (a name in several units covers all of them) */
   department: string;
-  type: EmploymentType;
   /** the people search: a name or an employee code */
   q: string;
   /** the employee whose history is open (the Employees tab) */
@@ -90,7 +102,6 @@ export const DEFAULT_STATE: DashState = {
   month: "",
   branch: "",
   department: "",
-  type: "",
   q: "",
   employee: null,
   sort: "name",
@@ -121,7 +132,6 @@ export function parseDashState(search: string): DashState {
       ? (rawView as DashView)
       : "monthly";
   const month = p.get("month") ?? "";
-  const type = p.get("type");
   const sort = PEOPLE_SORTS.includes(p.get("sort") as PeopleSort) ? (p.get("sort") as PeopleSort) : "name";
   const dir = p.get("dir");
   return {
@@ -129,7 +139,6 @@ export function parseDashState(search: string): DashState {
     month: /^\d{4}-(0[1-9]|1[0-2])$/.test(month) ? month : "",
     branch: (p.get("branch") ?? "").trim(),
     department: (p.get("department") ?? "").trim(),
-    type: type === "staff" || type === "production" ? type : "",
     q: (p.get("q") ?? "").trim(),
     employee,
     sort,
@@ -147,7 +156,6 @@ export function dashSearch(state: DashState): string {
   if (state.month) p.set("month", state.month);
   if (state.branch) p.set("branch", state.branch);
   if (state.department) p.set("department", state.department);
-  if (state.type) p.set("type", state.type);
   if (state.q) p.set("q", state.q);
   if (state.sort !== "name") p.set("sort", state.sort);
   if (state.dir !== defaultDir(state.sort)) p.set("dir", state.dir);
@@ -158,7 +166,7 @@ export function dashSearch(state: DashState): string {
 
 export type DashPatch = Partial<DashState>;
 
-const LIST_KEYS: (keyof DashState)[] = ["month", "branch", "department", "type", "q", "sort", "dir"];
+const LIST_KEYS: (keyof DashState)[] = ["month", "branch", "department", "q", "sort", "dir"];
 
 /** A change applied the way the page means it: a new filter, search or sort starts the list again at page 1; leaving the
  *  Employees tab closes the open employee. */
@@ -178,10 +186,19 @@ export function nextSort(state: Pick<DashState, "sort" | "dir">, key: PeopleSort
   return { sort: key, dir: defaultDir(key) };
 }
 
-export const scopeOf = (s: Pick<DashState, "branch" | "department" | "type">): ScopeChoice => ({
+/** The organisation with only the departments the server says belong to this side (staff departments are separate from
+ *  production ones since 2026-11-16); the whole list until the server has answered. */
+export function orgFor(org: MdOrg | undefined, options: PayDepartmentOption[] | undefined): MdOrg | undefined {
+  if (!org || !options) return org;
+  const ids = new Set(options.map((o) => o.id));
+  return { ...org, departments: org.departments.filter((d) => ids.has(d.id)) };
+}
+
+/** The Staff side's scope: the unit and department chosen, staff only. */
+export const scopeOf = (s: Pick<DashState, "branch" | "department">): ScopeChoice => ({
   branch: s.branch,
   department: s.department,
-  type: s.type,
+  type: "staff",
 });
 
 // ── figures ───────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -204,6 +221,7 @@ export type KpiKey =
   | "earnedSalary"
   | "attendanceDeduction"
   | "otherDeductions"
+  | "bonus"
   | "netPaid"
   | "clDays"
   | "clAmount"
@@ -296,6 +314,8 @@ export function sumFigures(rows: PayFigures[]): PayFigures {
     attendanceDeduction: must((f) => f.attendanceDeduction),
     overtime: must((f) => f.overtime),
     bonus: must((f) => f.bonus),
+    excess: must((f) => f.excess),
+    detection: must((f) => f.detection),
     deductions: {
       pf: must((f) => f.deductions.pf),
       esi: must((f) => f.deductions.esi),
@@ -726,7 +746,7 @@ export function compareLines(current: PayFigures | null, previous: PayFigures | 
     line("lossOfPay", "Loss of pay", (f) => f.lossOfPay),
     line("lateDeduction", "Late / early-out penalties", (f) => f.lateDeduction),
     line("overtime", "Overtime", (f) => f.overtime),
-    line("bonus", "Bonus", (f) => f.bonus),
+    line("bonus", "Excess - detection (HR)", (f) => f.bonus),
     line("otherDeductions", "Other deductions", (f) => otherDeductions(f)),
     line("netPaid", "Net paid", (f) => f.netPaid),
     line("companyCost", "Company cost", (f) => f.companyCost),
@@ -751,6 +771,8 @@ export function figuresSummary(f: PayFigures): Record<string, string> {
     "Earned salary": inrCompact(f.earnedSalary),
     "Attendance deductions": inrCompact(f.attendanceDeduction),
     "Other deductions": inrCompact(otherDeductions(f)),
+    "Excess added by HR": inrCompact(f.excess),
+    "Detection taken off by HR": inrCompact(f.detection),
     "Net paid": inrCompact(f.netPaid),
     "Company cost": inrCompact(f.companyCost),
     "CL days": daysText(f.clDays),

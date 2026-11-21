@@ -29,6 +29,14 @@ Decisions that make the numbers mean something (each is repeated in the provenan
   repeated rejections of the same person. Each is a reason to look, and the provenance says so.
 * Headcount behind "participation" is today's active employees (there is no headcount history).
 
+Since 2026-10-28 an on-duty session is also **tracked** by the app (``DutyTrack``, ``geo_tracking/``): the route, the stops,
+the distance travelled, the gaps where the phone sent nothing, and the phone's state (moving, stationary, offline, location
+off). Since 2026-11-21 the server also raises **automatic On-Duty alerts** (``GeoTrackingAlert``, ``geo_tracking/alerts.py``):
+location turned off, background permission or app restriction, a tracking failure, a missing geo-punch and a punch
+reminder; each is an *episode* told to the employee first and to their Department Head after a grace period. The live
+picture reads the track's state (the Live Map's own rule, ``geo_tracking/live.effective_state``) and falls back to the old
+location pings for a session without a track. ``geo_tracking`` and ``geo_alerts`` count journeys and alert episodes.
+
 Nothing here writes. GPS coordinates are used to measure distance only: they are never returned.
 """
 
@@ -48,6 +56,7 @@ from django.db.models import (
     Max,
     Min,
     Q,
+    Sum,
     Value,
     When,
 )
@@ -71,7 +80,17 @@ from django.utils import timezone
 from ...clock import FACTORY_TZ
 from ...geo_attendance_views import DEFAULT_RADIUS_M, PUNCHABLE_STATUSES
 from ...geo_utils import haversine_distance_m
-from ...models import AttendanceLog, Employee, LiveLocationPing, OnDutyPunchVerification, OnDutySession
+from ...models import (
+    AttendanceLog,
+    DutyTrack,
+    DutyTrackEvent,
+    Employee,
+    GeoTrackingAlert,
+    GeoTrackingSettings,
+    LiveLocationPing,
+    OnDutyPunchVerification,
+    OnDutySession,
+)
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, prov
 
@@ -121,6 +140,15 @@ MIN_SAMPLE_SESSIONS = 5
 WEEKLY_ROLLUP_AFTER_DAYS = 62
 MOVING_AVERAGE_DAYS = 7
 LIVE_MAX = 50
+#: GeoTrackingSettings.signal_lost_seconds when the settings row does not exist yet (the model's default).
+DEFAULT_SIGNAL_LOST_SECONDS = 600
+#: Open automatic alerts at this moment from which "needs your attention" warns.
+OPEN_ALERTS_WARN = 3
+#: Alert episodes of one person in the period from which they are "repeatedly" alerted.
+REPEAT_ALERTS_MIN = 3
+#: The alert drill-down pages its rows.
+ALERT_PAGE_MAX = 100
+ALERT_PAGE_DEFAULT = 25
 LIST_MAX = 25
 LIST_DEFAULT = 10
 EARTH_RADIUS_M = 6371000.0
@@ -1049,6 +1077,7 @@ def geo_people(scope: Scope, period: Period, limit: int = LIST_DEFAULT, min_sess
         p = punches.get(r["employee_id"]) or {"n": 0, "rejected": 0, "mocked": 0, "far": 0, "odd": 0}
         rows.append(
             {
+                "employeeId": r["employee_id"],
                 "employeeCode": r["employee__employee_code"],
                 "employeeName": _name(
                     r["employee__first_name"], r["employee__last_name"], r["employee__employee_code"]
@@ -1457,6 +1486,33 @@ def geo_live(scope: Scope) -> dict:
             )
             .order_by()
         }
+    signal_lost = _signal_lost_seconds()
+    tracks: dict[int, dict] = {}
+    if session_ids:
+        tracks = {
+            t["session_id"]: t
+            for t in DutyTrack.objects.filter(session_id__in=session_ids, status=DutyTrack.STATUS_ACTIVE).values(
+                "id",
+                "session_id",
+                "state",
+                "started_at",
+                "last_point_at",
+                "last_battery_pct",
+                "last_latitude",
+                "last_longitude",
+                "distance_m",
+                "stop_count",
+                "gap_s",
+            )
+        }
+    open_alerts: dict[int, int] = {}
+    if tracks:
+        open_alerts = dict(
+            GeoTrackingAlert.objects.filter(track_id__in=[t["id"] for t in tracks.values()], resolved_at__isnull=True)
+            .values_list("track_id")
+            .annotate(n=Count("id"))
+            .values_list("track_id", "n")
+        )
     pings = {}
     if employee_ids:
         pings = {
@@ -1470,18 +1526,34 @@ def geo_live(scope: Scope) -> dict:
         }
     rows = []
     stats = {"today": 0, "stale": 0, "awaiting": 0, "withSignal": 0, "silent": 0}
+    states = {state: 0 for state in TRACK_STATES}
     for r in rows_raw:
         stale = r["created_at"] < today_start
         provisional = r["status"] in _PENDING_SESSION
-        tracked = bool(r["employee__location_tracking_enabled"])
+        track = tracks.get(r["id"])
+        tracked = bool(r["employee__location_tracking_enabled"]) or track is not None
         ping = pings.get(r["employee_id"])
-        minutes_since = int((now - ping["recorded_at"]).total_seconds() // 60) if ping else None
+        # where the phone was last seen: the track's newest fix, else the old location ping
+        seen_at, seen_lat, seen_lng, seen_mocked = None, None, None, False
+        if track and track["last_point_at"]:
+            seen_at, seen_lat, seen_lng = track["last_point_at"], track["last_latitude"], track["last_longitude"]
+        elif ping:
+            seen_at, seen_lat, seen_lng = ping["recorded_at"], ping["latitude"], ping["longitude"]
+            seen_mocked = bool(ping["is_mocked"])
+        minutes_since = int((now - seen_at).total_seconds() // 60) if seen_at else None
+        state = _track_state(track, now, signal_lost) if track else None
+        if state:
+            states[state] = states.get(state, 0) + 1
         distance_km = None
-        if ping and r["employee__branch__geofence_lat"] is not None and r["employee__branch__geofence_lng"] is not None:
+        if (
+            seen_lat is not None
+            and r["employee__branch__geofence_lat"] is not None
+            and r["employee__branch__geofence_lng"] is not None
+        ):
             distance_km = round(
                 haversine_distance_m(
-                    float(ping["latitude"]),
-                    float(ping["longitude"]),
+                    float(seen_lat),
+                    float(seen_lng),
                     float(r["employee__branch__geofence_lat"]),
                     float(r["employee__branch__geofence_lng"]),
                 )
@@ -1491,7 +1563,12 @@ def geo_live(scope: Scope) -> dict:
         p = punches.get(r["id"]) or {"n": 0, "last": None, "pending": 0, "mocked": 0}
         stats["stale" if stale else "today"] += 1
         stats["awaiting"] += 1 if provisional else 0
-        if ping and minutes_since is not None and minutes_since <= SILENT_MINUTES:
+        if state is not None:
+            if state in (DutyTrack.STATE_MOVING, DutyTrack.STATE_STATIONARY):
+                stats["withSignal"] += 1
+            else:
+                stats["silent"] += 1
+        elif seen_at and minutes_since is not None and minutes_since <= SILENT_MINUTES:
             stats["withSignal"] += 1
         elif tracked or ping:
             stats["silent"] += 1
@@ -1513,10 +1590,17 @@ def geo_live(scope: Scope) -> dict:
                 "lastPunch": p["last"].strftime("%H:%M") if p["last"] else None,
                 "mockedPunches": p["mocked"],
                 "tracked": tracked,
-                "lastSeen": _wall(ping["recorded_at"]) if ping else None,
+                "lastSeen": _wall(seen_at),
                 "minutesSinceSeen": minutes_since,
-                "lastSeenMocked": bool(ping["is_mocked"]) if ping else False,
+                "lastSeenMocked": seen_mocked,
                 "distanceFromUnitKm": distance_km,
+                "employeeId": r["employee_id"],
+                "trackState": state,
+                "trackStateLabel": TRACK_STATE_LABELS.get(state) if state else None,
+                "batteryPct": track["last_battery_pct"] if track else None,
+                "travelledKm": round(track["distance_m"] / 1000.0, 1) if track else None,
+                "stops": track["stop_count"] if track else None,
+                "openAlerts": open_alerts.get(track["id"], 0) if track else 0,
             }
         )
     headcount = scope.employees().count()
@@ -1524,12 +1608,14 @@ def geo_live(scope: Scope) -> dict:
     entry = prov(
         "geo-live",
         "On duty now",
-        dataset="On-duty requests, location pings, unit locations",
+        dataset="On-duty requests, On-Duty tracking (tracks), location pings, unit locations",
         definition=(
             "Everyone whose on-duty session is open: requested (approved or not) and not yet ended by them, by the "
-            "day-end close or by their fourth punch. 'Last seen' is the newest location ping from the app, which only "
-            f"reports for people tracked or on duty; older than {SILENT_MINUTES} minutes counts as no signal. "
-            "A session still open from an earlier day is shown as left open."
+            "day-end close or by their fourth punch. A tracked session reads its track's state as the Live Map does "
+            "(moving, stationary, offline when the phone has sent nothing for the tracking setting's 'signal lost' "
+            "time, location off, waiting for the first fix): moving or stationary has a signal, the rest have none. A "
+            f"session without a track uses the newest location ping; older than {SILENT_MINUTES} minutes counts as no "
+            "signal. A session still open from an earlier day is shown as left open."
         ),
         formula="open sessions now; out % = people out ÷ active employees in the selection",
         rows=len(rows_raw),
@@ -1553,10 +1639,488 @@ def geo_live(scope: Scope) -> dict:
             "rows": rows,
             "total": total_open,
             "truncated": total_open > len(rows),
+            "trackStates": states,
+            "openAlerts": sum(open_alerts.values()),
         },
         scope=scope,
         provenance=[entry],
         notes=[] if rows else ["Nobody has an open on-duty session right now."],
+    )
+
+
+# ─── On-Duty tracking (journeys) and the automatic alerts ───────────────────────────────────────────────────────────
+
+TRACK_STATES = (
+    DutyTrack.STATE_MOVING,
+    DutyTrack.STATE_STATIONARY,
+    DutyTrack.STATE_OFFLINE,
+    DutyTrack.STATE_LOCATION_OFF,
+    DutyTrack.STATE_WAITING,
+)
+TRACK_STATE_LABELS = dict(DutyTrack.STATE_CHOICES)
+ALERT_KIND_LABELS = dict(GeoTrackingAlert.KIND_CHOICES)
+END_REASON_LABELS = dict(DutyTrack.END_REASON_CHOICES)
+RESOLUTION_LABELS = dict(GeoTrackingAlert.RESOLUTION_CHOICES)
+
+
+def _signal_lost_seconds() -> int:
+    """The tracking setting 'signal lost after' (read, never created: GeoTrackingSettings.get() would write a row)."""
+    row = GeoTrackingSettings.objects.filter(pk=1).only("signal_lost_seconds").first()
+    return int(getattr(row, "signal_lost_seconds", 0) or DEFAULT_SIGNAL_LOST_SECONDS)
+
+
+def _track_state(track: dict, now: datetime, signal_lost: int) -> str:
+    """The Live Map's rule (geo_tracking/live.effective_state) on a values() row: the stored state, except that a recording
+    track with nothing for ``signal_lost`` seconds reads offline (location off already says why)."""
+    state = track["state"]
+    if state in (DutyTrack.STATE_LOCATION_OFF, DutyTrack.STATE_OFFLINE):
+        return state
+    reference = track["last_point_at"] or track["started_at"]
+    if reference is not None and (now - reference).total_seconds() >= signal_lost:
+        return DutyTrack.STATE_OFFLINE
+    return state if state in TRACK_STATES else DutyTrack.STATE_MOVING
+
+
+def _tracks(scope: Scope, start: date, end: date):
+    lo, hi = _bounds(start, end)
+    return DutyTrack.objects.filter(scope.employee_q("employee__"), started_at__gte=lo, started_at__lt=hi)
+
+
+def _alerts(scope: Scope, start: date, end: date):
+    lo, hi = _bounds(start, end)
+    return GeoTrackingAlert.objects.filter(scope.employee_q("employee__"), detected_at__gte=lo, detected_at__lt=hi)
+
+
+def _track_totals(scope: Scope, start: date, end: date) -> dict:
+    raw = _tracks(scope, start, end).aggregate(
+        tracks=Count("id"),
+        people=Count("employee_id", distinct=True),
+        metres=Coalesce(Sum("distance_m"), 0.0),
+        travel=Coalesce(Sum("travel_s"), 0),
+        stop=Coalesce(Sum("stop_s"), 0),
+        gap=Coalesce(Sum("gap_s"), 0),
+        stops=Coalesce(Sum("stop_count"), 0),
+        with_gaps=Count("id", filter=Q(gap_s__gt=0)),
+        mocks=Coalesce(Sum("mock_points"), 0),
+        with_mock=Count("id", filter=Q(mock_points__gt=0)),
+    )
+    return {k: (float(v) if k == "metres" else int(v or 0)) for k, v in raw.items()}
+
+
+def _alert_totals(scope: Scope, start: date, end: date) -> dict:
+    raw = _alerts(scope, start, end).aggregate(
+        alerts=Count("id"),
+        people=Count("employee_id", distinct=True),
+        escalated=Count("id", filter=Q(hod_sent_at__isnull=False, hod_id__isnull=False)),
+        fixed=Count("id", filter=Q(resolution=GeoTrackingAlert.RESOLVED_FIXED)),
+        open=Count("id", filter=Q(resolved_at__isnull=True)),
+        pushed=Count("id", filter=Q(employee_push="made")),
+        whatsapp=Count("id", filter=Q(employee_whatsapp="queued")),
+    )
+    return {k: int(v or 0) for k, v in raw.items()}
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0
+
+
+def _tracking_provenance(scope: Scope, period: Period, *, tracks: int, alerts: int) -> list[dict]:
+    filters = [period.label, f"{period.start.isoformat()} to {period.end.isoformat()}", scope.describe()]
+    return [
+        prov(
+            "geo-journeys",
+            "On-Duty journeys",
+            dataset="On-Duty tracking (tracks)",
+            definition=(
+                "Each on-duty session the app tracks has one journey: the route, its stops (a stay of at least the "
+                "tracking setting's stop length), travel between them and gaps where the phone sent nothing. A journey "
+                "belongs to the factory day it started. Distance is the route the phone recorded, not a straight line."
+            ),
+            formula="journeys started in the period; km = sum of route distance ÷ 1000; hours = seconds ÷ 3600",
+            rows=tracks,
+            filters=filters,
+            caveats=[
+                "Sessions from phones without the tracking app have no journey.",
+                "A gap is time without data (phone off, no signal, location off), not proof of anything.",
+            ],
+        ),
+        prov(
+            "geo-alerts",
+            "Automatic On-Duty alerts",
+            dataset="Automatic tracking alerts (episodes)",
+            definition=(
+                "The server watches every recording track and opens an alert episode when location is turned off, the "
+                "background permission or app is restricted, tracking fails, a geo-punch is missing or a punch is due. "
+                "The employee is told first; their Department Head after the grace period if it is still not fixed. "
+                "An episode that cleared before anyone was told is not kept. 'Fixed' = it ended because the problem "
+                "went away; 'escalated' = the Department Head stage ran with a Department Head to tell."
+            ),
+            formula="episodes detected in the period; time to fix = median of (resolved − detected) for fixed episodes",
+            rows=alerts,
+            filters=filters,
+            caveats=[
+                "Alerts started on 21 Nov 2026; earlier periods have none.",
+                "Whether each message reached the phone is in Phone Notify Control and WhatsApp Control.",
+            ],
+        ),
+    ]
+
+
+@cached()
+def geo_tracking(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dict:
+    """On-Duty tracking for a period: the journeys the app recorded (how many, how far, travel / stop / gap hours, how
+    each ended, simulated-GPS fixes) and the automatic alerts (by kind, escalated to the Department Head, fixed, open now,
+    time to fix), each against the previous period, per day, and the people with the most alerts / distance."""
+    limit = _int_arg(limit, "limit", LIST_DEFAULT, 1, LIST_MAX)
+    previous = period.previous()
+    cur, prev = _track_totals(scope, period.start, period.end), _track_totals(scope, previous.start, previous.end)
+    acur, aprev = _alert_totals(scope, period.start, period.end), _alert_totals(scope, previous.start, previous.end)
+    tracks = _tracks(scope, period.start, period.end)
+    alerts = _alerts(scope, period.start, period.end)
+    ended = dict(tracks.values_list("end_reason").annotate(n=Count("id")).values_list("end_reason", "n"))
+    by_kind = dict(alerts.values_list("kind").annotate(n=Count("id")).values_list("kind", "n"))
+    open_now = dict(
+        GeoTrackingAlert.objects.filter(scope.employee_q("employee__"), resolved_at__isnull=True)
+        .values_list("kind")
+        .annotate(n=Count("id"))
+        .values_list("kind", "n")
+    )
+    fix_minutes = [
+        (resolved - detected).total_seconds() / 60.0
+        for detected, resolved in alerts.filter(
+            resolution=GeoTrackingAlert.RESOLVED_FIXED, resolved_at__isnull=False
+        ).values_list("detected_at", "resolved_at")
+    ]
+    events = dict(
+        DutyTrackEvent.objects.filter(
+            track__in=tracks,
+            kind__in=(DutyTrackEvent.KIND_GPS_OFF, DutyTrackEvent.KIND_BACKGROUND_RESTRICTED),
+        )
+        .values_list("kind")
+        .annotate(n=Count("id"))
+        .values_list("kind", "n")
+    )
+    day = TruncDate("started_at", tzinfo=FACTORY_TZ)
+    per_day = {
+        r["d"]: r
+        for r in tracks.annotate(d=day)
+        .values("d")
+        .annotate(n=Count("id"), m=Coalesce(Sum("distance_m"), 0.0))
+        .order_by()
+    }
+    alerts_day = dict(
+        alerts.annotate(d=TruncDate("detected_at", tzinfo=FACTORY_TZ))
+        .values_list("d")
+        .annotate(n=Count("id"))
+        .values_list("d", "n")
+    )
+    people_alerts = list(
+        alerts.values(
+            "employee_id",
+            "employee__employee_code",
+            "employee__first_name",
+            "employee__last_name",
+            "employee__department__name",
+        )
+        .annotate(n=Count("id"), open=Count("id", filter=Q(resolved_at__isnull=True)))
+        .order_by("-n", "employee__first_name", "employee_id")[:limit]
+    )
+    people_km = list(
+        tracks.values(
+            "employee_id",
+            "employee__employee_code",
+            "employee__first_name",
+            "employee__last_name",
+            "employee__department__name",
+        )
+        .annotate(n=Count("id"), m=Coalesce(Sum("distance_m"), 0.0), gap=Coalesce(Sum("gap_s"), 0))
+        .order_by("-m", "employee__first_name", "employee_id")[:limit]
+    )
+    days = []
+    d = period.start
+    while d <= period.end:
+        r = per_day.get(d) or {}
+        days.append(
+            {
+                "date": d.isoformat(),
+                "journeys": int(r.get("n") or 0),
+                "km": round(float(r.get("m") or 0) / 1000.0, 1),
+                "alerts": int(alerts_day.get(d) or 0),
+            }
+        )
+        d += timedelta(days=1)
+
+    def person(r: dict, **extra) -> dict:
+        return {
+            "employeeId": r["employee_id"],
+            "employeeCode": r["employee__employee_code"],
+            "employeeName": _name(r["employee__first_name"], r["employee__last_name"], r["employee__employee_code"]),
+            "department": r["employee__department__name"] or "No department",
+            **extra,
+        }
+
+    km, km_prev = round(cur["metres"] / 1000.0, 1), round(prev["metres"] / 1000.0, 1)
+    notes = []
+    if cur["tracks"] == 0:
+        notes.append(f"No on-duty journey was tracked in this selection ({period.label}).")
+    return envelope(
+        {
+            "journeys": {
+                "count": cur["tracks"],
+                "previous": prev["tracks"],
+                "change": change(cur["tracks"], prev["tracks"]),
+                "people": cur["people"],
+                "km": km,
+                "kmPrevious": km_prev,
+                "kmChange": change(km, km_prev),
+                "kmPerJourney": round(km / cur["tracks"], 1) if cur["tracks"] else None,
+                "travelHours": round(cur["travel"] / 3600.0, 1),
+                "stopHours": round(cur["stop"] / 3600.0, 1),
+                "gapHours": round(cur["gap"] / 3600.0, 1),
+                "stops": cur["stops"],
+                "withGaps": cur["with_gaps"],
+                "withGapsPct": pct(cur["with_gaps"], cur["tracks"]),
+                "mockPoints": cur["mocks"],
+                "withMock": cur["with_mock"],
+                "gpsOffEvents": int(events.get(DutyTrackEvent.KIND_GPS_OFF) or 0),
+                "backgroundRestrictedEvents": int(events.get(DutyTrackEvent.KIND_BACKGROUND_RESTRICTED) or 0),
+                "ended": [
+                    {"reason": key, "label": label, "count": int(ended.get(key) or 0)}
+                    for key, label in DutyTrack.END_REASON_CHOICES
+                ],
+                "stillRecording": int(ended.get("") or 0),
+            },
+            "alerts": {
+                "count": acur["alerts"],
+                "previous": aprev["alerts"],
+                "change": change(acur["alerts"], aprev["alerts"]),
+                "people": acur["people"],
+                "escalated": acur["escalated"],
+                "escalatedPct": pct(acur["escalated"], acur["alerts"]),
+                "fixed": acur["fixed"],
+                "fixedPct": pct(acur["fixed"], acur["alerts"]),
+                "openFromPeriod": acur["open"],
+                "openNow": sum(open_now.values()),
+                "medianMinutesToFix": round(_median(fix_minutes), 1) if fix_minutes else None,
+                "pushed": acur["pushed"],
+                "whatsapp": acur["whatsapp"],
+                "byKind": [
+                    {
+                        "kind": key,
+                        "label": label,
+                        "count": int(by_kind.get(key) or 0),
+                        "openNow": int(open_now.get(key) or 0),
+                    }
+                    for key, label in GeoTrackingAlert.KIND_CHOICES
+                ],
+            },
+            "days": days,
+            "topAlerted": [person(r, alerts=r["n"], open=r["open"]) for r in people_alerts],
+            "topDistance": [
+                person(r, journeys=r["n"], km=round(float(r["m"]) / 1000.0, 1), gapHours=round(r["gap"] / 3600.0, 1))
+                for r in people_km
+            ],
+            "repeatAlertsMin": REPEAT_ALERTS_MIN,
+        },
+        period=period,
+        scope=scope,
+        provenance=_tracking_provenance(scope, period, tracks=cur["tracks"], alerts=acur["alerts"]),
+        notes=notes,
+    )
+
+
+@cached()
+def geo_alerts(
+    scope: Scope,
+    period: Period,
+    kind: str | None = None,
+    employee: int | None = None,
+    status: str = "all",
+    page: int = 1,
+    page_size: int = ALERT_PAGE_DEFAULT,
+) -> dict:
+    """The drill-down: the automatic alert episodes behind a figure, newest first, narrowed by ``kind``, one ``employee``
+    (id) and ``status`` (all | open | fixed | escalated). Paged. Who, what, when it started and ended, how it ended and
+    whether the Department Head was told."""
+    if kind and kind not in ALERT_KIND_LABELS:
+        raise MdParamError(f"'kind' must be one of: {', '.join(ALERT_KIND_LABELS)}.")
+    if status not in ("all", "open", "fixed", "escalated"):
+        raise MdParamError("'status' must be all, open, fixed or escalated.")
+    page = _int_arg(page, "page", 1, 1, 10_000)
+    page_size = _int_arg(page_size, "pageSize", ALERT_PAGE_DEFAULT, 1, ALERT_PAGE_MAX)
+    qs = _alerts(scope, period.start, period.end)
+    if kind:
+        qs = qs.filter(kind=kind)
+    if employee not in (None, ""):
+        qs = qs.filter(employee_id=_int_arg(employee, "employee", 0, 1, 10**9))
+    if status == "open":
+        qs = qs.filter(resolved_at__isnull=True)
+    elif status == "fixed":
+        qs = qs.filter(resolution=GeoTrackingAlert.RESOLVED_FIXED)
+    elif status == "escalated":
+        qs = qs.filter(hod_sent_at__isnull=False, hod_id__isnull=False)
+    total = qs.count()
+    now = now_utc()
+    rows = []
+    for a in qs.order_by("-detected_at", "-id").values(
+        "id",
+        "kind",
+        "detected_at",
+        "resolved_at",
+        "resolution",
+        "employee_id",
+        "employee__employee_code",
+        "employee__first_name",
+        "employee__last_name",
+        "employee__department__name",
+        "employee_sent_at",
+        "hod_id",
+        "hod_sent_at",
+        "hod__first_name",
+        "hod__last_name",
+        "track__session__destination",
+    )[(page - 1) * page_size : page * page_size]:
+        until = a["resolved_at"] or now
+        rows.append(
+            {
+                "id": a["id"],
+                "kind": a["kind"],
+                "kindLabel": ALERT_KIND_LABELS.get(a["kind"], a["kind"]),
+                "employeeId": a["employee_id"],
+                "employeeCode": a["employee__employee_code"],
+                "employeeName": _name(
+                    a["employee__first_name"], a["employee__last_name"], a["employee__employee_code"]
+                ),
+                "department": a["employee__department__name"] or "No department",
+                "destination": (a["track__session__destination"] or "")[:120],
+                "detectedAt": _wall(a["detected_at"]),
+                "resolvedAt": _wall(a["resolved_at"]),
+                "open": a["resolved_at"] is None,
+                "resolution": RESOLUTION_LABELS.get(a["resolution"]) if a["resolution"] else None,
+                "minutes": int(max(0.0, (until - a["detected_at"]).total_seconds()) // 60),
+                "employeeTold": a["employee_sent_at"] is not None,
+                "escalated": a["hod_sent_at"] is not None and a["hod_id"] is not None,
+                "departmentHead": (
+                    _name(a["hod__first_name"], a["hod__last_name"]) if a["hod_id"] is not None else None
+                ),
+            }
+        )
+    return envelope(
+        {
+            "filters": {"kind": kind or None, "employee": employee or None, "status": status},
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "pages": max(1, -(-total // page_size)),
+            "kinds": [{"kind": k, "label": v} for k, v in GeoTrackingAlert.KIND_CHOICES],
+        },
+        period=period,
+        scope=scope,
+        provenance=_tracking_provenance(scope, period, tracks=0, alerts=total)[1:],
+        notes=[] if total else ["No automatic alert matches this selection."],
+    )
+
+
+@cached()
+def geo_person(scope: Scope, period: Period, employee: Any) -> dict:
+    """One employee's on-duty work in the period, for the drill-down: their sessions (destination, status, punches and
+    how HR decided them), the journeys the app tracked (distance, stops, gaps, how each ended) and their automatic alerts."""
+    if employee in (None, ""):
+        raise MdParamError("Give 'employee': the id of the employee to show.")
+    emp_id = _int_arg(employee, "employee", 0, 1, 10**9)
+    emp = (
+        Employee.objects.filter(scope.employee_q(), pk=emp_id)
+        .values("id", "employee_code", "first_name", "last_name", "department__name", "branch__name")
+        .first()
+    )
+    if emp is None:
+        raise MdParamError(f"There is no employee {emp_id} in this selection.")
+    lo, hi = _bounds(period.start, period.end)
+    sessions = list(
+        OnDutySession.objects.filter(employee_id=emp_id, created_at__gte=lo, created_at__lt=hi)
+        .annotate(
+            punches=Count("punch_verifications"),
+            verified=Count("punch_verifications", filter=Q(punch_verifications__status=_PS.STATUS_APPROVED)),
+            rejected=Count("punch_verifications", filter=Q(punch_verifications__status=_PS.STATUS_REJECTED)),
+            pending=Count("punch_verifications", filter=Q(punch_verifications__status=_PS.STATUS_PENDING)),
+        )
+        .order_by("-created_at")
+        .values("id", "created_at", "destination", "status", "punches", "verified", "rejected", "pending")[:LIST_MAX]
+    )
+    track_rows = {
+        t["session_id"]: t
+        for t in DutyTrack.objects.filter(session_id__in=[x["id"] for x in sessions]).values(
+            "session_id", "distance_m", "travel_s", "stop_count", "gap_s", "end_reason", "status", "mock_points"
+        )
+    }
+    alert_rows = list(
+        GeoTrackingAlert.objects.filter(employee_id=emp_id, detected_at__gte=lo, detected_at__lt=hi)
+        .order_by("-detected_at")
+        .values("kind", "detected_at", "resolved_at", "resolution", "hod_sent_at", "hod_id")[:LIST_MAX]
+    )
+    out_sessions = []
+    for x in sessions:
+        t = track_rows.get(x["id"])
+        out_sessions.append(
+            {
+                "date": timezone.localtime(x["created_at"], FACTORY_TZ).date().isoformat(),
+                "since": _wall(x["created_at"]),
+                "destination": (x["destination"] or "")[:120],
+                "status": x["status"],
+                "punches": x["punches"],
+                "verified": x["verified"],
+                "rejected": x["rejected"],
+                "pending": x["pending"],
+                "tracked": t is not None,
+                "km": round(t["distance_m"] / 1000.0, 1) if t else None,
+                "travelHours": round(t["travel_s"] / 3600.0, 1) if t else None,
+                "stops": t["stop_count"] if t else None,
+                "gapHours": round(t["gap_s"] / 3600.0, 1) if t else None,
+                "ended": END_REASON_LABELS.get(t["end_reason"]) if t and t["end_reason"] else None,
+                "mockPoints": t["mock_points"] if t else 0,
+            }
+        )
+    totals = {
+        "sessions": len(out_sessions),
+        "punches": sum(x["punches"] for x in out_sessions),
+        "verified": sum(x["verified"] for x in out_sessions),
+        "rejected": sum(x["rejected"] for x in out_sessions),
+        "pending": sum(x["pending"] for x in out_sessions),
+        "km": round(sum(x["km"] or 0 for x in out_sessions), 1),
+        "alerts": len(alert_rows),
+    }
+    return envelope(
+        {
+            "employee": {
+                "id": emp["id"],
+                "employeeCode": emp["employee_code"],
+                "employeeName": _name(emp["first_name"], emp["last_name"], emp["employee_code"]),
+                "department": emp["department__name"] or "No department",
+                "unit": emp["branch__name"],
+            },
+            "totals": totals,
+            "sessions": out_sessions,
+            "alerts": [
+                {
+                    "kind": a["kind"],
+                    "kindLabel": ALERT_KIND_LABELS.get(a["kind"], a["kind"]),
+                    "detectedAt": _wall(a["detected_at"]),
+                    "resolvedAt": _wall(a["resolved_at"]),
+                    "resolution": RESOLUTION_LABELS.get(a["resolution"]) if a["resolution"] else None,
+                    "escalated": a["hod_sent_at"] is not None and a["hod_id"] is not None,
+                }
+                for a in alert_rows
+            ],
+        },
+        period=period,
+        scope=scope,
+        provenance=_tracking_provenance(scope, period, tracks=len(track_rows), alerts=len(alert_rows)),
+        notes=[] if out_sessions else [f"No on-duty session in this selection ({period.label})."],
     )
 
 
@@ -1733,6 +2297,8 @@ def _exceptions(scope: Scope, period: Period, *, limit: int) -> list[dict]:
             )
         )
 
+    items.extend(_alert_exceptions(scope, period))
+
     if not items and sessions:
         items.append(
             _item(
@@ -1747,6 +2313,54 @@ def _exceptions(scope: Scope, period: Period, *, limit: int) -> list[dict]:
         )
     items.sort(key=lambda i: _SEVERITY_RANK[i["severity"]])
     return items[:limit]
+
+
+def _alert_exceptions(scope: Scope, period: Period) -> list[dict]:
+    """The automatic On-Duty alerts worth the MD's attention: alerts still open now, and people alerted again and again."""
+    items: list[dict] = []
+    open_now = list(
+        GeoTrackingAlert.objects.filter(scope.employee_q("employee__"), resolved_at__isnull=True)
+        .values_list("kind")
+        .annotate(n=Count("id"))
+        .values_list("kind", "n")
+    )
+    total_open = sum(n for _k, n in open_now)
+    if total_open:
+        top_kind, top_n = max(open_now, key=lambda kv: (kv[1], kv[0]))
+        items.append(
+            _item(
+                "alerts-open",
+                "warning" if total_open >= OPEN_ALERTS_WARN else "info",
+                f"{_num(total_open)} automatic On-Duty {_plural(total_open, 'alert is', 'alerts are')} still open",
+                f"Most: {ALERT_KIND_LABELS.get(top_kind, top_kind)} ({_num(top_n)}). The employee has been told; the "
+                "Department Head is told after the grace period if it is not fixed.",
+                _num(total_open),
+                "Which automatic On-Duty alerts are open right now, for whom, and since when?",
+            )
+        )
+    repeat = list(
+        _alerts(scope, period.start, period.end)
+        .values("employee__first_name", "employee__last_name", "employee__employee_code")
+        .annotate(n=Count("id"))
+        .filter(n__gte=REPEAT_ALERTS_MIN)
+        .order_by("-n", "employee__first_name")
+    )
+    if repeat:
+        first = repeat[0]
+        name = _name(first["employee__first_name"], first["employee__last_name"], first["employee__employee_code"])
+        items.append(
+            _item(
+                "alerts-repeat",
+                "warning",
+                f"{_num(len(repeat))} {_plural(len(repeat), 'person was', 'people were')} alerted "
+                f"{REPEAT_ALERTS_MIN}+ times while on duty",
+                f"{period.label}: most often {name} ({_num(first['n'])} alerts). Repeated location or permission problems "
+                "leave gaps in the journey record.",
+                _num(len(repeat)),
+                f"Who keeps getting automatic On-Duty alerts ({period.label}), and for what?",
+            )
+        )
+    return items
 
 
 def _mocked_people(scope: Scope, period: Period) -> int:
@@ -1764,14 +2378,15 @@ def geo_attention(scope: Scope, period: Period) -> dict:
     rules = prov(
         "geo-attention",
         "Needs your attention",
-        dataset="On-duty requests and punches, unit locations",
+        dataset="On-duty requests and punches, unit locations, automatic tracking alerts",
         definition=(
             f"Flagged: any simulated-GPS punch (critical from {MOCKED_CRITICAL_MIN}); anything waiting for HR more than "
             f"{OVERDUE_HOURS} hours (critical past {CRITICAL_BACKLOG_DAYS} days); people with {REPEAT_MIN_REJECTIONS}+ "
             f"rejections; sessions still open after their day; a median verification time over "
             f"{_num(SLOW_VERIFY_HOURS)} hours or {_p(HIGH_REJECTION_PCT)}+ of punches rejected (with {MIN_DECIDED}+ "
             f"decided); punches over {_num(FAR_KM)} km from the unit or at odd hours; sessions over {LONG_SESSION_HOURS} "
-            f"hours; a rise of {_p(SURGE_PCT)} and {SURGE_MIN_EXTRA}+ sessions on the previous period."
+            f"hours; a rise of {_p(SURGE_PCT)} and {SURGE_MIN_EXTRA}+ sessions on the previous period; automatic "
+            f"On-Duty alerts still open (a warning from {OPEN_ALERTS_WARN}); people alerted {REPEAT_ALERTS_MIN}+ times."
         ),
         formula="simple threshold rules over the figures on this page",
         filters=[period.label, scope.describe()],
@@ -1871,6 +2486,22 @@ def geo_briefing(scope: Scope, period: Period) -> dict:
                 f"Worth a look: {', '.join(odd)}." if odd else "Nothing unusual stands out in the on-duty records.",
                 "bad" if m["mockedPunches"]["value"] else ("neutral" if odd else "good"),
             )
+        )
+
+    tracking = geo_tracking(scope, period, limit=1)
+    j, al = tracking["journeys"], tracking["alerts"]
+    if j["count"] or al["count"]:
+        parts = []
+        if j["count"]:
+            parts.append(
+                f"The app tracked {_num(j['count'])} {_plural(j['count'], 'journey')} ({_num(j['km'], 1)} km"
+                f"{', ' + _num(j['withGaps']) + ' with gaps in the record' if j['withGaps'] else ''})"
+            )
+        if al["count"]:
+            esc = f", {_num(al['escalated'])} escalated to the Department Head" if al["escalated"] else ""
+            parts.append(f"{_num(al['count'])} automatic {_plural(al['count'], 'alert')} went out{esc}")
+        sentences.append(
+            _sentence("tracking", "; ".join(parts) + ".", "bad" if al["openNow"] >= OPEN_ALERTS_WARN else "neutral")
         )
 
     if live["rows"]:
@@ -2007,6 +2638,22 @@ def _unusual_tool(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> di
     return _without_destinations(geo_unusual(scope, period, limit=limit))
 
 
+_ENVELOPE_KEYS = ("generatedAt", "period", "scope", "provenance", "notes")
+
+
+def _tracking_tool(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dict:
+    """The journeys and alerts, with the distance-from-the-unit bands of the on-duty punches beside them (one tool, so
+    the domain stays within its eight)."""
+    tracking = geo_tracking(scope, period, limit=limit)
+    reach = geo_reach(scope, period)
+    return {
+        **tracking,
+        "distanceFromUnit": {k: v for k, v in reach.items() if k not in _ENVELOPE_KEYS},
+        "provenance": [*tracking["provenance"], *reach["provenance"]],
+        "notes": list(dict.fromkeys([*tracking["notes"], *reach["notes"]])),
+    }
+
+
 def _live_tool(scope: Scope) -> dict:
     return _without_destinations(geo_live(scope))
 
@@ -2085,22 +2732,30 @@ TOOLS = [
         defaults={"limit": LIST_DEFAULT},
     ),
     tool(
-        "geo_distance_from_unit",
-        "How far from their unit on-duty punches were taken: at the unit, up to 2, 2-10, 10-50, 50-100 and over 100 km, "
-        "and the punches that cannot be placed because the unit has no location set, with the farthest distance. Use "
-        "for 'how far do people travel' and 'who is working far away'.",
-        geo_reach,
-        page=PAGE,
-        period="last_30_days",
-    ),
-    tool(
         "geo_on_duty_now",
         "Who is on duty right now: everyone with an open on-duty session, how long they have been out, whether the "
-        "request is approved yet, punches so far today and when their phone last reported a location (and its distance "
-        "from the unit), plus counts of people out, awaiting approval and with no signal. Use for 'who is out of the "
-        "premises right now'. Live: it takes no period.",
+        "request is approved yet, punches so far today, the tracking state of their phone (moving, stationary, offline, "
+        "location off, waiting for the first fix), when it last reported a location (and its distance from the unit), "
+        "distance travelled and open automatic alerts, plus counts of people out, awaiting approval and with no signal. "
+        "Use for 'who is out of the premises right now'. Live: it takes no period.",
         _live_tool,
         page=PAGE,
         period=None,
+    ),
+    tool(
+        "geo_tracking_and_alerts",
+        "On-Duty travel for a period: the journeys the app recorded (count, people, km travelled, travel / stop / gap "
+        "hours, journeys with gaps, simulated-GPS fixes, GPS-off and background-restriction events, how each journey "
+        "ended); the automatic On-Duty alerts (location off, permission or background restriction, tracking failure, "
+        "missing geo-punch, punch reminder): count by kind, escalated to the Department Head, fixed, open now, median "
+        "minutes to fix, each against the previous period, per day, and the people with the most alerts and distance; "
+        "and, under distanceFromUnit, how far from their unit the on-duty punches were taken (at the unit, up to 2, "
+        "2-10, 10-50, 50-100, over 100 km, unplaced). Use for 'how far do people travel on duty', 'who is working far "
+        "away', 'are the tracking alerts working' and 'who keeps turning location off'.",
+        _tracking_tool,
+        page=PAGE,
+        period="last_30_days",
+        extra={"limit": _LIMIT},
+        defaults={"limit": LIST_DEFAULT},
     ),
 ]

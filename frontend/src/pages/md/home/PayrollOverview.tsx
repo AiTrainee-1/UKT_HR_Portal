@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { Link } from "wouter";
-import { Bar, CartesianGrid, Cell, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import AskAiButton from "@/components/md/kit/AskAiButton";
-import { CHART, axisStyle, gridProps, tooltipStyle } from "@/components/md/kit/chartTheme";
+import { CHART } from "@/components/md/kit/chartTheme";
+import { StackedColumns } from "@/components/md/kit/LiteCharts";
 import { inr, inrCompact, num, pct, signed } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import { currentAndPrevious, payrollRows, staffShare, type PayMeasure, type PayRow } from "./home-logic";
@@ -135,14 +135,17 @@ function MonthCard({
   );
 }
 
-function PayTip({ active, payload }: { active?: boolean; payload?: { payload: PayRow }[] }) {
-  if (!active || !payload?.length) return null;
-  const row = payload[0].payload;
+const PAY_SERIES = [
+  { key: "staff", label: "Staff", color: HOME_COLORS.staff },
+  { key: "production", label: "Production", color: HOME_COLORS.production },
+] as const;
+
+function PayTip({ row, running }: { row: PayRow; running: boolean }) {
   return (
-    <div style={tooltipStyle}>
+    <div>
       <p className="mb-1 font-extrabold">
         {row.label}
-        {row.current ? " (this month)" : row.previous ? " (last month)" : ""}
+        {row.current ? (running ? " (this month)" : " (chosen month)") : row.previous ? " (month before)" : ""}
       </p>
       <p className="font-medium">Staff: {inr(row.staff)}</p>
       <p className="font-medium">Production: {inr(row.production)}</p>
@@ -154,16 +157,20 @@ function PayTip({ active, payload }: { active?: boolean; payload?: { payload: Pa
 }
 
 /**
- * Monthly Payroll: the current month (still running) and the month before it, side by side with the change, then the
- * last six months as stacked staff / production bars with the people paid as a line. Gross or net, by the pills.
+ * Monthly Payroll: the chosen month (the running one by default, still running) and the month before it, side by side
+ * with the change, then the six months ending with it as stacked staff / production columns with the people paid as a
+ * line (light chart, kit/LiteCharts). Gross or net, by the pills. "Payroll analysis" opens /md/payroll on that month.
  */
 export default function PayrollOverview({
   months,
+  month,
   loading,
   error,
   onRetry,
 }: {
   months: PayrollMonth[] | undefined;
+  /** The Dashboard's month ("2026-11"), when one was chosen; the running month otherwise. */
+  month?: string | null;
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
@@ -173,11 +180,13 @@ export default function PayrollOverview({
   const pair = currentAndPrevious(list);
   const rows = payrollRows(list, measure);
   const hasPay = rows.some((r) => r.total > 0);
+  const running = !!pair.current?.current;
+  const analysis = month ? `/md/payroll?month=${month}` : "/md/payroll";
 
   return (
     <Reveal
-      index={2}
-      className="md-card md-dashboard-card @container"
+      index={3}
+      className="md-card md-dashboard-card md-dashboard-defer @container"
       testId="md-home-payroll"
       labelledBy="md-home-payroll-title"
     >
@@ -194,18 +203,18 @@ export default function PayrollOverview({
           testId="md-home-pay-measure"
         />
         <AskAiButton question="Why did payroll change compared with last month?" />
-        <Link href="/md/payroll" className="md-btn md-btn-soft md-btn-sm">
+        <Link href={analysis} className="md-btn md-btn-soft md-btn-sm" data-testid="md-home-pay-link">
           Payroll analysis <ArrowUpRight size={12} aria-hidden />
         </Link>
       </OverviewHeader>
 
       {loading || error || !months ? (
-        <CardState loading={loading || (!error && !months)} error={error} onRetry={onRetry} />
+        <CardState loading={loading || (!error && !months)} error={error} onRetry={onRetry} shape="payroll" />
       ) : (
         <div className="space-y-6">
           <div className="grid grid-cols-2 gap-2 @[28rem]:gap-3 @3xl:gap-4">
             <MonthCard
-              title="Current month"
+              title={running ? "Current month" : "Chosen month"}
               month={pair.current}
               measure={measure}
               change={measure === "gross" ? pair.grossChange : pair.netChange}
@@ -229,65 +238,31 @@ export default function PayrollOverview({
                 No payroll has been generated in these months.
               </p>
             ) : (
-              <div className="h-[220px] @lg:h-[280px]" data-testid="md-home-pay-chart">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={rows} margin={{ top: 8, right: 4, bottom: 0, left: 4 }} barCategoryGap="28%">
-                    <CartesianGrid {...gridProps} />
-                    <XAxis dataKey="label" tick={axisStyle} axisLine={false} tickLine={false} />
-                    <YAxis
-                      yAxisId="pay"
-                      tick={axisStyle}
-                      axisLine={false}
-                      tickLine={false}
-                      width={52}
-                      tickFormatter={(v: number) => inrCompact(v)}
-                    />
-                    <YAxis
-                      yAxisId="people"
-                      orientation="right"
-                      tick={axisStyle}
-                      axisLine={false}
-                      tickLine={false}
-                      width={36}
-                      allowDecimals={false}
-                    />
-                    <Tooltip content={<PayTip />} cursor={{ fill: "rgba(127, 1, 31, 0.05)" }} />
-                    <Bar yAxisId="pay" dataKey="staff" stackId="pay" fill={HOME_COLORS.staff}>
-                      {rows.map((r) => (
-                        <Cell key={r.month} fillOpacity={r.current || r.previous ? 1 : 0.5} />
-                      ))}
-                    </Bar>
-                    <Bar
-                      yAxisId="pay"
-                      dataKey="production"
-                      stackId="pay"
-                      fill={HOME_COLORS.production}
-                      radius={[6, 6, 0, 0]}
-                    >
-                      {rows.map((r) => (
-                        <Cell key={r.month} fillOpacity={r.current || r.previous ? 1 : 0.5} />
-                      ))}
-                    </Bar>
-                    <Line
-                      yAxisId="people"
-                      type="monotone"
-                      dataKey="people"
-                      stroke={CHART.gold}
-                      strokeWidth={2.5}
-                      dot={{ r: 3.5, fill: CHART.gold, strokeWidth: 0 }}
-                      activeDot={{ r: 5 }}
-                    />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
+              <StackedColumns
+                className="h-[220px] @lg:h-[280px]"
+                testId="md-home-pay-chart"
+                ariaLabel="Payroll month by month: staff and production, with the people paid"
+                rows={rows}
+                series={PAY_SERIES}
+                rowKey={(r) => r.month}
+                label={(r) => r.label}
+                value={(r, key) => r[key as "staff" | "production"]}
+                dim={(r) => !(r.current || r.previous)}
+                yFormat={(v) => inrCompact(v)}
+                axisWidth={52}
+                line={{ value: (r) => r.people, color: CHART.gold }}
+                tooltip={(r) => <PayTip row={r} running={running} />}
+              />
             )}
             <p className="mt-2 text-[11px] font-medium text-md-ink-soft">
-              The last two bars are this month and last month; the earlier months are lighter.
+              {running
+                ? "The last two bars are this month and last month; the earlier months are lighter."
+                : `The last two bars are ${pair.current?.label ?? "the chosen month"} and the month before; the earlier months are lighter.`}
               {pair.peopleChange != null && pair.peopleChange !== 0
-                ? ` ${num(Math.abs(pair.peopleChange))} ${pair.peopleChange > 0 ? "more" : "fewer"} people paid this month so far than last month.`
+                ? ` ${num(Math.abs(pair.peopleChange))} ${pair.peopleChange > 0 ? "more" : "fewer"} people paid ${running ? "this month so far" : "that month"} than the month before.`
                 : ""}
               {pair.current?.figures && pair.previous?.figures
-                ? ` This month so far is ${pct((100 * pair.current.figures.grossPay) / Math.max(1, pair.previous.figures.grossPay), 0)} of last month's gross.`
+                ? ` ${running ? "This month so far" : "That month"} is ${pct((100 * pair.current.figures.grossPay) / Math.max(1, pair.previous.figures.grossPay), 0)} of the month before's gross.`
                 : ""}
             </p>
           </div>

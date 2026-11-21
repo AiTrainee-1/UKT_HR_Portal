@@ -69,6 +69,9 @@ export type ActivityAreas = MdEnvelope & { areas: AreaRow[]; total: number; prev
 export type UserRow = {
   userName: string;
   role: string | null;
+  /** What kind of actor: an account category (Super Admin, Managing Director, Admin, HR Manager, HR Assistant), a gate
+   *  or reception-desk device, the system, or Unknown. */
+  kind?: string;
   actions: number;
   sharePct: number | null;
   sensitive: number;
@@ -139,6 +142,8 @@ export type ActivityAfterHours = MdEnvelope & {
 
 export type FeedItem = {
   id: string;
+  /** The audit entry behind the line (for a bulk upload, its newest row): opens the entry's details. */
+  entryId?: number | null;
   at: string;
   userName: string;
   role: string | null;
@@ -235,3 +240,33 @@ export type ActivitySignIns = MdEnvelope & {
 // ─── what stands out ──────────────────────────────────────────────────────────────────────────────────────────
 
 export type ActivityAttention = MdEnvelope & { window: MdPeriod; insights: MdInsightDto[] };
+
+// ─── the page's filters and one entry in full (2026-11-21) ──────────────────────────────────────────────────────
+
+export type ActivityOptions = MdEnvelope & {
+  areas: { area: string; label: string; actions: number }[];
+  people: { userName: string; actions: number; role: string | null; kind: string }[];
+};
+
+export type ActivityEntry = MdEnvelope & {
+  entry: {
+    id: number;
+    at: string;
+    userName: string;
+    role: string | null;
+    kind: string;
+    area: string;
+    areaKey: string;
+    module: string;
+    action: string;
+    recordId: number | null;
+    description: string | null;
+    ipAddress: string | null;
+    afterHours: AfterKind;
+    category: CategoryId | null;
+    categoryLabel: string | null;
+    severity: Severity | null;
+    title: string | null;
+    burst: boolean;
+  };
+};

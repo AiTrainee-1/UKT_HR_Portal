@@ -1,5 +1,5 @@
-// The AI assistant's side panel: always mounted for the MD while they are in the portal (so the conversation survives
-// moving between pages) and slid in and out. Text and voice in, text and voice out, every answer with its explanation.
+// The AI assistant's side panel: mounted the first time the MD opens it, then kept mounted while they are in the portal (so
+// the conversation survives moving between pages) and slid in and out. Its own chunk (panel-loader.ts). Text and voice in, text and voice out, every answer with its explanation.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
@@ -249,7 +249,8 @@ export default function AssistantPanel() {
         inert={!open}
         data-testid="assistant-panel"
         data-open={open}
-        initial={false}
+        // mounted on its first opening (AssistantHost): slide in from the right then; mounted closed, it waits hidden
+        initial={open ? { x: 48, opacity: 0 } : false}
         animate={open ? { x: 0, opacity: 1 } : { x: 48, opacity: 0, transitionEnd: { visibility: "hidden" } }}
         transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 300, damping: 32 }}
         style={{ visibility: open ? "visible" : undefined }}

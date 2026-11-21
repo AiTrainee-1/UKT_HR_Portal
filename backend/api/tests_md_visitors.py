@@ -54,6 +54,7 @@ from .models import (
     OutpassGateScan,
     OutpassRecord,
     OutpassRequest,
+    ReceptionDevice,
     Role,
     TeaBreakLog,
     TeaBreakRule,
@@ -592,11 +593,16 @@ class VisitorsTests(GateData):
         self.assertEqual(sum(sum(row) for row in v), 11)
         self.assertEqual((grid["max"], sum(v[6])), (2, 0))  # nothing on a Sunday
 
-    def test_there_is_no_company_and_no_inside_now(self):
+    def test_check_out_and_company_are_explained_and_nothing_is_invented(self):
+        """Check-out and a company exist since 18 Nov 2026 (HR / reception): every visit here is older, so none has a
+        check-out, nobody is counted inside, and the notes say why (this test said "no check-out exists" before)."""
         body = self.json("visitors")
-        text = json.dumps(body).lower()
-        self.assertNotIn("insidenow", text)
-        self.assertNotIn("dwell", text)
+        c = body["checkout"]
+        self.assertEqual((c["checkoutEligible"], c["checkedOut"], c["insideNow"]), (0, 0, 0))
+        self.assertIsNone(c["avgMinutesInside"])
+        self.assertEqual(body["companies"], {"visitsWithCompany": 0, "companies": 0, "rows": []})
+        self.assertEqual([s["key"] for s in body["sources"]], ["qr"])  # make_visit leaves the default (QR)
+        self.assertNotIn("dwell", json.dumps(body).lower())
         self.assertTrue(any("company" in n for n in body["notes"]))
         self.assertTrue(any("no check-out" in n for n in body["notes"]))
 
@@ -1802,6 +1808,238 @@ class TimeLostTests(GateData):
 
 
 # ─── who may call it ──────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ─── check-out (from 18 Nov 2026), gates and the drill-down lists ──────────────────────────────────────────────────
+
+CO_NOW = datetime(2026, 11, 25, 12, 0, tzinfo=FACTORY_TZ)
+CO_TODAY = date(2026, 11, 25)
+CO_PERIOD = {"from": "2026-11-15", "to": "2026-11-24"}
+
+
+def ist_dt(day: int, hour: int, minute: int = 0, second: int = 0) -> datetime:
+    return datetime(2026, 11, day, hour, minute, second, tzinfo=FACTORY_TZ)
+
+
+class CheckOutGatesAndListsTests(MdApiTestCase):
+    """Now is Wed 25 Nov 2026 12:00 IST; the period is 15-24 Nov. Visits (all Unit 1):
+
+      A 20 Nov 10:00 -> out 10:45:50 (45 min)   reception desk "Front Desk" in and out, company "Acme Ltd", host E1
+      B 20 Nov 11:00 -> out 13:30 (150 min)     HR, company " acme ltd " (the same company), purpose "Audit"
+      C 21 Nov 09:00, never checked out          QR
+      D 22 Nov 19:30 -> out 20:00:59 (30 min)    QR, after hours
+      E 16 Nov 10:00, no check-out (before check-out existed on 18 Nov: not counted as "left without")
+      today: F 09:00 inside (3 h: a long stay), G 11:30 inside, H 08:00 -> 08:20 checked out
+
+    Passes (manual): P1 E1 20 Nov out Gate 1 09:10, back Gate 2 09:40 (30)   P2 E2 21 Nov out Gate 1, never back
+      P3 E1 22 Nov rejected "Not a valid reason"   P5 E1 23 Nov out with no gate 10:10, back 10:25 (15)
+      P4 E2 today out Gate 2 09:30, expected back 10:30, still out (overdue)"""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.u1 = Branch.objects.create(name="Unit 1", code="CU1")
+        stitch = Department.objects.create(name="Stitching", branch=cls.u1)
+        cutting = Department.objects.create(name="Cutting", branch=cls.u1)
+        cls.e1 = make_employee("A1", "Asha", "Rao", stitch, cls.u1)
+        cls.e2 = make_employee("B2", "Bala", "Kumar", cutting, cls.u1)
+        cls.desk = ReceptionDevice.objects.create(
+            name="Front Desk", branch=cls.u1, username="desk1", password_hash="x", login_token="d1"
+        )
+        people = {k: Visitor.objects.create(name=k, phone=str(9100000000 + i)) for i, k in enumerate("ABCDEFGH")}
+
+        def visit(key, at, *, out=None, source="qr", company=None, purpose="Meeting", desk=False, host=None):
+            v = VisitorVisit.objects.create(
+                visitor=people[key],
+                visitor_name=f"Visitor {key}",
+                branch=cls.u1,
+                whom_to_meet="Reception" if host is None else host.first_name,
+                meeting_employee=host,
+                purpose=purpose,
+                source=source,
+                company=company,
+                checked_in_desk=cls.desk if desk else None,
+                checked_out_desk=cls.desk if desk and out else None,
+            )
+            VisitorVisit.objects.filter(pk=v.pk).update(visited_at=at, checked_out_at=out)
+            return v
+
+        cls.va = visit(
+            "A",
+            ist_dt(20, 10),
+            out=ist_dt(20, 10, 45, 50),
+            source="reception",
+            company="Acme Ltd",
+            purpose="Fabric sales",
+            desk=True,
+            host=cls.e1,
+        )
+        cls.vb = visit("B", ist_dt(20, 11), out=ist_dt(20, 13, 30), source="hr", company=" acme ltd ", purpose="Audit")
+        cls.vc = visit("C", ist_dt(21, 9))
+        cls.vd = visit("D", ist_dt(22, 19, 30), out=ist_dt(22, 20, 0, 59))
+        cls.ve = visit("E", ist_dt(16, 10))
+        visit("F", ist_dt(25, 9))
+        visit("G", ist_dt(25, 11, 30))
+        visit("H", ist_dt(25, 8), out=ist_dt(25, 8, 20))
+
+        g1 = GateDevice.objects.create(
+            name="Gate 1", branch=cls.u1, username="cg1", password_hash="x", login_token="c1"
+        )
+        g2 = GateDevice.objects.create(
+            name="Gate 2", branch=cls.u1, username="cg2", password_hash="x", login_token="c2"
+        )
+
+        def gate_pass(emp, created, *, status="approved", out=None, back=None, exit_gate=None, entry_gate=None):
+            req = make_pass(emp, created, status=status, exited=out, entered=back)
+            OutpassRequest.objects.filter(pk=req.pk).update(exit_gate=exit_gate, entry_gate=entry_gate)
+            return req
+
+        cls.p1 = gate_pass(
+            cls.e1, ist_dt(20, 9), out=ist_dt(20, 9, 10), back=ist_dt(20, 9, 40), exit_gate=g1, entry_gate=g2
+        )
+        cls.p2 = gate_pass(cls.e2, ist_dt(21, 10), out=ist_dt(21, 10, 5), exit_gate=g1)
+        cls.p3 = gate_pass(cls.e1, ist_dt(22, 11), status="rejected")
+        OutpassRequest.objects.filter(pk=cls.p3.pk).update(review_comment="Not a valid reason")
+        cls.p5 = gate_pass(cls.e1, ist_dt(23, 10), out=ist_dt(23, 10, 10), back=ist_dt(23, 10, 25))
+        cls.p4 = gate_pass(cls.e2, ist_dt(25, 9), out=ist_dt(25, 9, 30), exit_gate=g2)
+        OutpassRequest.objects.filter(pk=cls.p4.pk).update(expected_return_at=ist_dt(25, 10, 30))
+
+    def setUp(self):
+        super().setUp()
+        for target, value in (
+            ("api.md_portal.analytics.visitors._now", CO_NOW),
+            ("api.md_portal.common.ist_today", CO_TODAY),
+            ("api.reporting.definitions.gate_outpass_common.now", CO_NOW),
+        ):
+            patcher = mock.patch(target, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def json(self, endpoint: str, **params):
+        r = self.get(BASE + endpoint, **{**CO_PERIOD, **params})
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_check_out_figures_follow_the_hr_rules(self):
+        c = self.json("visitors")["checkout"]
+        self.assertEqual(
+            (c["visits"], c["checkoutEligible"], c["checkedOut"], c["checkedOutPct"], c["leftWithoutCheckout"]),
+            (5, 4, 3, 75.0, 1),
+        )
+        # whole minutes (45:50 is 45, 30:59 is 30), averaged half up: (45 + 150 + 30) / 3 = 75
+        self.assertEqual((c["avgMinutesInside"], c["medianMinutesInside"], c["longestMinutesInside"]), (75, 45, 150))
+        self.assertEqual(
+            {b["key"]: b["visits"] for b in c["stayBands"]},
+            {"under_30": 0, "30_60": 2, "1_2h": 0, "2_4h": 1, "over_4h": 0},
+        )
+        self.assertEqual(c["insideNow"], 0)  # nobody of the period is inside: today is not in it
+
+    def test_sources_desks_and_companies(self):
+        body = self.json("visitors")
+        self.assertEqual(
+            [(s["key"], s["visits"], s["checkedOut"], s["avgMinutesInside"]) for s in body["sources"]],
+            [("qr", 3, 1, 30), ("hr", 1, 1, 150), ("reception", 1, 1, 45)],
+        )
+        self.assertEqual(body["desks"], [{"deskId": self.desk.id, "desk": "Front Desk", "checkIns": 1, "checkOuts": 1}])
+        self.assertEqual(
+            body["companies"],
+            {
+                "visitsWithCompany": 2,
+                "companies": 1,
+                # grouped ignoring case and spaces, written as at the latest visit (B, 11:00)
+                "rows": [{"company": "acme ltd", "visits": 2, "uniqueVisitors": 2}],
+            },
+        )
+
+    def test_the_summary_has_check_out_and_a_live_picture(self):
+        s = self.json("summary")
+        v, o = s["visitors"], s["outpass"]
+        self.assertEqual((v["checkedOut"]["value"], v["checkedOutPct"]["value"]), (3, 75.0))
+        self.assertEqual((v["avgMinutesInside"]["value"], v["medianMinutesInside"]), (75, 45))
+        self.assertEqual((v["leftWithoutCheckout"], v["checkoutEligible"]), (1, 4))
+        # live, whatever the period: F and G are inside, F for over 2 hours, H came and left today
+        self.assertEqual((v["insideNow"], v["longStayNow"], v["checkedOutToday"], v["visitsToday"]), (2, 1, 1, 3))
+        self.assertEqual((o["outsideNow"], o["overdueNow"]), (1, 1))
+        self.assertIn("visits-checkout", [p["id"] for p in s["provenance"]])
+
+    def test_the_visitor_story_says_it(self):
+        sentences = {x["id"]: x for x in self.json("story", focus="visitors")["sentences"]}
+        self.assertEqual(
+            sentences["checkout"]["text"],
+            "3 of 4 visits since check-out began were checked out (75%), staying 1h 15m on average; 2 visitors are "
+            "inside now (1 for over 2 hours).",
+        )
+        self.assertEqual(sentences["checkout"]["tone"], "watch")
+
+    def test_the_long_stay_and_missing_check_outs_are_findings(self):
+        ids = [i["id"] for i in self.json("exceptions")["attention"]]
+        self.assertNotIn("visitors.long-stay", ids)  # "inside now" belongs to a period that holds today
+        self.assertNotIn("visitors.no-checkout", ids)  # 1 of 4: too few to call a habit
+        with_today = [i["id"] for i in self.json("exceptions", to="2026-11-25")["attention"]]
+        self.assertIn("visitors.long-stay", with_today)  # F, inside since 09:00
+        with mock.patch.object(A, "NO_CHECKOUT_MIN_VISITS", 1), mock.patch.object(A, "NO_CHECKOUT_WARN_PCT", 25.0):
+            items = {i["id"]: i for i in self.json("exceptions")["attention"]}
+        self.assertTrue(items["visitors.no-checkout"]["title"].startswith("1 of 4 visits "))
+        self.assertEqual(items["visitors.no-checkout"]["page"], "visitors")
+
+    def test_visit_list_drill_down(self):
+        out = self.json("visit-list", status="checked_out")
+        self.assertEqual([i["visitId"] for i in out["items"]], [self.vd.id, self.vb.id, self.va.id])
+        self.assertEqual([i["minutesInside"] for i in out["items"]], [30, 150, 45])
+        self.assertEqual(out["items"][2]["desk"], "Front Desk")
+        self.assertEqual(out["items"][2]["hostEmployeeId"], self.e1.id)
+        self.assertEqual(out["items"][2]["visitorName"], "Visitor A")
+        left = self.json("visit-list", status="not_checked_out")
+        self.assertEqual([i["visitId"] for i in left["items"]], [self.vc.id])  # E is from before check-out existed
+        every = {i["visitId"]: i for i in self.json("visit-list")["items"]}
+        self.assertEqual(every[self.ve.id]["status"], "before_checkout")
+        self.assertEqual(self.json("visit-list", purpose="supplier")["total"], 1)
+        self.assertEqual([i["visitId"] for i in self.json("visit-list", afterHours=1)["items"]], [self.vd.id])
+        self.assertEqual([i["visitId"] for i in self.json("visit-list", desk=self.desk.id)["items"]], [self.va.id])
+        self.assertEqual([i["visitId"] for i in self.json("visit-list", source="hr")["items"]], [self.vb.id])
+        self.assertEqual(self.json("visit-list", company="ACME  LTD")["total"], 2)
+        self.assertEqual(self.json("visit-list", host=self.e1.id)["total"], 1)
+        r = self.get(BASE + "visit-list", status="inside", period="today")
+        inside = r.json()
+        self.assertEqual(inside["total"], 2)
+        self.assertEqual(sorted(i["minutesInside"] for i in inside["items"]), [30, 180])
+        text = json.dumps(self.json("visit-list"))
+        self.assertNotIn("91000000", text)  # no phone
+        self.assertNotIn('"aadhaar', text.lower())
+
+    def test_passes_by_gate_and_the_pass_list(self):
+        gates = self.json("outpass")["byGate"]
+        self.assertEqual(
+            [
+                (g["gate"], g["wentOut"], g["cameBack"], g["stillOut"], g["notReturned"], g["avgMinutesOut"])
+                for g in gates
+            ],
+            [("Gate 1", 2, 1, 0, 1, 30), ("Gate not recorded", 1, 1, 0, 0, 15)],
+        )
+        rejected = self.json("pass-list", outcome="rejected")["items"]
+        self.assertEqual([(i["passId"], i["reviewComment"]) for i in rejected], [(self.p3.id, "Not a valid reason")])
+        gate1 = self.json("pass-list", gate="Gate 1")["items"]
+        self.assertEqual([i["passId"] for i in gate1], [self.p2.id, self.p1.id])
+        stitching = self.json("pass-list", departmentName="Stitching")
+        self.assertEqual([i["passId"] for i in stitching["items"]], [self.p5.id, self.p3.id, self.p1.id])
+        self.assertEqual([i["passId"] for i in self.json("pass-list", employee=self.e2.id)["items"]], [self.p2.id])
+        back = self.json("pass-list", outcome="returned")["items"]
+        self.assertEqual(
+            [(i["minutesOut"], i["exitGate"], i["entryGate"]) for i in back],
+            [(15, None, None), (30, "Gate 1", "Gate 2")],
+        )
+        self.assertIsNone(back[0]["reviewComment"])
+
+    def test_bad_drill_down_parameters_are_a_400(self):
+        for endpoint, params in (
+            ("visit-list", {"status": "gone"}),
+            ("visit-list", {"source": "door"}),
+            ("visit-list", {"purpose": "fun"}),
+            ("visit-list", {"desk": "front"}),
+            ("pass-list", {"outcome": "lost"}),
+            ("pass-list", {"reason": "bored"}),
+        ):
+            r = self.get(BASE + endpoint, **{**CO_PERIOD, **params})
+            self.assertEqual(r.status_code, 400, (endpoint, params))
 
 
 class AccessTests(MdApiTestCase):

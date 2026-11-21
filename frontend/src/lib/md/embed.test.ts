@@ -35,7 +35,8 @@ describe("hrToMd: where the browser goes when an HR page navigates", () => {
 
   it("sends a link to an HR page with no copy here to the nearest MD page, and leaves other addresses alone", () => {
     expect(hrToMd("/hr/payroll")).toBe("/md/payroll");
-    expect(hrToMd("/hr/production-payroll")).toBe("/md/payroll");
+    expect(hrToMd("/hr/production-payroll")).toBe("/md/payroll?kind=production");
+    expect(hrToMd("/hr/production-payroll/weekly?period=2")).toBe("/md/payroll?kind=production&period=2");
     expect(hrToMd("/hr/recruitment/resume-screening")).toBe("/md/recruitment");
     expect(hrToMd("/hr/activity-logs")).toBe("/md/activity");
     expect(hrToMd("/hr/settlement")).toBe("/md/requests");

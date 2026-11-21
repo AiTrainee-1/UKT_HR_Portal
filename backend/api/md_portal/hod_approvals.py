@@ -228,6 +228,31 @@ def _describe(kind: str, row: dict) -> tuple[str, str | None, str | None, str | 
     return KINDS[kind].label, None, None, None
 
 
+def _requested(kind: str, row: dict, start: str | None, end: str | None, detail: str | None) -> dict | None:
+    """The date (or range) a request is FOR, labelled the way the HR Requests page labels it (owner brief 2026-11-21:
+    request date, requested date(s), submitted at, reason): {"from", "to", "note", "label"}, or None without a date."""
+    label, note, day, to = "Requested date", detail, start, end
+    if kind == "leave":
+        label = "Requested dates" if end else "Requested date"
+    elif kind == "casual_leave":
+        note = (detail or "full day").lower()
+    elif kind == "permission":
+        note = f"at {row['permissionTime']}" if row.get("permissionTime") else None
+    elif kind == "outpass":
+        label = "Going out on"
+        note = f"back by {str(row['expectedReturnAt'])[11:16]}" if row.get("expectedReturnAt") else None
+    elif kind == "on_duty":
+        label = "On-Duty day"
+        note = f"at {row['destination']}" if row.get("destination") else None
+    elif kind == "holiday_work":
+        label = "Work date"
+    elif kind == "resignation":
+        label, day, to, note = "Last working day", _date_part(row.get("lastWorkingDate")), None, None
+    if not day:
+        return None
+    return {"from": day, "to": to, "note": note, "label": label}
+
+
 _CANCELLED = ("cancelled", "canceled", "withdrawn")
 _ROLE_NAMES = {"hod": "the Department Head", "hr": "HR"}
 
@@ -301,7 +326,9 @@ def item(kind: str, row: dict, hod: DepartmentManager) -> dict:
         "from": start,
         "to": end,
         "detail": detail,
+        "requested": _requested(kind, row, start, end, detail),
         "reason": row.get("reason"),
+        "reasonLabel": "Reason",
         "status": row.get("status"),
         "state": state,
         "statusLabel": label,

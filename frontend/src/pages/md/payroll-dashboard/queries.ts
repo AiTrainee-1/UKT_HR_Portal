@@ -34,7 +34,7 @@ export function useDashState() {
 
 export type DashUpdate = ReturnType<typeof useDashState>[1];
 
-const scopeParams = (s: DashState): MdQueryParams => ({ branch: s.branch, department: s.department, type: s.type });
+const scopeParams = (s: DashState): MdQueryParams => ({ branch: s.branch, department: s.department, type: "staff" });
 
 export const PEOPLE_PAGE_SIZE = 25;
 export const HISTORY_MONTHS = 24;
@@ -55,7 +55,7 @@ export function usePayrollDashboard(state: DashState) {
 
   const departments = useMdQuery<PayDepartmentsResponse>(
     "payroll/department-breakdown",
-    { month, branch: state.branch, type: state.type },
+    { month, branch: state.branch, type: "staff" },
     { enabled: state.view === "departments" && monthKnown },
   );
   const people = useMdQuery<PayPeopleResponse>(

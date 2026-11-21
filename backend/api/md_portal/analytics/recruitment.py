@@ -1,7 +1,9 @@
 """MD portal, Recruitment: are we hiring enough, fast enough, and keeping the people we hire?
 
-Everything here is read-only and reuses what the Report Center already computes, so a figure on this page agrees with
-the matching report (cited in each ``provenance`` entry):
+Everything here is read-only and reuses the rules the HR Recruitment pages and the shared report definitions use, so a
+figure on this page agrees with HR's own screens. (The reports named below left the Report Center's list on 2026-11-19,
+reporting/layout.py; their definitions are kept because this module shares their helpers, and the agreement tests run
+against them.)
 
   * open positions, applicants by stage ........ "Job Openings" (employees_admin_recruit.py)
   * required vs active staff, vacancies ........ "Manpower Requirement vs Actual" (same file)
@@ -743,7 +745,7 @@ def _p_open_positions(rows: int) -> dict:
         dataset="Job openings (Interviews page)",
         definition=(
             "Job postings whose status is Open. Each posting counts as one position: the system has no 'number of "
-            "openings' field. Same as the Report Center's Job Openings."
+            "openings' field. The same postings the HR Interviews page lists as open."
         ),
         formula="count of postings with status = open",
         rows=rows,
@@ -759,7 +761,7 @@ def _p_vacancies(rows: int) -> dict:
         dataset="Required Roles (manpower plan) and active staff",
         definition=(
             "How many staff the plan still needs: for each department, the required number minus its active staff "
-            "today. Same rules as the Report Center's Manpower Requirement vs Actual."
+            "today. The same plan HR keeps on Recruitment, Required Roles."
         ),
         formula="sum over departments of max(0, required - active staff)",
         rows=rows,
@@ -852,7 +854,7 @@ def _p_candidates(rows: int | None = None) -> dict:
 
 
 def _p_joiners(rows: int, missing: int = 0, unreadable: int = 0) -> dict:
-    caveats = ["Joiners include people who have since left, as in the Report Center's New Joinings."]
+    caveats = ["Joiners include people who have since left, as HR's New Joinees page counts them."]
     if missing or unreadable:
         caveats.append(
             f"{_plural(missing + unreadable, 'employee')} in scope "
@@ -884,7 +886,7 @@ def _p_leavers(rows: int, approximate: int = 0) -> dict:
         definition=(
             "Employees who are no longer active and whose exit date falls in the period. The exit date is the approved "
             "resignation's last working day (or its approval day); with no resignation it is the record's last-modified "
-            "date. Same dating as the Report Center's Exits Register."
+            "date."
         ),
         formula="count of inactive employees with an exit date between the first and last day",
         rows=rows,
@@ -921,6 +923,23 @@ def _p_resignations_raised(rows: int | None = None) -> dict:
         caveats=[
             "An employee deactivated by HR without a request has no resignation record.",
             "A request HR deleted from the system cannot be counted.",
+        ],
+    )
+
+
+def _p_decisions(rows: int | None = None) -> dict:
+    return prov(
+        "resignation-decisions",
+        "Resignations decided",
+        dataset="Resignation requests and their approval trail",
+        definition=(
+            "Requests approved or rejected in the period (the day of the deciding step), with who decided and at "
+            "which step. Since 2026-11-21 every rejection carries its reason, which is shown; approvals need no remark."
+        ),
+        rows=rows,
+        caveats=[
+            "A rejection made before reasons were required may have none.",
+            "The employee's own reason is never shown beside a name, only its group.",
         ],
     )
 
@@ -1208,7 +1227,7 @@ def funnel(scope: Scope, period: Period, *, today: date | None = None) -> dict:
                 ],
                 caveats=[
                     "The system keeps no status history, so a Rejected job-board applicant counts as screened only: "
-                    "every step after Screened is a lower bound. Same stages as the Report Center's Recruitment Funnel.",
+                    "every step after Screened is a lower bound.",
                     _OFFER_NOTE_COMBINED,
                     _JOINED_NOTE,
                 ],
@@ -1379,6 +1398,7 @@ def resignations(scope: Scope, period: Period, *, limit: int = 10, today: date |
     dept_rows.sort(key=lambda r: (-r["raised"], r["department"].lower()))
 
     waits = [p["daysWaiting"] for p in pending]
+    decisions, decided_total = _decisions(scope, period, limit)
     return envelope(
         {
             "summary": {
@@ -1400,10 +1420,13 @@ def resignations(scope: Scope, period: Period, *, limit: int = 10, today: date |
             "reasons": reason_rows,
             "byDepartment": dept_rows[:12],
             "outlook": outlook,
+            "decisions": decisions,
+            "decisionsTotal": decided_total,
         },
         period=period,
         scope=scope,
         provenance=[
+            _p_decisions(decided_total),
             _p_pending(len(pending)),
             _p_notice(len(notice)),
             _p_outlook(),
@@ -1412,6 +1435,174 @@ def resignations(scope: Scope, period: Period, *, limit: int = 10, today: date |
         ],
         notes=[],
     )
+
+
+# ─── decisions and one resignation in full (2026-11-21) ─────────────────────────────────────────────────────────
+
+DECISION_LOOKBACK_DAYS = 400  # a request decided in the period was raised at most this long before it
+_STEP_ROLE = {"hod": "Department Head", "hr": "HR"}
+
+
+def _when(value) -> datetime | None:
+    """A trail timestamp (ISO text) or a datetime, as an aware datetime; None when there is none or it is unreadable."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=FACTORY_TZ)
+
+
+def _decision(r, steps: list[dict]) -> dict | None:
+    """The deciding step of a final request: approved = the last approved step, rejected = the rejected one."""
+    if r.status not in ("approved", "rejected"):
+        return None
+    wanted = "rejected" if r.status == "rejected" else "approved"
+    step = next((st for st in reversed(steps) if st.get("state") == wanted and (st.get("by") or st.get("at"))), None)
+    at = _when(step.get("at")) if step else None
+    if at is None:
+        at = r.approved_at if r.status == "approved" else r.dept_head_approved_at
+    role = (step or {}).get("decidedBy") or ("hod" if r.rejected_by == "dept_head" else "hr")
+    return {
+        "status": r.status,
+        "on": _ist_day(at) if at else None,
+        "at": at,
+        "by": (step or {}).get("by") or (r.approved_by if r.status == "approved" else None),
+        "stage": _STEP_ROLE.get(role, role),
+        "remark": (step or {}).get("comment")
+        or (
+            (r.dept_head_comment if r.rejected_by == "dept_head" else r.hr_comment) if r.status == "rejected" else None
+        ),
+    }
+
+
+def _steps_json(progress: dict) -> list[dict]:
+    return [
+        {
+            "label": st.get("label"),
+            "roles": st.get("roles") or [],
+            "state": st.get("state"),
+            "by": st.get("by"),
+            "at": st.get("at"),
+            "comment": st.get("comment"),
+        }
+        for st in progress.get("steps") or []
+    ]
+
+
+def _decisions(scope: Scope, period: Period, limit: int) -> tuple[list[dict], int]:
+    """(the requests decided in the period, newest first, at most ``limit``; how many there were)."""
+    from ... import approval_workflow as approval
+
+    cfg = approval.get_config("resignation")
+    labels = _dept_labels()
+    rows = (
+        ResignationRequest.objects.filter(scope.employee_q("employee__"), status__in=("approved", "rejected"))
+        .filter(created_at__gte=ist_start(period.start - timedelta(days=DECISION_LOOKBACK_DAYS)))
+        .select_related("employee__department", "employee__designation")
+        .defer("employee__photo_url", "employee__password_hash")
+        .order_by("-created_at", "-id")
+    )
+    found = []
+    for r in rows:
+        steps = _steps_json(approval.progress("resignation", r, cfg))
+        d = _decision(r, steps)
+        if not d or d["on"] is None or not (period.start <= d["on"] <= period.end):
+            continue
+        found.append(
+            {
+                "id": r.id,
+                "employeeId": r.employee_id,
+                "employeeName": _name(r.employee.first_name, r.employee.last_name),
+                "department": labels.get(r.employee.department_id, UNASSIGNED)
+                if r.employee.department_id
+                else UNASSIGNED,
+                "departmentId": r.employee.department_id,
+                "requestedOn": _ist_day(r.created_at).isoformat(),
+                "status": d["status"],
+                "decidedOn": d["on"].isoformat(),
+                "decidedBy": d["by"],
+                "stage": d["stage"],
+                "remark": d["remark"],
+                "lastWorkingDate": _iso(r.last_working_date),
+            }
+        )
+    found.sort(key=lambda x: (x["decidedOn"], x["id"]), reverse=True)
+    return found[:limit], len(found)
+
+
+def resignation_detail(resignation_id: int, *, today: date | None = None) -> dict | None:
+    """One resignation in full for the page's detail view: who (with join date and service), when it was raised (to the
+    second), the last working day and notice, where it stands, every approval step with who decided, when and their
+    remark, and the GROUP of the employee's reason (never its words: see ``resignations``). None when there is none."""
+    from ... import approval_workflow as approval
+
+    clock = _clock(today)
+    r = (
+        ResignationRequest.objects.select_related("employee__department", "employee__designation", "employee__branch")
+        .defer("employee__photo_url", "employee__password_hash")
+        .filter(pk=resignation_id)
+        .first()
+    )
+    if r is None:
+        return None
+    progress = approval.progress("resignation", r, approval.get_config("resignation"))
+    steps = _steps_json(progress)
+    e = r.employee
+    joined, _state = join_date_of(e)
+    requested = _ist_day(r.created_at)
+    group = reason_group((r.reason or "").strip() or (r.survey_q1_answer or ""))
+    d = _decision(r, steps)
+    status = "pending" if r.status in PENDING_RESIGNATION else r.status
+    return envelope(
+        {
+            "resignation": {
+                "id": r.id,
+                "employeeId": e.id,
+                "employeeCode": e.employee_code,
+                "employeeName": _name(e.first_name, e.last_name),
+                "department": _dept_labels().get(e.department_id, UNASSIGNED) if e.department_id else UNASSIGNED,
+                "designation": e.designation.title if e.designation_id and e.designation else None,
+                "unit": e.branch.name if e.branch_id and e.branch else None,
+                "type": e.employment_type,
+                "joinDate": _iso(joined) if isinstance(joined, date) else None,
+                "serviceDays": (requested - joined).days if isinstance(joined, date) else None,
+                "requestedOn": requested.isoformat(),
+                "submittedAt": timezone_local_iso(r.created_at),
+                "lastWorkingDate": _iso(r.last_working_date),
+                "noticeDays": (r.last_working_date - requested).days if r.last_working_date else None,
+                "daysToLastDay": (r.last_working_date - clock.today).days if r.last_working_date else None,
+                "status": status,
+                "waitingFor": list(progress.get("waitingFor") or []),
+                "waitingForText": _waiting_text(list(progress.get("waitingFor") or [])),
+                "daysWaiting": max(0, (clock.today - requested).days) if status == "pending" else None,
+                "steps": steps,
+                "decision": (
+                    {
+                        "status": d["status"],
+                        "decidedOn": d["on"].isoformat() if d["on"] else None,
+                        "decidedBy": d["by"],
+                        "stage": d["stage"],
+                        "remark": d["remark"],
+                    }
+                    if d
+                    else None
+                ),
+                "reasonGroup": {"id": group[0], "label": group[1]},
+            }
+        },
+        provenance=[_p_pending(), _p_decisions(), _p_reasons()],
+    )
+
+
+def timezone_local_iso(value: datetime | None) -> str | None:
+    """A stored timestamp as the factory's wall clock, to the second."""
+    if not value:
+        return None
+    return value.astimezone(FACTORY_TZ).replace(tzinfo=None).isoformat(timespec="seconds")
 
 
 # ─── joiners and early attrition ────────────────────────────────────────────────────────────────────────────────

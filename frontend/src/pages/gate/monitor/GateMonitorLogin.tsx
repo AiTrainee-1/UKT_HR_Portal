@@ -2,23 +2,13 @@
 // which gate this screen becomes. A browser that is already signed in goes straight to the console; one whose sign-in
 // ended (?ended=signed_out | switched_off | expired) is told why. `?gate=<login token>` (an old /gate-scanner/<token>
 // link) only names the gate as a hint. Calls go through ./client, which never sends the HR token.
+//
+// The same kiosk look as the console (gate-kiosk.css): a deep slate page, the gate's scanner and what its colours mean on
+// the left, a calm white sign-in card on the right.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Redirect, useLocation, useSearch } from "wouter";
-import {
-  AlertCircle,
-  ArrowRight,
-  CheckCircle2,
-  Coffee,
-  Eye,
-  EyeOff,
-  Info,
-  Loader2,
-  Lock,
-  ScanLine,
-  ShieldCheck,
-  User,
-} from "lucide-react";
+import { AlertCircle, ArrowRight, CheckCircle2, Eye, EyeOff, Info, Loader2, Lock, User } from "lucide-react";
 import { UktLogoMark } from "@/components/ui/UktLogoMark";
 import type { GateLoginInfo } from "@/lib/api-client/custom-hooks/gate-monitor";
 import {
@@ -31,24 +21,19 @@ import {
   readGateSession,
   saveGateSession,
 } from "./client";
+import "./gate-kiosk.css";
 
-const DUTIES = [
-  {
-    icon: ScanLine,
-    title: "Scan approved gate passes",
-    text: "Check a pass as the employee goes out, and record the return.",
-  },
-  { icon: Coffee, title: "Record tea breaks", text: "Start and end a break with the employee's tea-break QR." },
-  {
-    icon: ShieldCheck,
-    title: "See only this gate's records",
-    text: "Today's counts, the latest scans and files of this gate alone.",
-  },
+/** What the console's colours mean: taught here, before the first scan. */
+const LEGEND = [
+  { tone: "green", label: "Allowed", text: "Exit or return recorded, tea break started" },
+  { tone: "return", label: "Back from tea break", text: "The break is over; its minutes are shown" },
+  { tone: "orange", label: "Stop and check", text: "Used, expired, not out yet, or scanned again too soon" },
+  { tone: "red", label: "Denied", text: "Not recognised, not approved, or not taken at this gate" },
 ] as const;
 
 const INPUT =
-  "h-12 w-full min-w-0 rounded-lg border border-slate-200 bg-white pl-10 text-base text-slate-900 outline-none " +
-  "focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/50";
+  "h-12 w-full min-w-0 rounded-xl border border-slate-200 bg-white pl-10 text-base text-slate-900 outline-none " +
+  "transition-colors focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring/50";
 
 export default function GateMonitorLogin() {
   const params = new URLSearchParams(useSearch());
@@ -56,6 +41,26 @@ export default function GateMonitorLogin() {
   // already signed in on this device: straight to the console (not after a sign-in that just ended)
   if (!ended && readGateSession()) return <Redirect to={CONSOLE_PATH} replace />;
   return <SignIn ended={ended} loginToken={params.get("gate") ?? ""} />;
+}
+
+/** A small, quiet copy of the console's scanner: the QR frame and its scan line. */
+function ScannerPreview() {
+  return (
+    <div className="gk-scanner flex items-center gap-5 p-5" aria-hidden="true">
+      <div className="gk-frame shrink-0" style={{ width: "5.5rem", height: "5.5rem" }}>
+        {(["tl", "tr", "bl", "br"] as const).map((at) => (
+          <span key={at} className="gk-corner" data-at={at} style={{ width: "1.4rem", height: "1.4rem" }} />
+        ))}
+        <span className="gk-scanline" />
+      </div>
+      <div className="min-w-0">
+        <p className="text-base font-bold text-white">Ready to scan</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Gate passes going out and coming back, and tea breaks. The whole screen shows the answer in colour.
+        </p>
+      </div>
+    </div>
+  );
 }
 
 function SignIn({ ended, loginToken }: { ended: string | null; loginToken: string }) {
@@ -105,41 +110,50 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
 
   return (
     <div
-      className="flex min-h-screen items-center justify-center bg-slate-50 px-4 py-6 sm:py-12"
+      className="gk-root flex min-h-screen items-center justify-center bg-slate-950 px-4 py-6 sm:py-12"
       data-testid="gate-monitor-signin"
     >
-      <div className="grid w-full max-w-4xl overflow-hidden rounded-2xl border border-slate-200 bg-white md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
-        <aside className="flex flex-col gap-5 bg-primary p-6 text-primary-foreground sm:p-8 md:p-10">
+      <div className="gk-bg" aria-hidden="true" />
+      <div className="gk-enter grid w-full max-w-5xl overflow-hidden rounded-[1.75rem] border border-white/10 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+        <aside className="gk-panel flex flex-col gap-6 rounded-none border-0 p-6 shadow-none sm:p-8 md:p-10">
           <div className="flex items-center gap-3">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-white">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-white">
               <UktLogoMark className="h-7" />
             </span>
             <div className="min-w-0">
-              <p className="text-sm font-bold tracking-wide">UK Textiles HRMS</p>
-              <p className="text-xs opacity-80">Gate desk</p>
+              <p className="text-sm font-bold tracking-wide text-white">UK Textiles HRMS</p>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-slate-400">Gate desk</p>
             </div>
           </div>
           <div>
-            <p className="text-3xl font-bold">Gate Monitor</p>
-            <p className="mt-2 text-sm opacity-90">
+            <p className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Gate Monitor</p>
+            <p className="mt-2 max-w-md text-sm leading-relaxed text-slate-300">
               One sign-in for every gate: the username and password decide which gate this screen works for.
             </p>
           </div>
-          <ul className="hidden flex-col gap-3 sm:flex" aria-label="What this screen does">
-            {DUTIES.map((d) => (
-              <li key={d.title} className="flex gap-3 rounded-xl border border-white/10 bg-white/10 p-3">
-                <d.icon size={20} className="mt-0.5 shrink-0" aria-hidden="true" />
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold">{d.title}</p>
-                  <p className="text-xs opacity-85">{d.text}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="hidden sm:block">
+            <ScannerPreview />
+          </div>
+          <div className="hidden sm:block">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
+              What the colours mean
+            </p>
+            <ul className="mt-3 flex flex-col gap-2.5" aria-label="What the colours mean">
+              {LEGEND.map((l) => (
+                <li key={l.tone} className="flex items-start gap-3" data-gk-tone={l.tone}>
+                  <span className="gk-legend-dot mt-1.5 shrink-0" aria-hidden="true" />
+                  <p className="min-w-0 text-sm text-slate-300">
+                    <span className="gk-tone-ink font-semibold">{l.label}</span>
+                    <span className="text-slate-400"> - {l.text}</span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </div>
         </aside>
 
-        <main className="p-6 sm:p-8 md:p-10">
-          <h1 className="text-2xl font-bold text-slate-900 sm:text-3xl">Sign in to your gate</h1>
+        <main className="gk-light bg-white p-6 text-slate-900 sm:p-8 md:p-10">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Sign in to your gate</h1>
           <p className="mt-1.5 text-sm text-slate-600" data-testid="gate-signin-subtitle">
             {subtitle}
           </p>
@@ -152,7 +166,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
           {notice && (
             <div
               role="status"
-              className="mt-5 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
+              className="mt-5 flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
               data-testid="gate-signin-ended"
             >
               <Info size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -164,7 +178,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
             {error && (
               <div
                 role="alert"
-                className="flex gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700"
+                className="flex gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-700"
                 data-testid="gate-signin-error"
               >
                 <AlertCircle size={17} className="mt-0.5 shrink-0" aria-hidden="true" />
@@ -178,7 +192,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
               <div className="relative">
                 <User
                   size={17}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
                   aria-hidden="true"
                 />
                 <input
@@ -201,7 +215,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
               <div className="relative">
                 <Lock
                   size={17}
-                  className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400"
+                  className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
                   aria-hidden="true"
                 />
                 <input
@@ -219,7 +233,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
                   onClick={() => setShowPassword((v) => !v)}
                   aria-label={showPassword ? "Hide password" : "Show password"}
                   aria-pressed={showPassword}
-                  className="absolute right-0.5 top-1/2 inline-flex h-11 -translate-y-1/2 items-center gap-1.5 rounded-md px-3 text-sm font-semibold text-primary hover:bg-primary/10"
+                  className="absolute right-0.5 top-1/2 inline-flex h-11 -translate-y-1/2 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-primary hover:bg-primary/10"
                   data-testid="gate-password-toggle"
                 >
                   {showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
@@ -230,7 +244,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
             <button
               type="submit"
               disabled={pending || !username.trim() || !password}
-              className="mt-1 inline-flex h-12 items-center justify-center gap-2 rounded-lg bg-primary text-base font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60"
+              className="mt-1 inline-flex h-12 items-center justify-center gap-2 rounded-xl bg-primary text-base font-semibold text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-60"
               data-testid="gate-signin-submit"
             >
               {pending ? (
@@ -247,7 +261,7 @@ function SignIn({ ended, loginToken }: { ended: string | null; loginToken: strin
 
           <div className="mt-6 flex flex-col gap-3 border-t border-slate-200 pt-5 text-sm text-slate-600">
             <p className="flex items-center gap-2">
-              <CheckCircle2 size={16} className="shrink-0 text-teal-600" aria-hidden="true" />
+              <CheckCircle2 size={16} className="shrink-0 text-emerald-600" aria-hidden="true" />
               Stays signed in on this device until you sign out.
             </p>
             <p className="flex items-start gap-2">

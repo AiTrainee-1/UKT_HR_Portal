@@ -137,6 +137,8 @@ export type GeoBreakdown = MdEnvelope & {
 };
 
 export type GeoPerson = {
+  /** The employee's id (servers from 2026-11-21): opens their on-duty month. */
+  employeeId?: number;
   employeeCode: string;
   employeeName: string;
   department: string;
@@ -242,7 +244,17 @@ export type LiveRow = {
   minutesSinceSeen: number | null;
   lastSeenMocked: boolean;
   distanceFromUnitKm: number | null;
+  // On-Duty tracking (servers from 2026-11-21); absent / null for a session the app does not track
+  employeeId?: number;
+  trackState?: TrackState | null;
+  trackStateLabel?: string | null;
+  batteryPct?: number | null;
+  travelledKm?: number | null;
+  stops?: number | null;
+  openAlerts?: number;
 };
+
+export type TrackState = "moving" | "stationary" | "offline" | "location_off" | "waiting_first_fix";
 
 export type GeoLive = MdEnvelope & {
   asOf: string;
@@ -257,4 +269,133 @@ export type GeoLive = MdEnvelope & {
   rows: LiveRow[];
   total: number;
   truncated: boolean;
+  trackStates?: Partial<Record<TrackState, number>>;
+  openAlerts?: number;
+};
+
+// ─── On-Duty tracking and the automatic alerts (2026-11-21) ─────────────────────────────────────────────────────
+
+export type AlertKind =
+  | "location_off"
+  | "permission_restricted"
+  | "background_restricted"
+  | "tracking_failure"
+  | "missing_punch"
+  | "punch_reminder";
+
+export type TrackingPerson = {
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string;
+};
+
+export type GeoTracking = MdEnvelope & {
+  journeys: {
+    count: number;
+    previous: number;
+    change: Change;
+    people: number;
+    km: number;
+    kmPrevious: number;
+    kmChange: Change;
+    kmPerJourney: number | null;
+    travelHours: number;
+    stopHours: number;
+    gapHours: number;
+    stops: number;
+    withGaps: number;
+    withGapsPct: number | null;
+    mockPoints: number;
+    withMock: number;
+    gpsOffEvents: number;
+    backgroundRestrictedEvents: number;
+    ended: { reason: string; label: string; count: number }[];
+    stillRecording: number;
+  };
+  alerts: {
+    count: number;
+    previous: number;
+    change: Change;
+    people: number;
+    escalated: number;
+    escalatedPct: number | null;
+    fixed: number;
+    fixedPct: number | null;
+    openFromPeriod: number;
+    openNow: number;
+    medianMinutesToFix: number | null;
+    pushed: number;
+    whatsapp: number;
+    byKind: { kind: AlertKind; label: string; count: number; openNow: number }[];
+  };
+  days: { date: string; journeys: number; km: number; alerts: number }[];
+  topAlerted: (TrackingPerson & { alerts: number; open: number })[];
+  topDistance: (TrackingPerson & { journeys: number; km: number; gapHours: number })[];
+  repeatAlertsMin: number;
+};
+
+export type AlertStatus = "all" | "open" | "fixed" | "escalated";
+
+export type GeoAlertRow = TrackingPerson & {
+  id: number;
+  kind: AlertKind;
+  kindLabel: string;
+  destination: string;
+  detectedAt: string | null;
+  resolvedAt: string | null;
+  open: boolean;
+  resolution: string | null;
+  minutes: number;
+  employeeTold: boolean;
+  escalated: boolean;
+  departmentHead: string | null;
+};
+
+export type GeoAlerts = MdEnvelope & {
+  filters: { kind: AlertKind | null; employee: number | null; status: AlertStatus };
+  rows: GeoAlertRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
+  kinds: { kind: AlertKind; label: string }[];
+};
+
+export type GeoPersonDetail = MdEnvelope & {
+  employee: { id: number; employeeCode: string; employeeName: string; department: string; unit: string | null };
+  totals: {
+    sessions: number;
+    punches: number;
+    verified: number;
+    rejected: number;
+    pending: number;
+    km: number;
+    alerts: number;
+  };
+  sessions: {
+    date: string;
+    since: string | null;
+    destination: string;
+    status: string;
+    punches: number;
+    verified: number;
+    rejected: number;
+    pending: number;
+    tracked: boolean;
+    km: number | null;
+    travelHours: number | null;
+    stops: number | null;
+    gapHours: number | null;
+    ended: string | null;
+    mockPoints: number;
+  }[];
+  alerts: {
+    kind: AlertKind;
+    kindLabel: string;
+    detectedAt: string | null;
+    resolvedAt: string | null;
+    resolution: string | null;
+    escalated: boolean;
+  }[];
 };

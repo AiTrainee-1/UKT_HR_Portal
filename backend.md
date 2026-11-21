@@ -519,6 +519,10 @@ Owner brief: while an employee is On-Duty the HRMS detects tracking problems by 
 
 **HR log:** `GET /api/tracking/live/alerts` (the Live Map tab's permission, prefix `tracking/live`; branch-scoped by the track's branch), shown as "Tracking alerts" under the Live Map (Open now / Last 7 days, each stage's phone and WhatsApp outcome, the head's due time, Journey link). Phone Notify Control -> Overview has an "On-Duty tracking alerts" card with the six switches (the Controls tab's). Known overlap: the shift-timed "On-Duty punch reminder" (attendance alerts) still exists next to the duty-timed Geo-Punch reminder; each can be switched off.
 
+### 4.28 Tea Break scan cooldown (2026-11-21, migration 0176)
+
+`TeaBreakRule.scan_cooldown_minutes` (db_default 5, 0 = off, at most 60): after an employee's successful tea-break scan (out or back in), the same employee's next scan within the cooldown records nothing and answers 409 `{result: "cooldown", kind: "tea_break", lastAction: out|in, lastScanAt, retryAt, waitSeconds, cooldownMinutes, message, employee}` (the gate shows it orange with a countdown). `resolve_tea_break_scan` locks the employee row (`select_for_update` in a transaction) so two scans arriving together are decided in turn and the second gets the cooldown answer instead of a second break. `GET/PUT /api/tea-break/rule` carries `scanCooldownMinutes` (PUT may send it alone). HR edits it on Tea Break -> Rule ("Repeat-scan cooldown"). Tests in `tests_tea_break.py`.
+
 ## 5. Project Structure (backend)
 
 ```

@@ -18,13 +18,6 @@ afterEach(() => {
   toast.mockClear();
 });
 
-const pending = (id: number, over: Record<string, unknown> = {}) => ({
-  id,
-  employeeId: id,
-  status: "pending",
-  ...over,
-});
-
 const data = (extra: Fixtures = {}): Fixtures => ({
   "/api/md/me": {
     ...ME,
@@ -36,9 +29,6 @@ const data = (extra: Fixtures = {}): Fixtures => ({
   },
   "/api/md/dashboard/overview": overview,
   "/api/md/dashboard/home": HOME,
-  "/api/leave-requests": [pending(1), pending(2), pending(3, { status: "approved" })],
-  "/api/permissions": [pending(10)],
-  "/api/outpass-requests": [pending(20, { source: "manual" }), pending(21, { source: "gate" })],
   ...extra,
 });
 
@@ -51,8 +41,14 @@ describe("the MD's dashboard", () => {
     page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
     expect(textOf(page, "md-home-greeting")).toContain("Murugan");
     expect(byTestId(page, "md-home-greeting")?.tagName).toBe("H1");
-    // 2 leaves + 1 permission + 1 outpass somebody asked for (the gate's own one and the decided leave are not waiting)
+    // counted by the server in the same answer as the figures (2 leaves + 1 permission + 1 outpass): no list downloads
     expect(textOf(page, "md-home-pulse")).toMatch(/4 requests waiting/);
+    for (const list of ["/api/leave-requests", "/api/permissions", "/api/outpass-requests"]) {
+      expect(
+        page.requests().some((r) => r.startsWith(list)),
+        list,
+      ).toBe(false);
+    }
     expect(byTestId(page, "md-home-ask-input")).not.toBeNull();
     expect(page.container.querySelectorAll('[data-testid="md-home-suggestions"] button').length).toBe(4);
   });
@@ -185,6 +181,82 @@ describe("the MD's dashboard", () => {
     await act(async () => {});
     expect(getAssistantState().open).toBe(true);
     expect(getAssistantState().prompt?.text).toBe("why is absenteeism up?");
+  });
+
+  it("asks for the slow company-wide overview only once the figures are in", async () => {
+    page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
+    const asked = page.requests();
+    const home = asked.findIndex((r) => r.startsWith("/api/md/dashboard/home"));
+    const overviewAt = asked.findIndex((r) => r.startsWith("/api/md/dashboard/overview"));
+    expect(home).toBeGreaterThanOrEqual(0);
+    expect(overviewAt).toBeGreaterThan(home);
+  });
+
+  it("puts four figures up front, each a door to its page", async () => {
+    page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
+    expect(valueOf(page, "md-home-kpi-employees-value")).toBe("256");
+    expect(valueOf(page, "md-home-kpi-attendance-value")).toBe("82");
+    expect(textOf(page, "md-home-kpi-attendance")).toContain("Present today");
+    expect(valueOf(page, "md-home-kpi-payroll-value")).toBe("951730.61");
+    expect(valueOf(page, "md-home-kpi-waiting-value")).toBe("4");
+    expect(textOf(page, "md-home-kpi-waiting")).toContain("2 leave · 1 permission · 1 gate pass");
+    const href = (id: string) => byTestId(page!, `${id}-link`)?.getAttribute("href");
+    expect(href("md-home-kpi-employees")).toBe("/md/employees");
+    expect(href("md-home-kpi-attendance")).toBe("/md/attendance/staff");
+    expect(href("md-home-kpi-payroll")).toBe("/md/payroll");
+    expect(href("md-home-kpi-waiting")).toBe("/md/requests");
+  });
+
+  it("draws its charts without a chart library", async () => {
+    page = await renderMdPage(MdDashboardHome, data(), { path: "/md/dashboard" });
+    expect(page.container.querySelector(".recharts-wrapper")).toBeNull();
+    expect(byTestId(page, "md-home-att-trend")?.querySelectorAll("[data-col]").length).toBe(3);
+    expect(byTestId(page, "md-home-pay-chart")?.querySelectorAll("[data-col]").length).toBe(3);
+    expect(byTestId(page, "md-home-att-ring")?.querySelectorAll("path").length).toBe(3);
+  });
+
+  // (the fixtures' server clock says 5 Oct 2026: September is the month before the running one)
+  it("shows an earlier month from the address: its attendance totals, its payroll, and links that keep the month", async () => {
+    window.history.replaceState(null, "", "/md/dashboard?month=2026-09");
+    const september = {
+      ...HOME,
+      month: "2026-09",
+      attendance: {
+        ...HOME.attendance,
+        month: {
+          ...HOME.attendance.month!,
+          month: "2026-09",
+          label: "September 2026",
+          current: false,
+          completeDays: 30,
+        },
+      },
+      payroll: { months: HOME.payroll.months.slice(0, 1).map((m) => ({ ...m, current: false })) },
+    };
+    try {
+      page = await renderMdPage(
+        MdDashboardHome,
+        data({ "/api/md/dashboard/home": (params) => (params.get("month") === "2026-09" ? september : HOME) }),
+        { path: "/md/dashboard" },
+      );
+      expect(page.requests()).toContain("/api/md/dashboard/home?month=2026-09");
+      expect(byTestId(page, "md-home-month")?.getAttribute("data-month")).toBe("2026-09");
+      // the month's person-days, not today's counts
+      expect(valueOf(page, "md-home-present-value")).toBe("1204");
+      expect(textOf(page, "md-home-attendance")).toContain("September 2026");
+      expect(textOf(page, "md-home-kpi-attendance")).toContain("Present · September");
+      expect(textOf(page, "md-home-pay-current")).toContain("September 2026");
+      expect(textOf(page, "md-home-pay-current")).toContain("Chosen month");
+      expect(byTestId(page, "md-home-pay-link")?.getAttribute("href")).toBe("/md/payroll?month=2026-09");
+      expect(byTestId(page, "md-home-kpi-payroll-link")?.getAttribute("href")).toBe("/md/payroll?month=2026-09");
+
+      // back to this month: the address loses the month and today's figures return
+      await page.click('[data-testid="md-home-month-reset"]');
+      expect(window.location.search).toBe("");
+      expect(valueOf(page, "md-home-present-value")).toBe("82");
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
   });
 
   it("never links into the HR portal: every link goes to a page of the MD portal", async () => {

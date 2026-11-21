@@ -567,8 +567,8 @@ html[data-md-theme] [data-slot="pill-tabs"] {
     0 6px 18px -8px rgba(40, 43, 74, 0.3),
     inset 0 0 0 1px rgba(255, 255, 255, 0.8),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
-  -webkit-backdrop-filter: blur(14px) saturate(1.5);
-  backdrop-filter: blur(14px) saturate(1.5);
+  -webkit-backdrop-filter: saturate(1.5);
+  backdrop-filter: saturate(1.5);
   max-width: 100%;
 }
 html[data-md-theme] [data-slot="pill-tab"] {

@@ -12,6 +12,7 @@ import type {
   RecruitmentSources,
   RecruitmentSummary,
   RecruitmentTrend,
+  ResignationDetail,
 } from "./types";
 
 export const PROVENANCE = (id: string, title: string): Provenance => ({
@@ -484,6 +485,54 @@ export const RESIGNATIONS: RecruitmentResignations = {
       { department: "Stitching (Unit 2)", departmentId: 13, count: 1 },
     ],
   },
+  decisions: [
+    {
+      id: 21,
+      employeeId: 2,
+      employeeName: "Arun Test",
+      department: "Stitching (Unit 1)",
+      departmentId: 10,
+      requestedOn: "2026-09-12",
+      status: "rejected",
+      decidedOn: "2026-09-14",
+      decidedBy: "Priya Head",
+      stage: "Department Head",
+      remark: "Peak season, please stay till December",
+      lastWorkingDate: null,
+    },
+  ],
+  decisionsTotal: 1,
+};
+
+export const RESIGNATION_DETAIL: ResignationDetail = {
+  ...envelope(["resignations-pending", "resignation-decisions", "reasons"]),
+  resignation: {
+    id: 11,
+    employeeId: 1,
+    employeeCode: "A1",
+    employeeName: "Anil Test",
+    department: "Stitching (Unit 1)",
+    designation: "Sewing Supervisor",
+    unit: "Unit 1",
+    type: "staff",
+    joinDate: "2025-01-10",
+    serviceDays: 623,
+    requestedOn: "2026-09-25",
+    submittedAt: "2026-09-25T10:04:09",
+    lastWorkingDate: "2026-10-25",
+    noticeDays: 30,
+    daysToLastDay: 20,
+    status: "pending",
+    waitingFor: ["hod"],
+    waitingForText: "Department head",
+    daysWaiting: 10,
+    steps: [
+      { label: null, roles: ["hod"], state: "pending", by: null, at: null, comment: null },
+      { label: null, roles: ["hr"], state: "waiting", by: null, at: null, comment: null },
+    ],
+    decision: null,
+    reasonGroup: { id: "pay", label: "Better pay or another job" },
+  },
 };
 
 export const JOINERS: RecruitmentJoiners = {
@@ -778,6 +827,7 @@ export const FIXTURES = {
   "/api/md/recruitment/resignations": RESIGNATIONS,
   "/api/md/recruitment/joiners": JOINERS,
   "/api/md/recruitment/trend": TREND,
+  "/api/md/recruitment/resignations/11": RESIGNATION_DETAIL,
 };
 
 export const EMPTY_FIXTURES = {

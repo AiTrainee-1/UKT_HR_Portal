@@ -22,7 +22,11 @@ export type MetricKey =
   | "exports"
   | "exportsAll"
   | "exporters"
-  | "exportDays";
+  | "exportDays"
+  // scheduled attendance reports (Attendance Notify), servers from 2026-11-21
+  | "scheduledRuns"
+  | "scheduledFailedRuns"
+  | "scheduledDelivered";
 
 export type Window = { start: string; end: string; days: number };
 
@@ -41,11 +45,13 @@ export type RlSummary = MdEnvelope & {
   measured: Window | null;
   previous: Window | null;
   previousPeriod: MdPeriod;
-  metrics: Record<MetricKey, Metric>;
+  metrics: Record<Exclude<MetricKey, ScheduledKey>, Metric> & Partial<Record<ScheduledKey, Metric>>;
   gapDays: number;
   gapMinAbsences: number;
   coverage: Coverage | null;
   latestExport: LatestExport | null;
+  /** Attendance Notify automations switched on (servers from 2026-11-21). */
+  activeAutomations?: number;
   /** What the data can never say about this page (reports sent, late, failed, who marked an absence). */
   unknowns: string[];
 };
@@ -155,4 +161,97 @@ export type RlExports = MdEnvelope & {
   reportsTotal: number;
   latest: LatestExport[];
   unknowns: string[];
+};
+
+export type ScheduledKey = "scheduledRuns" | "scheduledFailedRuns" | "scheduledDelivered";
+
+// ─── scheduled attendance reports (Attendance Notify) and the absences drill-down (2026-11-21) ───────────────────
+
+export type ChannelCount = {
+  channel: string;
+  label: string;
+  sent: number;
+  queued: number;
+  failed: number;
+  skipped: number;
+  pending: number;
+};
+
+export type RlScheduled = MdEnvelope & {
+  automations: {
+    total: number;
+    active: number;
+    byChannel: { channel: string; label: string; total: number; active: number }[];
+  };
+  runs: {
+    total: number;
+    previous: number;
+    change: Change;
+    done: number;
+    partial: number;
+    failed: number;
+    skipped: number;
+    running: number;
+    scheduled: number;
+    manual: number;
+    retries: number;
+    reachedEveryonePct: number | null;
+  };
+  delivered: number;
+  deliveredPrevious: number;
+  recipients: number;
+  byChannel: ChannelCount[];
+  byAutomation: {
+    automation: string;
+    channel: string;
+    label: string;
+    runs: number;
+    done: number;
+    failed: number;
+    lastRun: string | null;
+  }[];
+  failures: {
+    id: number;
+    automation: string;
+    channel: string;
+    date: string;
+    slot: string | null;
+    status: string;
+    trigger: string;
+    error: string;
+    failedDeliveries: number;
+  }[];
+  days: { date: string; runs: number; failed: number }[];
+  lastRun: { automation: string; channel: string; date: string; slot: string | null; status: string } | null;
+};
+
+export type AbsenceMark = "all" | "informed" | "not_informed" | "unmarked";
+
+export type AbsenceRow = {
+  date: string;
+  weekday: string;
+  employeeId: number;
+  employeeCode: string;
+  employeeName: string;
+  department: string;
+  unit: string;
+  type: string;
+  mark: Exclude<AbsenceMark, "all">;
+  absencesInSelection: number;
+};
+
+export type RlAbsences = MdEnvelope & {
+  filters: { mark: AbsenceMark; day: string | null; by: GroupBy | null; group: string | null };
+  counts: {
+    absences: number;
+    informed: number;
+    notInformed: number;
+    unmarked: number;
+    reviewedPct: number | null;
+  };
+  rows: AbsenceRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+  pages: number;
 };

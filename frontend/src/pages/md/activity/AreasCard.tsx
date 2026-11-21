@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Boxes } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import BarList from "@/components/md/kit/BarList";
+import { CHART } from "@/components/md/kit/chartTheme";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
 import { describeMdError, useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
@@ -14,10 +15,15 @@ export default function AreasCard({
   params,
   label,
   className,
+  activeArea,
+  onSelectArea,
 }: {
   params: MdQueryParams;
   label: string;
   className?: string;
+  /** The area the page is narrowed to (marked; clicking it again shows every area). */
+  activeArea?: string | null;
+  onSelectArea?: (area: string | null) => void;
 }) {
   const q = useMdQuery<ActivityAreas>("activity/modules", params);
   const [showAll, setShowAll] = useState(false);
@@ -25,7 +31,7 @@ export default function AreasCard({
   return (
     <SectionCard
       title="Where the activity is"
-      subtitle="Actions by area of the system"
+      subtitle="Actions by area of the system. Select an area to narrow the whole page to it"
       provenance={a?.provenance}
       loading={q.isPending}
       actions={<AskAiButton question={ask.areas(label)} />}
@@ -40,7 +46,13 @@ export default function AreasCard({
         </EmptyBlock>
       ) : a ? (
         <>
-          <BarList items={areaBars(a.areas, showAll)} testId="md-activity-area-bars" />
+          <BarList
+            items={areaBars(a.areas, showAll || !!activeArea).map((bar) =>
+              bar.key === activeArea ? { ...bar, label: `${String(bar.label)} (selected)`, color: CHART.deep } : bar,
+            )}
+            onSelect={onSelectArea ? (bar) => onSelectArea(bar.key === activeArea ? null : bar.key) : undefined}
+            testId="md-activity-area-bars"
+          />
           {a.areas.length > AREAS_SHOWN && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-md-line pt-3 text-xs font-medium text-md-ink-soft">
               <span>

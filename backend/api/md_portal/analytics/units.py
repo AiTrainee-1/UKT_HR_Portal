@@ -257,7 +257,9 @@ def _n(value: float | int | None, places: int = 0) -> str:
 
 
 def _p(value: float | None, places: int = 1) -> str:
-    return "n/a" if value is None else f"{round(value, places):g}%"
+    """A percentage as the page writes it: always ``places`` decimals ("50.0%", "57%"), so the sentences and the cards
+    read alike."""
+    return "n/a" if value is None else f"{round(value, places):.{places}f}%"
 
 
 def _pts(value: float) -> str:
@@ -359,6 +361,7 @@ class Compare:
             "headcount": people["active"],
             "staff": people["staff"],
             "production": people["production"],
+            "factory": people.get("factory", 0),
             "metrics": {m.id: self.entry(m, key) for m in METRICS},
         }
 
@@ -371,6 +374,7 @@ class Compare:
             "headcount": self.company["headcount"],
             "staff": sum(p["staff"] for p in self.people.values()),
             "production": sum(p["production"] for p in self.people.values()),
+            "factory": sum(p.get("factory", 0) for p in self.people.values()),
             "metrics": {m.id: self.company[m.id] for m in METRICS},
             "previous": {m.id: self.company_previous.get(m.id) for m in METRICS},
         }
@@ -514,6 +518,7 @@ def _comparison(scope: Scope, period: Period, today: date, kind: str = "unit") -
             "active": sum(1 for p in members if p.active),
             "staff": sum(1 for p in members if p.active and p.kind == "staff"),
             "production": sum(1 for p in members if p.active and p.kind == "production"),
+            "factory": sum(1 for p in members if p.active and p.factory),
         }
         for k, members in by_key.items()
     }
@@ -885,7 +890,7 @@ def _briefing(c: Compare) -> dict:
                 _line(
                     "overtime",
                     f"{name(top)} worked the most overtime: {_n(value('overtimeHours', top), 1)} hours, "
-                    f"{_p(entry['sharePct'], 0)} of the company's {_n(c.company['overtimeHours'], 1)}.",
+                    f"{_p(entry['sharePct'])} of the company's {_n(c.company['overtimeHours'], 1)}.",
                     "attendance",
                 )
             )
@@ -1414,8 +1419,9 @@ def _exceptions(c: Compare, *, limit: int) -> list[dict]:
             )
         )
 
-    # good news, only when nothing above is worth a look
-    ranked = c.ranks["attendancePct"]
+    # good news, only when nothing above is worth a look, and only about units big enough to call out (two units of
+    # three people each are not a story either way)
+    ranked = {k: r for k, r in c.ranks["attendancePct"].items() if k in big}
     if not items and len(ranked) >= 2 and company_att is not None:
         values = [c.values["attendancePct"][k] for k in ranked]
         spread = round(max(values) - min(values), 1)
@@ -1457,12 +1463,13 @@ def units_attention(scope: Scope, period: Period, *, today: date | None = None) 
         "Needs your attention",
         dataset="The unit comparison on this page",
         definition=(
-            f"A unit with {MIN_UNIT_HEADCOUNT}+ active people is flagged when its attendance is {GAP_WARN_PTS:g}+ points "
-            f"below the company's ({GAP_CRITICAL_PTS:g}+ is critical), or its late-arrival rate is {LATE_GAP_PTS:g}+ points "
-            f"above; when its overtime per day is {OT_SPIKE_RATIO:g}x its own average of the {OT_BASELINE_DAYS} days before "
+            f"A unit with {MIN_UNIT_HEADCOUNT}+ active people is flagged when its attendance is at least {GAP_WARN_PTS:g} "
+            f"points below the company's ({GAP_CRITICAL_PTS:g} or more is critical), or its late-arrival rate is at least "
+            f"{LATE_GAP_PTS:g} points above; when its overtime per day is {OT_SPIKE_RATIO:g}x its own average of the {OT_BASELINE_DAYS} days before "
             f"the period (and at least {OT_SPIKE_MIN_HOURS:g} hours); or when its 12-month attrition is "
             f"{ATTRITION_FACTOR}x the company's with {ATTRITION_MIN_LEAVERS}+ leavers and an average headcount of "
-            f"{ATTRITION_MIN_AVERAGE}+."
+            f"{ATTRITION_MIN_AVERAGE}+. With nothing flagged, the spread of attendance between units of "
+            f"{MIN_UNIT_HEADCOUNT}+ people is said (good news when within {ALIGNED_POINTS:g} points)."
         ),
         formula="simple threshold rules over the figures on this page",
         filters=[c.period.label, scope.describe()],

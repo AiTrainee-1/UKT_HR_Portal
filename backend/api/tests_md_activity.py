@@ -316,6 +316,23 @@ CORPUS = [
     ("login_failed", "auth", "Failed login for: anita", None),
     ("login_blocked", "auth", "Locked-out login attempt for: anita", None),
     ("something_new", "a_module_nobody_wrote_yet", "whatever", None),
+    # what the HRMS audits since 2026-11 (WhatsApp / Gmail / Phone Notify Control, Excess, Salary Slip, settlement ...)
+    ("update", "whatsapp_control", "WhatsApp settings: master switch off", "whatsapp-control"),
+    ("sync", "whatsapp_control", "WhatsApp templates synced from Meta: 12 templates", "whatsapp-control"),
+    ("test", "whatsapp_control", "Sent a test WhatsApp message to 30020", None),
+    ("update", "gmail_control", "Changed in Gmail Control (PUT /api/gmail-control/settings)", "gmail-control"),
+    ("update", "phone_notify_control", "Phone alert timing: quiet hours", "phone-notify-control"),
+    ("create", "production_special_shift", "Created special shift Night B", "production-special-shift"),
+    ("update", "md_assistant", "MD assistant settings changed", "md-assistant-settings"),
+    ("create", "Payroll Excess", "Added excess of Rs. 500 to E1 (Nov 2026)", "payroll-excess"),
+    ("delete", "Payroll Excess", "Removed detection of E1 (Nov 2026)", "payroll-excess"),
+    ("generate", "Salary Slip", "Generated salary slips for Nov 2026 (120)", "salary-slip-generated"),
+    ("hold", "Salary Slip", "Held the salary slip of E1 for Nov 2026", "salary-slip-hold"),
+    ("release", "Salary Slip", "Released the salary slip of E1 for Nov 2026", "salary-slip-hold"),
+    ("approve", "settlement", "Approved Advance request of A B (E1)", "advance-decided"),
+    ("reject", "settlement", "Rejected Term loan request of A B (E1)", "advance-decided"),
+    ("approve", "md_approvals", "Test MD (MD, for S R) approved the leave request #12", None),
+    ("view", "geo_tracking", "Viewed the route of E1", None),
 ]
 
 
@@ -522,7 +539,7 @@ class SummaryTests(Standard):
         actions = next(p for p in s["provenance"] if p["id"] == "actions")
         self.assertEqual(actions["rows"], 180)  # 10 + 170 audit rows: the upload's 170 rows are three actions
         self.assertIn("a bulk upload", actions["formula"])
-        self.assertTrue(any("increments, promotions, payroll approvals" in c for c in actions["caveats"]))
+        self.assertTrue(any("every approval or rejection" in c for c in actions["caveats"]))
         failed = next(p for p in s["provenance"] if p["id"] == "failed-sign-ins")
         self.assertIn("5 failed attempts in a row within 15 minutes", failed["definition"])
 
@@ -647,7 +664,8 @@ class UserTests(Standard):
         self.assertEqual(
             anita,
             {
-                "userName": "Anita Rao", "role": "Payroll Officer", "actions": 7, "sharePct": 53.8, "sensitive": 5,
+                "userName": "Anita Rao", "role": "Payroll Officer", "kind": "Admin", "actions": 7, "sharePct": 53.8,
+                "sensitive": 5,
                 "afterHours": 0, "signIns": 2, "lastActive": "2026-10-03T20:59:59", "topArea": "Employees",
                 "previous": 2, "change": {"abs": 5, "pct": 250.0},
             },
@@ -1584,6 +1602,7 @@ class ToolTests(Standard):
 
 
 ALL_ROUTES = [
+    "options",
     "summary",
     "trend",
     "modules",
@@ -1665,7 +1684,9 @@ class ParamTests(Standard):
         self.assertNotIn("scope", scoped)
 
     def test_the_routes_module_lists_every_endpoint(self):
-        self.assertEqual([p.pattern._route for p in activity_routes.urlpatterns], ALL_ROUTES)
+        self.assertEqual(
+            [p.pattern._route for p in activity_routes.urlpatterns], [*ALL_ROUTES, "entries/<int:entry_id>"]
+        )
 
 
 class PermissionTests(Standard):
@@ -1864,3 +1885,80 @@ class SpeedTests(MdApiTestCase):
                 took, 3.0, f"{name} took {took:.2f}s"
             )  # the target is 1.5 s; the margin is for a busy machine
         self.assertGreater(self.get(URL + "summary", **window).json()["actions"]["value"], per_day * 120 * 0.9)
+
+
+# ═══ narrowing the page to one area and / or one person (2026-11-21) ═══════════════════════════════════════════
+
+
+class FocusTests(Standard):
+    def test_an_area_narrows_every_action_figure(self):
+        s = self.api("summary", area="payroll", **WEEK)
+        self.assertEqual((s["actions"]["value"], s["sensitive"]["value"], s["actions"]["previous"]), (1, 1, 0))
+        self.assertIn("Showing only Area: Payroll & pay.", s["notes"])
+        t = self.api("trend", area="payroll", **WEEK)
+        self.assertEqual(t["total"], {"actions": 1, "sensitive": 1})
+        h = self.api("heatmap", area="access", **WEEK)
+        self.assertEqual(h["total"], 2)
+        f = self.api("feed", area="access", **WEEK)
+        self.assertEqual(f["total"], 2)
+        self.assertEqual({i["area"] for i in f["items"]}, {"Accounts & access"})
+        # people follow the area, every person who acted there is listed
+        u = self.api("users", area="employees", **WEEK)
+        self.assertEqual({r["userName"] for r in u["users"]}, {"Anita Rao", "Babu K", "Chandra S"})
+
+    def test_a_person_narrows_actions_and_sign_ins(self):
+        s = self.api("summary", actor="Babu K", **WEEK)
+        self.assertEqual((s["actions"]["value"], s["signIns"]["value"]), (3, 2))
+        m = self.api("modules", actor="babu k", **WEEK)  # the name is matched ignoring case
+        self.assertEqual([(a["area"], a["actions"]) for a in m["areas"] if a["actions"]], [("employees", 3)])
+        sens = self.api("sensitive", actor="Chandra S", **WEEK)
+        self.assertEqual(sens["total"], 2)
+        signs = self.api("sign-ins", actor="Babu K", **WEEK)
+        self.assertEqual([a["userName"] for a in signs["accounts"]], ["Babu K"])
+        self.assertEqual(signs["signIns"]["value"], 2)
+        self.assertTrue(any("everyone's" in n for n in signs["notes"]))
+
+    def test_the_filter_options_list_areas_and_people_with_what_kind_of_account_they_are(self):
+        o = self.api("options", **WEEK)
+        areas = {a["area"]: a["actions"] for a in o["areas"]}
+        self.assertEqual(areas["employees"], 9)
+        self.assertEqual(areas["payroll"], 1)
+        people = {p["userName"]: p for p in o["people"]}
+        self.assertEqual(people["Chandra S"]["kind"], "Super Admin")
+        self.assertEqual(people["Anita Rao"]["kind"], "Admin")
+
+    def test_an_unknown_area_is_a_400(self):
+        r = self.get(URL + "summary", area="nowhere", **WEEK)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("is not an area", r.json()["error"])
+        self.assertEqual(self.get(URL + "summary", area="other:brand_new_module", **WEEK).status_code, 200)
+
+    def test_one_entry_opens_in_full_without_its_old_and_new_values(self):
+        row = log(ist(2026, 9, 30, 11), "Anita Rao", "create", "Payroll Excess", "Added excess of Rs. 500 to E1")
+        AuditLog.objects.filter(pk=row.pk).update(ip_address="10.0.0.5", old_values={"salary": 1}, new_values={"x": 2})
+        e = self.api(f"entries/{row.pk}")["entry"]
+        self.assertEqual(
+            (e["userName"], e["kind"], e["area"], e["title"], e["severity"]),
+            ("Anita Rao", "Admin", "Payroll & pay", "Payroll excess or detection added, changed or removed", "high"),
+        )
+        self.assertEqual((e["description"], e["ipAddress"]), ("Added excess of Rs. 500 to E1", "10.0.0.5"))
+        self.assertNotIn("oldValues", e)
+        self.assertNotIn("newValues", e)
+        login = AuditLog.objects.filter(action="login").first()
+        self.assertEqual(self.get(URL + f"entries/{login.pk}").status_code, 404)
+        self.assertEqual(self.get(URL + "entries/999999").status_code, 404)
+
+    def test_the_new_hrms_modules_have_their_areas(self):
+        self.assertEqual(A.area_of("geo_tracking"), ("geo", "Geo attendance & tracking"))
+        self.assertEqual(A.area_of("Payroll Excess"), ("payroll", "Payroll & pay"))
+        self.assertEqual(A.area_of("Salary Slip"), ("payroll", "Payroll & pay"))
+        self.assertEqual(A.area_of("whatsapp_control"), ("messaging", "Messages & alerts"))
+        self.assertEqual(A.area_of("phone_notify_control"), ("messaging", "Messages & alerts"))
+        self.assertEqual(A.area_of("md_approvals"), ("md", "MD portal"))
+        self.assertEqual(A.area_of("production_special_shift"), ("attendance", "Attendance"))
+        self.assertEqual(A.area_modules("geo"), ("geo_attendance", "geo_tracking"))
+        self.assertEqual(A.area_modules("other:x"), ("x",))
+
+    def test_the_coverage_note_says_approvals_are_recorded_now(self):
+        self.assertIn("every approval or rejection", A.NOT_RECORDED)
+        self.assertNotIn("leave or missing-punch approvals", A.NOT_RECORDED)

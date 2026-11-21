@@ -13,7 +13,7 @@ One small company whose figures can be counted by hand. Today is Monday 2026-10-
      staff       5 due: present 2 (S1, T1), CL 1 (S2), absent 2 (S3 on leave, N1)
      production  2 due: present 1 (P1), absent 1 (P2)
      everyone    7 due: present 3, CL 1, absent 3 of which 1 on leave
-  Yesterday was a Sunday: nobody due.
+  Yesterday was a Sunday: nobody due. October so far: 1-3 Oct nobody punched (7 due a day, all absent), 4 Oct Sunday.
   Payroll: September S1 20,000 (staff) + P1 10,000 (production, its pay period in September); October S1 5,000 so far.
 """
 
@@ -32,8 +32,11 @@ from .models import (
     Branch,
     CasualLeaveRequest,
     Employee,
+    EmployeePermission,
     HRUser,
     LeaveRequest,
+    OutpassRequest,
+    ResignationRequest,
     SalarySlip,
 )
 from .tests_md_support import MdApiTestCase, md_headers
@@ -115,9 +118,9 @@ class HomeTests(MdApiTestCase):
         slip(self.p1, 2026, 9, 10000, period=(date(2026, 9, 1), date(2026, 9, 30)))
         slip(self.s1, 2026, 10, 5000)
 
-    def answer(self):
+    def answer(self, query: str = ""):
         with at():
-            r = self.get(URL)
+            r = self.get(URL + query)
         self.assertEqual(r.status_code, 200, r.content[:500])
         return r.json()
 
@@ -146,10 +149,10 @@ class HomeTests(MdApiTestCase):
         self.assertEqual(len(body["notes"]), 1)
         self.assertIn("2 active employee(s) have a joining date that is not a real date", body["notes"][0])
 
-    def test_fourteen_days_with_the_sunday_empty_and_today_last(self):
+    def test_the_running_month_day_by_day_with_the_sunday_empty_and_today_last(self):
         trend = self.answer()["attendance"]["trend"]
-        self.assertEqual(len(trend), 14)
-        self.assertEqual((trend[0]["date"], trend[-1]["date"]), ("2026-09-22", "2026-10-05"))
+        self.assertEqual(len(trend), 5)
+        self.assertEqual((trend[0]["date"], trend[-1]["date"]), ("2026-10-01", "2026-10-05"))
         self.assertTrue(trend[-1]["today"])
         self.assertEqual(trend[-1]["present"], 3)
         sunday = next(d for d in trend if d["date"] == "2026-10-04")
@@ -174,10 +177,93 @@ class HomeTests(MdApiTestCase):
         self.assertEqual((octo["state"], octo["figures"]["grossPay"], octo["production"]), ("in_progress", 5000, None))
         self.assertIsNone(months[0]["figures"])
 
+    def test_the_months_totals_add_up_its_complete_days(self):
+        m = self.answer()["attendance"]["month"]
+        self.assertEqual((m["month"], m["label"], m["current"]), ("2026-10", "October 2026", True))
+        self.assertEqual((m["from"], m["to"], m["completeDays"]), ("2026-10-01", "2026-10-05", 4))
+        # 1-3 Oct: 7 due a day and nobody in; Sunday nobody due; today (still running) is not in the totals
+        self.assertEqual((m["expected"], m["present"], m["absent"], m["cl"]), (21, 0, 21, 0))
+        self.assertEqual((m["staff"]["expected"], m["production"]["expected"]), (15, 6))
+        self.assertEqual({u["name"]: u["expected"] for u in m["units"]}, {"Unit A": 15, "Unit B": 3, "No unit": 3})
+
+    def test_a_past_month_and_the_six_months_of_payroll_ending_with_it(self):
+        body = self.answer("?month=2026-09")
+        self.assertEqual(body["month"], "2026-09")
+        a = body["attendance"]
+        self.assertEqual(len(a["trend"]), 30)
+        self.assertFalse(any(d["today"] for d in a["trend"]))
+        self.assertEqual(
+            (a["month"]["current"], a["month"]["completeDays"], a["month"]["to"]), (False, 30, "2026-09-30")
+        )
+        # today stays today, whatever the month
+        self.assertEqual((a["expected"], a["present"]), (7, 3))
+        months = body["payroll"]["months"]
+        self.assertEqual(
+            [m["month"] for m in months], ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]
+        )
+        self.assertEqual(months[-1]["figures"]["grossPay"], 30000)
+        self.assertFalse(any(m["current"] for m in months))  # the running month (October) is after the window
+
+    def test_a_leaver_counts_until_the_last_day_they_are_known_to_have_worked(self):
+        gone = Employee.objects.create(
+            employee_code="L1",
+            first_name="L1",
+            last_name="",
+            employment_type="staff",
+            status="inactive",
+            join_date="2024-01-01",
+            salary_amount=Decimal("26000"),
+        )
+        AttendanceLog.objects.create(
+            employee=gone, date=date(2026, 10, 2), punch_time=time(9, 0), punch_type="IN", source="test"
+        )
+        left = Employee.objects.create(
+            employee_code="L2",
+            first_name="L2",
+            last_name="",
+            employment_type="staff",
+            status="inactive",
+            join_date="2024-01-01",
+            salary_amount=Decimal("26000"),
+        )
+        ResignationRequest.objects.create(employee=left, status="approved", last_working_date=date(2026, 10, 1))
+        days = {d["date"]: d["staff"] for d in self.answer()["attendance"]["trend"]}
+        # L1 (no leaving date) up to the day they punched, L2 up to their last working day; neither today
+        self.assertEqual((days["2026-10-01"]["expected"], days["2026-10-01"]["present"]), (7, 0))
+        self.assertEqual((days["2026-10-02"]["expected"], days["2026-10-02"]["present"]), (6, 1))
+        self.assertEqual(days["2026-10-03"]["expected"], 5)
+        self.assertEqual(days["2026-10-05"]["expected"], 5)
+
+    def test_the_requests_waiting_are_counted_on_the_server(self):
+        LeaveRequest.objects.create(employee=self.t1, type="casual", start_date="2026-10-08", end_date="2026-10-08")
+        LeaveRequest.objects.create(
+            employee=self.n1, type="casual", start_date="2026-10-09", end_date="2026-10-09", status="pending"
+        )
+        EmployeePermission.objects.create(employee=self.s1, date=date(2026, 10, 6), status="pending")
+        EmployeePermission.objects.create(employee=self.s2, date=date(2026, 10, 6), status="approved")
+        OutpassRequest.objects.create(employee=self.s1, destination="Bank", reason="Personal", status="pending")
+        OutpassRequest.objects.create(
+            employee=self.s2, destination="Site", reason="Work", status="pending", source="on_duty"
+        )
+        w = self.answer()["waiting"]
+        pending_leave = LeaveRequest.objects.filter(status="pending").count()
+        self.assertEqual((w["leave"], w["permission"], w["outpass"]), (pending_leave, 1, 1))
+        self.assertEqual(w["total"], pending_leave + 2)
+
+    def test_a_month_that_is_not_one_is_refused(self):
+        for bad in ("2026-13", "October", "2026-11", "2025-04"):
+            with at():
+                r = self.get(f"{URL}?month={bad}")
+            self.assertEqual(r.status_code, 400, bad)
+        self.assertEqual(self.answer("?month=2025-05")["month"], "2025-05")  # 17 months back: the oldest allowed
+
     def test_a_handful_of_queries_however_many_people(self):
         with at(), CaptureQueriesContext(connection) as q:
             self.get(URL)
         self.assertLess(len(q), 25)
+        with at(), CaptureQueriesContext(connection) as q:
+            self.get(URL + "?month=2026-08")
+        self.assertLess(len(q), 32)
 
     def test_only_the_md_may_read_it(self):
         hr = HRUser.objects.create(username="plain_hr_home", password_hash="x", is_super_admin=True)
@@ -187,7 +273,8 @@ class HomeTests(MdApiTestCase):
 
     def test_unit_and_counts_add_up(self):
         a = self.answer()["attendance"]
-        for block in [a, a["staff"], a["production"], *a["units"], *a["trend"]]:
+        month = a["month"]
+        for block in [a, a["staff"], a["production"], *a["units"], *a["trend"], month, *month["units"]]:
             self.assertEqual(block["present"] + block["cl"] + block["absent"], block["expected"])
             self.assertLessEqual(block["onLeave"], block["absent"])
 

@@ -24,7 +24,8 @@ const defined = new Set([...css.matchAll(/\.(md-shell-[a-z0-9-]+)/g)].map((m) =>
 
 /** The files of the shell: the frame, the sidebar, the kit and the embedded frame with its strip. */
 const SHELL_FILES = [
-  "components/md/MdLayout.tsx",
+  "components/md/MdShell.tsx",
+  "components/md/shell/ShellFallback.tsx",
   "components/md/MdSidebar.tsx",
   "components/md/PlaceholderPage.tsx",
   ...fs
@@ -71,6 +72,6 @@ describe("the shell's skin", () => {
     for (const label of ["Expand sidebar", "Collapse sidebar", "Close menu", "AI assistant", "Sign out", "HR portal"]) {
       expect(sidebar, label).toContain(`"${label}"`);
     }
-    expect(read("components/md/MdLayout.tsx")).toContain('aria-label="Open menu"');
+    expect(read("components/md/MdShell.tsx")).toContain('aria-label="Open menu"');
   });
 });

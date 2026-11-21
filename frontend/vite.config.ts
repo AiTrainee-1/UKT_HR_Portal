@@ -1,4 +1,4 @@
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
@@ -32,6 +32,33 @@ function vendorChunk(id: string): string | undefined {
   return VENDOR_CHUNKS.find(([, packages]) => packages.test(pkg))?.[0];
 }
 
+/** The MD portal's skin (src/md-theme) is a stylesheet of its own, loaded with the MD shell (components/md/MdShell.tsx), so
+ *  the other portals never download it. Left alone, Vite would minify it with esbuild; this gives it the very pass
+ *  Tailwind gives the app's main stylesheet, where the skin used to live (Lightning CSS with Tailwind's browser targets:
+ *  the color-mix() fallbacks, the vendor prefixes, the same output), so the MD portal renders exactly as before. */
+function mdSkinStylesheet(): Plugin {
+  return {
+    name: "uk-textiles:md-skin-stylesheet",
+    apply: "build",
+    async generateBundle(_options, bundle) {
+      const skin = new Set<string>();
+      for (const chunk of Object.values(bundle)) {
+        // the chunk that holds the shell (not always its facade: the Dashboard imports the shell statically too)
+        const holdsShell =
+          chunk.type === "chunk" &&
+          chunk.moduleIds.some((id) => id.replace(/\\/g, "/").endsWith("/src/components/md/MdShell.tsx"));
+        if (holdsShell) chunk.viteMetadata?.importedCss.forEach((file) => skin.add(file));
+      }
+      if (skin.size === 0) return;
+      const { optimize } = await import("@tailwindcss/node");
+      for (const file of skin) {
+        const asset = bundle[file];
+        if (asset?.type === "asset") asset.source = optimize(String(asset.source), { file, minify: true }).code;
+      }
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const port = Number(env.PORT || "5173");
@@ -40,7 +67,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     base: basePath,
-    plugins: [react(), tailwindcss()],
+    plugins: [react(), tailwindcss(), mdSkinStylesheet()],
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "src"),

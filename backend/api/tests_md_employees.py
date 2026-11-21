@@ -1857,6 +1857,9 @@ class AccessTests(TestCase):
                     "milestones",
                     "insights",
                     "directory",
+                    "briefing",
+                    "workforce",
+                    "people",
                     "employee/<int:employee_id>",
                 ]
             ),
@@ -2011,3 +2014,145 @@ class DirectCallTests(EmployeesTestCase):
 
         request = APIRequestFactory().get("/api/md/employees/summary", {"month": "2026-09"}, **md_headers(self.md))
         self.assertEqual(routes.summary(request).status_code, 200)
+
+
+# ─── today's groups and the people behind a figure (2026-11-21) ──────────────────────────────────────────────
+
+
+class WorkforceGroupsTests(EmployeesTestCase):
+    """The company above, with the groups the HRMS keeps today:
+
+    Factory Employees   A8 (production, label Driver), A9 (staff, label Security), A3 (staff, no label)  -> 3 of 9
+    Pay cycles          A8 weekly, A4 and A5 biweekly, A7 monthly, A6 none                               -> 5 production
+    PF / ESI / TDS      A1 and A4 Co Emp; A3 TDS; A2 both switches (bad data: TDS wins)                  -> 2 / 2 / 5
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        from .models import FactoryLabel
+
+        # the labels the migration seeds (Driver, Housekeeping, Chef, Security, Maintenance, in that order)
+        # (get_or_create: a TransactionTestCase elsewhere in the run may have flushed the seeded rows)
+        cls.driver = FactoryLabel.objects.get_or_create(name="Driver", defaults={"sort_order": 1})[0]
+        cls.security = FactoryLabel.objects.get_or_create(name="Security", defaults={"sort_order": 4})[0]
+        Employee.objects.filter(pk=cls.a8.pk).update(
+            is_factory=True, factory_label=cls.driver, production_pay_cycle="weekly"
+        )
+        Employee.objects.filter(pk=cls.a9.pk).update(is_factory=True, factory_label=cls.security)
+        Employee.objects.filter(pk=cls.a3.pk).update(is_factory=True, tds_enabled=True)
+        Employee.objects.filter(pk__in=[cls.a4.pk, cls.a5.pk]).update(production_pay_cycle="biweekly")
+        Employee.objects.filter(pk=cls.a7.pk).update(production_pay_cycle="monthly")
+        Employee.objects.filter(pk__in=[cls.a1.pk, cls.a4.pk]).update(co_emp_enabled=True)
+        Employee.objects.filter(pk=cls.a2.pk).update(co_emp_enabled=True, tds_enabled=True)
+
+    def people(self, **params) -> dict:
+        return self.get_ok("/api/md/employees/people", **params)
+
+    def codes(self, body: dict) -> list[str]:
+        return [r["code"] for r in body["rows"]]
+
+    def test_the_groups_of_today(self):
+        body = self.get_ok("/api/md/employees/workforce")
+        self.assertEqual((body["active"], body["types"]), (9, {"staff": 4, "production": 5, "other": 0}))
+        self.assertEqual((body["factory"]["people"], body["factory"]["sharePct"]), (3, 33.3))
+        self.assertEqual(
+            [(r["label"], r["people"], r["staff"], r["production"]) for r in body["factory"]["labels"]],
+            [("Driver", 1, 0, 1), ("Security", 1, 1, 0), ("No label", 1, 1, 0)],
+        )
+        self.assertEqual(body["factory"]["labels"][0]["id"], self.driver.id)
+        self.assertIsNone(body["factory"]["labels"][2]["id"])
+        self.assertEqual(
+            [(r["key"], r["label"], r["people"]) for r in body["cycles"]["rows"]],
+            [
+                ("weekly", "Weekly", 1),
+                ("biweekly", "BiWeekly", 2),
+                ("monthly", "Monthly", 1),
+                ("none", "Not assigned", 1),
+            ],
+        )
+        self.assertEqual((body["cycles"]["production"], body["cycles"]["unassigned"]), (5, 1))
+        self.assertIn("1 production worker has no pay cycle yet", " ".join(body["notes"]))
+        self.assertEqual(
+            {r["key"]: r["people"] for r in body["statutory"]}, {"co_emp": 2, "tds": 2, "none": 5}
+        )  # A2 has both switches: TDS wins, as in payroll
+        self.assertEqual(body["provenance"][0]["id"], "workforce-groups")
+
+    def test_the_groups_follow_the_scope(self):
+        unit2 = self.get_ok("/api/md/employees/workforce", branch="Unit2")  # A6, A7, A9
+        self.assertEqual(unit2["active"], 3)
+        self.assertEqual([(r["label"], r["people"]) for r in unit2["factory"]["labels"]], [("Security", 1)])
+        self.assertEqual({r["key"]: r["people"] for r in unit2["cycles"]["rows"]}["monthly"], 1)
+        staff = self.get_ok("/api/md/employees/workforce", type="staff")
+        self.assertEqual((staff["cycles"]["production"], staff["cycles"]["unassigned"]), (0, 0))
+
+    def test_the_summary_counts_the_factory_employees(self):
+        self.assertEqual(self.get_ok("/api/md/employees/summary", month="2026-09")["headcount"]["factory"], 3)
+
+    def test_joiners_leavers_and_early_leavers_of_a_month(self):
+        self.assertEqual(self.codes(self.people(group="joiners", month="2026-09")), ["A5", "A4"])  # latest first
+        leavers = self.people(group="leavers", month="2026-09")
+        self.assertEqual(self.codes(leavers), ["L3", "L2", "L4", "L1", "L6"])
+        self.assertEqual((leavers["total"], leavers["title"], leavers["period"]["label"]), (5, "Leavers", "Sep 2026"))
+        l4 = next(r for r in leavers["rows"] if r["code"] == "L4")
+        self.assertEqual((l4["leftOn"], l4["exitApproximate"], l4["status"]), ("2026-09-15", True, "inactive"))
+        self.assertEqual(self.codes(self.people(group="early", month="2026-09")), ["L2", "L1"])  # 50 and 54 days
+
+    def test_factory_cycle_and_statutory_groups(self):
+        self.assertEqual(self.codes(self.people(group="factory")), ["A3", "A8", "A9"])  # by name
+        driver = self.people(group="factory", value=str(self.driver.id))
+        self.assertEqual(self.codes(driver), ["A8"])
+        row = driver["rows"][0]
+        self.assertEqual(
+            (row["factoryLabel"], row["cycle"], row["statutory"], row["type"], row["department"]),
+            ("Driver", "Weekly", "Neither", "production", "Cutting"),
+        )
+        self.assertEqual(self.codes(self.people(group="factory", value="none")), ["A3"])
+        self.assertEqual(self.codes(self.people(group="cycle", value="none")), ["A6"])
+        self.assertEqual(self.codes(self.people(group="cycle", value="biweekly")), ["A4", "A5"])
+        self.assertEqual(self.codes(self.people(group="statutory", value="tds")), ["A2", "A3"])
+        self.assertIsNone(self.people(group="active")["rows"][0]["factoryLabel"])  # A1 is not a factory employee
+
+    def test_search_scope_and_pages(self):
+        self.assertEqual(self.codes(self.people(group="active", q="a1")), ["A1"])
+        unit2 = self.people(group="active", branch="Unit2")
+        self.assertEqual(sorted(self.codes(unit2)), ["A6", "A7", "A9"])
+        first = self.people(group="active", pageSize=2)
+        self.assertEqual((first["total"], first["pages"], len(first["rows"])), (9, 5, 2))
+        last = self.people(group="active", pageSize=2, page=99)  # clamped to the last page
+        self.assertEqual((last["page"], len(last["rows"])), (5, 1))
+
+    def test_a_bad_group_or_value_is_a_readable_400(self):
+        for params, text in (
+            ({"group": "everyone"}, "'group' must be one of"),
+            ({"group": "cycle", "value": "daily"}, "For group=cycle"),
+            ({"group": "factory", "value": "drivers"}, "For group=factory"),
+            ({"group": "statutory", "value": "pf"}, "For group=statutory"),
+        ):
+            with self.subTest(**params):
+                r = self.get("/api/md/employees/people", **params)
+                self.assertEqual(r.status_code, 400)
+                self.assertIn(text, r.json()["error"])
+
+    def test_the_briefing_is_written_from_the_same_figures(self):
+        body = self.get_ok("/api/md/employees/briefing", month="2026-09")
+        s = self.get_ok("/api/md/employees/summary", month="2026-09")
+        sentences = {x["id"]: x for x in body["briefing"]["sentences"]}
+        self.assertEqual(
+            sentences["headcount"]["text"],
+            "9 people are here today: 4 staff and 5 production; 3 of them are Factory Employees.",
+        )
+        self.assertEqual(
+            sentences["movement"]["text"],
+            f"Sep 2026: 2 joined and 5 left (net -3), against {s['joiners']['previous']} and "
+            f"{s['leavers']['previous']} in the 30 days before.",
+        )
+        self.assertEqual(sentences["movement"]["tone"], "watch")
+        self.assertEqual(sentences["early"]["text"], "2 of the 5 leavers left within 90 days of joining.")
+        self.assertEqual(
+            sentences["cycles"]["text"],
+            "1 production worker has no pay cycle, so no production payroll includes them yet.",
+        )
+        self.assertTrue(sentences["attrition"]["text"].startswith(f"Attrition was {s['attrition']['pct']:.1f}%"))
+        self.assertEqual(body["briefing"]["text"], " ".join(x["text"] for x in body["briefing"]["sentences"]))
+        self.assertEqual(body["provenance"][0]["id"], "employees-briefing")

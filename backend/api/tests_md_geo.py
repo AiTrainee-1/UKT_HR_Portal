@@ -63,7 +63,9 @@ from .models import (
     AttendanceLog,
     Branch,
     Department,
+    DutyTrack,
     Employee,
+    GeoTrackingAlert,
     HRUser,
     LiveLocationPing,
     OnDutyPunchVerification,
@@ -86,6 +88,8 @@ ROUTES = [
     "unusual",
     "live",
     "attention",
+    "tracking",
+    "alerts",
 ]
 
 LAT0, LNG0 = 11.0, 77.0  # Unit 1's geofence centre
@@ -917,6 +921,210 @@ class LiveTests(GoldenBase):
 
 
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+# On-Duty tracking (journeys), the automatic alerts and the drill-downs (2026-11-21)
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+
+
+def make_track(session, started, *, status="ended", state="ended", end_reason="", last_point=None, **figures):
+    return DutyTrack.objects.create(
+        session=session,
+        employee=session.employee,
+        branch=session.employee.branch,
+        status=status,
+        started_at=started,
+        ended_at=None if status == "active" else started + timedelta(hours=8),
+        end_reason=end_reason,
+        state=state,
+        last_point_at=last_point,
+        last_latitude=LAT0 + LAT_5KM if last_point else None,
+        last_longitude=LNG0 if last_point else None,
+        last_battery_pct=64 if last_point else None,
+        **figures,
+    )
+
+
+def make_alert(track, kind, detected, resolved=None, resolution="", *, key="", hod=None, push="", whatsapp=""):
+    return GeoTrackingAlert.objects.create(
+        track=track,
+        employee=track.employee,
+        kind=kind,
+        key=key,
+        detected_at=detected,
+        last_seen_at=resolved or detected,
+        employee_sent_at=detected + timedelta(minutes=2),
+        employee_push=push,
+        employee_whatsapp=whatsapp,
+        hod=hod,
+        hod_sent_at=detected + timedelta(minutes=17) if hod else None,
+        resolved_at=resolved,
+        resolution=resolution,
+    )
+
+
+class TrackingBase(GoldenBase):
+    """The golden company plus the app's tracks and the server's automatic alerts.
+
+    JOURNEYS in the period: t1 s1 (A 02-Sep) 15.2 km, travel 1.5 h, stops 2 h (3), gap 10 min, ended by the 4th punch;
+    t2 s4 (B 02-Sep) 8.3 km, travel 1 h, stops 1 h (2), no gap, 4 simulated fixes, ended by the employee;
+    t3 s8 (D 03-Sep) 40.5 km, travel 2 h, stops 0.5 h (1), gap 30 min, ended at day end.
+      -> 3 journeys, 3 people, 64.0 km (21.3 a journey), travel 4.5 h, stops 3.5 h, gaps 0.7 h, 6 stops, 2 with gaps
+         (66.7 %), 4 simulated fixes on 1 journey.
+    Previous period: t6 p1 (A 20-Aug) 5.0 km.  Now: t4 s13 (C) stationary, last fix 5 minutes ago, 2.0 km so far;
+    t5 s11 (A) "moving" but nothing for 20 minutes (offline after the 10-minute "signal lost" setting).
+
+    ALERTS in the period (detected -> resolved): a1 A location off 02-Sep 10:00 -> 10:12 fixed (push made);
+    a2 A missing punch 11:00 -> 11:40 fixed, escalated to Esha; a3 D permission 03-Sep 09:30 -> 23:50 day over;
+    a4 A punch reminder 02-Sep 14:00 -> 14:30 fixed (WhatsApp queued).
+      -> 4 alerts, 2 people, 1 escalated (25 %), 3 fixed (75 %), minutes to fix 12, 40, 30: median 30.
+    Outside: a5 C location off 15-Sep 15:15, still OPEN; a6 A location off 20-Aug (previous period).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        ss = cls.sessions
+        p1 = OnDutySession.objects.get(employee=cls.A, created_at=ist(8, 20, 8))
+        t1 = make_track(
+            ss["s1"], ist(9, 2, 8, 5), end_reason="auto_4th_punch",
+            distance_m=15200, travel_s=5400, stop_s=7200, gap_s=600, stop_count=3,
+        )  # fmt: skip
+        make_track(
+            ss["s4"], ist(9, 2, 9, 5), end_reason="manual",
+            distance_m=8300, travel_s=3600, stop_s=3600, gap_s=0, stop_count=2, mock_points=4,
+        )  # fmt: skip
+        t3 = make_track(
+            ss["s8"], ist(9, 3, 9, 5), end_reason="auto_day_end",
+            distance_m=40500, travel_s=7200, stop_s=1800, gap_s=1800, stop_count=1,
+        )  # fmt: skip
+        t4 = make_track(
+            ss["s13"], ist(9, 15, 9, 35), status="active", state="stationary",
+            last_point=ist(9, 15, 15, 25), distance_m=2000, stop_count=1,
+        )  # fmt: skip
+        make_track(ss["s11"], ist(9, 15, 0, 10), status="active", state="moving", last_point=ist(9, 15, 15, 10))
+        t6 = make_track(p1, ist(8, 20, 8, 5), end_reason="manual", distance_m=5000, travel_s=1800)
+        K = GeoTrackingAlert
+        make_alert(t1, K.KIND_LOCATION_OFF, ist(9, 2, 10), ist(9, 2, 10, 12), K.RESOLVED_FIXED, push="made")
+        make_alert(t1, K.KIND_MISSING_PUNCH, ist(9, 2, 11), ist(9, 2, 11, 40), K.RESOLVED_FIXED, key="first", hod=cls.E)
+        make_alert(t3, K.KIND_PERMISSION, ist(9, 3, 9, 30), ist(9, 3, 23, 50), K.RESOLVED_DAY_OVER)
+        make_alert(t1, K.KIND_PUNCH_REMINDER, ist(9, 2, 14), ist(9, 2, 14, 30), K.RESOLVED_FIXED, whatsapp="queued")
+        make_alert(t4, K.KIND_LOCATION_OFF, ist(9, 15, 15, 15))
+        make_alert(t6, K.KIND_LOCATION_OFF, ist(8, 20, 10), ist(8, 20, 10, 5), K.RESOLVED_FIXED)
+
+
+class TrackingTests(TrackingBase):
+    def test_the_journeys(self):
+        j = self.api("tracking")["journeys"]
+        self.assertEqual((j["count"], j["previous"], j["people"]), (3, 1, 3))
+        self.assertEqual((j["km"], j["kmPrevious"], j["kmPerJourney"]), (64.0, 5.0, 21.3))
+        self.assertEqual((j["travelHours"], j["stopHours"], j["gapHours"], j["stops"]), (4.5, 3.5, 0.7, 6))
+        self.assertEqual((j["withGaps"], j["withGapsPct"], j["mockPoints"], j["withMock"]), (2, 66.7, 4, 1))
+        ended = {e["reason"]: e["count"] for e in j["ended"]}
+        self.assertEqual(
+            (ended["auto_4th_punch"], ended["manual"], ended["auto_day_end"], ended["rejected"]), (1, 1, 1, 0)
+        )
+
+    def test_the_alerts(self):
+        a = self.api("tracking")["alerts"]
+        self.assertEqual((a["count"], a["previous"], a["people"]), (4, 1, 2))
+        self.assertEqual((a["escalated"], a["escalatedPct"], a["fixed"], a["fixedPct"]), (1, 25.0, 3, 75.0))
+        self.assertEqual((a["openFromPeriod"], a["openNow"], a["medianMinutesToFix"]), (0, 1, 30.0))
+        self.assertEqual((a["pushed"], a["whatsapp"]), (1, 1))
+        kinds = {k["kind"]: (k["count"], k["openNow"]) for k in a["byKind"]}
+        self.assertEqual(kinds["location_off"], (1, 1))
+        self.assertEqual((kinds["permission_restricted"], kinds["tracking_failure"]), ((1, 0), (0, 0)))
+
+    def test_per_day_and_the_people(self):
+        t = self.api("tracking")
+        days = {d["date"]: (d["journeys"], d["km"], d["alerts"]) for d in t["days"]}
+        self.assertEqual(len(t["days"]), 14)
+        self.assertEqual(
+            (days["2026-09-02"], days["2026-09-03"], days["2026-09-04"]), ((2, 23.5, 3), (1, 40.5, 1), (0, 0.0, 0))
+        )
+        self.assertEqual([(p["employeeCode"], p["alerts"]) for p in t["topAlerted"]], [("A", 3), ("D", 1)])
+        self.assertEqual(
+            [(p["employeeCode"], p["km"]) for p in t["topDistance"]], [("D", 40.5), ("A", 15.2), ("B", 8.3)]
+        )
+
+    def test_the_scope_applies(self):
+        t = self.api("tracking", type="production")
+        self.assertEqual((t["journeys"]["count"], t["journeys"]["km"], t["alerts"]["count"]), (2, 48.8, 1))
+
+    def test_live_reads_the_track(self):
+        r = self.api("live")
+        rows = {x["employeeCode"]: x for x in r["rows"]}
+        c, a = rows["C"], rows["A"]
+        self.assertEqual(
+            (c["trackState"], c["lastSeen"], c["minutesSinceSeen"]), ("stationary", "2026-09-15T15:25:00", 5)
+        )
+        self.assertEqual((c["travelledKm"], c["batteryPct"], c["openAlerts"], c["stops"]), (2.0, 64, 1, 1))
+        self.assertEqual((a["trackState"], a["trackStateLabel"], a["minutesSinceSeen"]), ("offline", "Offline", 20))
+        self.assertIsNone(rows["B"]["trackState"])  # no track: the old rule
+        self.assertEqual((r["withSignal"], r["noSignal"], r["openAlerts"]), (1, 1, 1))
+        self.assertEqual((r["trackStates"]["stationary"], r["trackStates"]["offline"]), (1, 1))
+
+    def test_the_alert_drill_down(self):
+        all_ = self.api("alerts")
+        self.assertEqual(all_["total"], 4)
+        self.assertEqual([x["kind"] for x in all_["rows"]][0], "permission_restricted")  # newest first
+        first_fix = next(x for x in all_["rows"] if x["kind"] == "location_off")
+        self.assertEqual((first_fix["minutes"], first_fix["resolution"], first_fix["open"]), (12, "Fixed", False))
+        self.assertEqual(self.api("alerts", kind="location_off")["total"], 1)
+        self.assertEqual(self.api("alerts", status="fixed")["total"], 3)
+        escalated = self.api("alerts", status="escalated")["rows"]
+        self.assertEqual([(x["employeeCode"], x["departmentHead"]) for x in escalated], [("A", "Esha Test")])
+        self.assertEqual(self.api("alerts", employee=self.A.id)["total"], 3)
+        self.assertEqual(self.api("alerts", status="open")["total"], 0)
+        page = self.api("alerts", pageSize=3, page=2)
+        self.assertEqual((page["pages"], len(page["rows"])), (2, 1))
+
+    def test_one_persons_on_duty_month(self):
+        p = self.api("person", employee=self.A.id)
+        self.assertEqual(p["employee"]["employeeCode"], "A")
+        self.assertEqual([x["date"] for x in p["sessions"]], ["2026-09-04", "2026-09-03", "2026-09-02"])
+        self.assertEqual(
+            {k: p["totals"][k] for k in ("sessions", "punches", "verified", "rejected", "pending", "km", "alerts")},
+            {"sessions": 3, "punches": 5, "verified": 2, "rejected": 3, "pending": 0, "km": 15.2, "alerts": 3},
+        )
+        s1 = p["sessions"][2]
+        self.assertEqual((s1["tracked"], s1["km"], s1["stops"], s1["ended"]), (True, 15.2, 3, "4th punch captured"))
+        self.assertFalse(p["sessions"][0]["tracked"])
+
+    def test_a_person_outside_the_selection_or_none_is_a_readable_error(self):
+        for params in ({}, {"employee": self.A.id, "type": "production"}, {"employee": "x"}):
+            r = self.get("/api/md/geo/person", **P, **params)
+            self.assertEqual(r.status_code, 400, params)
+            self.assertIn("error", r.json())
+
+    def test_bad_alert_filters_are_readable(self):
+        for params in ({"kind": "sleepy"}, {"status": "maybe"}):
+            r = self.get("/api/md/geo/alerts", **P, **params)
+            self.assertEqual(r.status_code, 400, params)
+
+    def test_the_findings(self):
+        # the golden company has more serious findings than the page's six: ask for all of them
+        items = {i["id"]: i for i in geo._exceptions(Scope(), resolve_period(P), limit=50)}
+        self.assertEqual(items["geo.alerts-open"]["severity"], "info")
+        self.assertIn("1 automatic On-Duty alert is still open", items["geo.alerts-open"]["title"])
+        self.assertEqual(items["geo.alerts-repeat"]["severity"], "warning")
+        self.assertIn("Asha Test (3 alerts)", items["geo.alerts-repeat"]["detail"])
+
+    def test_the_briefing_says_it(self):
+        sentence = next(x for x in self.api("briefing")["sentences"] if x["id"] == "tracking")
+        self.assertEqual(
+            sentence["text"],
+            "The app tracked 3 journeys (64.0 km, 2 with gaps in the record); 4 automatic alerts went out, 1 escalated to "
+            "the Department Head.",
+        )
+
+    def test_the_tool(self):
+        result = registry.collect_tools()["geo_tracking_and_alerts"].run(P)
+        self.assertEqual((result["journeys"]["count"], result["alerts"]["count"]), (3, 4))
+        text = json.dumps(result)
+        for key in ("latitude", "longitude"):
+            self.assertNotIn(key, text)
+
+
+# ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 # the empty database
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 
@@ -1233,8 +1441,8 @@ class ToolTests(GoldenBase):
         "geo_attendance_breakdown",
         "geo_frequent_people",
         "geo_unusual_sessions",
-        "geo_distance_from_unit",
         "geo_on_duty_now",
+        "geo_tracking_and_alerts",
     }
 
     def tool(self, name):
@@ -1281,7 +1489,8 @@ class ToolTests(GoldenBase):
     def test_verification_distance_and_trend_tools(self):
         v = self.tool("geo_verification_status").run({"from": P["from"], "to": P["to"]})
         self.assertEqual(v["punches"]["pending"], 3)
-        d = self.tool("geo_distance_from_unit").run({"from": P["from"], "to": P["to"]})
+        # the distance bands are part of the tracking tool since 2026-11-21 (the domain keeps its eight tools)
+        d = self.tool("geo_tracking_and_alerts").run({"from": P["from"], "to": P["to"]})["distanceFromUnit"]
         self.assertEqual(d["farPunches"], 1)
         t = self.tool("geo_attendance_trend").run({"from": P["from"], "to": P["to"]})
         self.assertEqual(len(t["points"]), 14)

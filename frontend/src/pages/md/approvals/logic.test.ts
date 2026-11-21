@@ -3,6 +3,14 @@ import { HODS, hod, item } from "./fixtures";
 import {
   agoText,
   approvalWarning,
+  decisionOf,
+  filterItems,
+  inMonth,
+  kindOptions,
+  overviewOf,
+  requestDayText,
+  requestedLabel,
+  requestedText,
   filterByGroup,
   groupOptions,
   hodIdFromPath,
@@ -65,8 +73,8 @@ describe("HOD approvals helpers", () => {
     expect(agoText(new Date(2026, 10, 10, 9, 0).toISOString(), now)).toBe("4 days ago");
     expect(agoText(new Date(2026, 9, 10, 9, 0).toISOString(), now)).toBe("5 weeks ago");
     expect(agoText(null, now)).toBe("");
-    expect(submittedText("2026-11-11T09:52:00")).toBe("11 Nov 2026, 9:52 am");
-    expect(submittedText("2026-11-11T15:05:30")).toBe("11 Nov 2026, 3:05 pm");
+    expect(submittedText("2026-11-11T09:52:00")).toBe("11 Nov 2026, 9:52:00 am");
+    expect(submittedText("2026-11-11T15:05:30")).toBe("11 Nov 2026, 3:05:30 pm");
     expect(submittedText(null)).toBe("");
     expect(submittedText("not a date")).toBe("");
     expect(stepName({ label: null, roles: ["hod", "hr"] })).toBe("Department Head or HR");
@@ -103,5 +111,95 @@ describe("HOD approvals helpers", () => {
     expect(pageNumbers(1, 12)).toEqual([1, 2, 3, 4, "…", 12]);
     expect(pageNumbers(6, 12)).toEqual([1, "…", 5, 6, 7, "…", 12]);
     expect(pageNumbers(12, 12)).toEqual([1, "…", 9, 10, 11, 12]);
+  });
+
+  it("says what a request is for, as the HR Requests page does", () => {
+    expect(requestDayText("2026-11-11T09:52:00")).toBe("11 Nov 2026");
+    expect(requestedLabel(item())).toBe("Requested dates");
+    expect(requestedText(item())).toBe("12 Nov 2026 – 13 Nov 2026 · 2 days");
+    expect(requestedText(item({ requested: null }))).toBeNull();
+    // an older server without `requested`: the item's own dates
+    expect(requestedText(item({ requested: undefined }))).toBe("12 Nov 2026 – 13 Nov 2026");
+    expect(requestedLabel(item({ requested: undefined }))).toBe("Requested date");
+  });
+
+  it("finds the decision and its remark", () => {
+    expect(decisionOf(item())).toBeNull();
+    const rejected = item({
+      state: "rejected",
+      steps: [
+        { label: null, roles: ["hod"], state: "rejected", by: "Sandhya", at: "2026-11-12T10:00:00", comment: "No" },
+      ],
+    });
+    expect(decisionOf(rejected)).toEqual({
+      state: "rejected",
+      by: "Sandhya",
+      at: "2026-11-12T10:00:00",
+      comment: "No",
+    });
+    const approved = item({
+      state: "approved",
+      steps: [
+        { label: null, roles: ["hod"], state: "approved", by: "Sandhya", at: "2026-11-12T10:00:00", comment: null },
+      ],
+    });
+    expect(decisionOf(approved)?.state).toBe("approved");
+  });
+
+  it("filters by month (the dates asked for, else the day it was sent), type and search", () => {
+    const across = item({ requested: { from: "2026-10-30", to: "2026-11-02", note: null, label: "Requested dates" } });
+    expect(inMonth(across, "2026-10")).toBe(true);
+    expect(inMonth(across, "2026-11")).toBe(true);
+    expect(inMonth(across, "2026-12")).toBe(false);
+    expect(inMonth(item({ requested: null, submittedAt: "2026-09-03T08:00:00" }), "2026-09")).toBe(true);
+    expect(inMonth(item(), null)).toBe(true);
+    const list = [item(), item({ key: "permission-1", kind: "permission", reason: "Bank work" })];
+    expect(filterItems(list, { kind: "permission", month: null, q: "" })).toHaveLength(1);
+    expect(filterItems(list, { kind: "all", month: null, q: "bank" })).toHaveLength(1);
+    expect(filterItems(list, { kind: "all", month: null, q: "surya 30020" })).toHaveLength(2);
+    expect(kindOptions(list).map((o) => o.label)).toEqual(["All (2)", "Leave (1)", "Permission (1)"]);
+    expect(kindOptions([], "resignation").map((o) => o.label)).toEqual(["All (0)", "Resignation (0)"]);
+  });
+
+  it("sums up a head's month", () => {
+    const now = new Date(2026, 10, 21, 12, 0);
+    const list = [
+      item({ submittedAt: new Date(2026, 10, 18, 9, 0).toISOString() }),
+      item({
+        key: "leave-2",
+        state: "approved",
+        canApprove: false,
+        canReject: false,
+        submittedAt: new Date(2026, 10, 10, 9, 0).toISOString(),
+        steps: [
+          {
+            label: null,
+            roles: ["hod"],
+            state: "approved",
+            by: "S",
+            at: new Date(2026, 10, 12, 9, 0).toISOString(),
+            comment: null,
+          },
+        ],
+      }),
+      item({
+        key: "leave-3",
+        state: "rejected",
+        canApprove: false,
+        canReject: false,
+        requested: { from: "2026-10-05", to: null, note: null, label: "Requested date" },
+      }),
+    ];
+    const nov = overviewOf(list, "2026-11", now);
+    expect(nov.received).toBe(2);
+    expect(nov.approved).toBe(1);
+    expect(nov.rejected).toBe(0);
+    expect(nov.open).toBe(1);
+    expect(nov.approvalRatePct).toBe(100);
+    expect(nov.avgDecisionDays).toBe(2);
+    expect(nov.oldestWaitingDays).toBe(3);
+    expect(nov.months.map((m) => m.month)).toEqual(["2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11"]);
+    expect(nov.months.at(-1)).toMatchObject({ received: 2, decided: 1 });
+    expect(overviewOf(list, null, now).received).toBe(3);
   });
 });

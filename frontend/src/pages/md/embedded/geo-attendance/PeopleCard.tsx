@@ -6,7 +6,7 @@ import { dayShort, num } from "@/lib/md/format";
 import { QueryError, refreshingClass } from "./parts";
 import type { GeoPeople, GeoPerson } from "./types";
 
-const COLUMNS: Column<GeoPerson>[] = [
+const columns = (onPerson?: (employeeId: number) => void): Column<GeoPerson>[] => [
   {
     key: "name",
     header: "Employee",
@@ -14,7 +14,18 @@ const COLUMNS: Column<GeoPerson>[] = [
     cell: (r) => (
       <div className="min-w-[8rem]">
         <p className="font-semibold text-md-ink">
-          {r.employeeName}
+          {onPerson && r.employeeId != null ? (
+            <button
+              type="button"
+              className="text-left font-semibold text-md-ink underline decoration-md-line underline-offset-2 hover:decoration-md-wine"
+              onClick={() => onPerson(r.employeeId as number)}
+              data-testid={`md-geo-people-open-${r.employeeCode}`}
+            >
+              {r.employeeName}
+            </button>
+          ) : (
+            r.employeeName
+          )}
           {r.frequent && (
             <span className="md-chip md-chip-wine md-analytics-chip-sm ml-1.5 align-middle">frequent</span>
           )}
@@ -48,8 +59,17 @@ const COLUMNS: Column<GeoPerson>[] = [
 ];
 
 /** Who works outside the premises and how often: the people who went on duty most in the period, with their punches and
- *  anything unusual about them. Names are shown because the MD acts on this list. */
-export default function PeopleCard({ query, ask }: { query: UseQueryResult<GeoPeople>; ask: string }) {
+ *  anything unusual about them. Names are shown because the MD acts on this list; a name opens the person's month. */
+export default function PeopleCard({
+  query,
+  ask,
+  onPerson,
+}: {
+  query: UseQueryResult<GeoPeople>;
+  ask: string;
+  /** Opens a person's on-duty month (their sessions, journeys and alerts). */
+  onPerson?: (employeeId: number) => void;
+}) {
   const data = query.data;
   return (
     <SectionCard
@@ -70,7 +90,7 @@ export default function PeopleCard({ query, ask }: { query: UseQueryResult<GeoPe
       ) : data ? (
         <>
           <DataTable
-            columns={COLUMNS}
+            columns={columns(onPerson)}
             rows={data.rows}
             rowKey={(r) => r.employeeCode}
             initialSort={{ key: "sessions", dir: "desc" }}

@@ -36,25 +36,30 @@ describe("Monthly tab", () => {
     expect(textOf(p(), "md-pay-status-month")).toBe("Oct 2026");
     expect(textOf(p(), "md-pay-status")).toContain("Payment pending");
     expect(by(p(), "md-pay-status")?.dataset.state).toBe("finalized");
-    // no month is sent: the server picks the latest month with slips, and the picker names it
+    // no month is sent: the server picks the latest month with slips, and the month picker shows it; staff only
     expect(lastRequest(p(), "monthly")?.get("month")).toBeNull();
     expect(lastRequest(p(), "monthly")?.get("months")).toBe("12");
-    expect(textOf(p(), "md-pay-month")).toBe("Latest month (Oct 2026)");
+    expect(lastRequest(p(), "monthly")?.get("type")).toBe("staff");
+    expect(textOf(p(), "month-select")).toBe("Oct");
+    expect(textOf(p(), "year-select")).toBe("2026");
   });
 
-  it("shows the nine headline figures, each against the month before", async () => {
+  it("shows the ten headline figures, each against the month before", async () => {
     page = await openPayroll();
     const value = (key: string) => textOf(p(), `md-pay-kpi-${key}-value`);
-    expect(value("companyCost")).toBe("₹5.7 L");
+    expect(value("companyCost")).toBe("₹3.8 L");
     expect(value("actualSalary")).toBe("₹3.5 L");
-    expect(value("earnedSalary")).toBe("₹5.1 L");
+    expect(value("earnedSalary")).toBe("₹3.4 L");
     expect(value("attendanceDeduction")).toBe("₹5,976");
-    expect(value("otherDeductions")).toBe("₹33,815");
-    expect(value("netPaid")).toBe("₹4.9 L");
+    expect(value("otherDeductions")).toBe("₹22,764");
+    expect(value("bonus")).toBe("₹600");
+    expect(value("netPaid")).toBe("₹3.3 L");
     expect(value("clDays")).toBe("5");
     expect(value("clAmount")).toBe("₹3,558");
-    expect(value("employees")).toBe("29");
-    expect(textOf(p(), "md-pay-kpi-companyCost")).toContain("-2.9%");
+    expect(value("employees")).toBe("16");
+    // HR's excess and detection are the two sides of the bonus line
+    expect(textOf(p(), "md-pay-kpi-bonus")).toContain("+₹1,000 excess · -₹400 detection");
+    expect(textOf(p(), "md-pay-kpi-companyCost")).toContain("-4%");
     expect(textOf(p(), "md-pay-kpi-attendanceDeduction")).toContain("₹4,683 LOP · ₹1,293 late");
     // cost falling is good news (sage); headcount is neither
     expect(by(p(), "md-pay-kpi-companyCost")?.querySelector(".md-chip-success")).not.toBeNull();
@@ -76,9 +81,9 @@ describe("Monthly tab", () => {
   it("compares the month with the one before, line by line", async () => {
     page = await openPayroll();
     expect(textOf(p(), "md-pay-compare")).toContain("Oct 2026 against Sep 2026");
-    expect(textOf(p(), "md-pay-compare-companyCost")).toContain("₹5.7 L");
-    expect(textOf(p(), "md-pay-compare-companyCost")).toContain("-2.9%");
-    expect(textOf(p(), "md-pay-compare-employees")).toContain("was 30");
+    expect(textOf(p(), "md-pay-compare-companyCost")).toContain("₹3.8 L");
+    expect(textOf(p(), "md-pay-compare-companyCost")).toContain("-4%");
+    expect(textOf(p(), "md-pay-compare-employees")).toContain("was 17");
   });
 
   it("lists every month, newest first, with a totals row, and opens a month from the table", async () => {
@@ -100,7 +105,7 @@ describe("Monthly tab", () => {
     page = await openPayroll();
     await p().click('[data-testid="md-pay-month-table"] [data-testid="sort-companyCost"]');
     const values = rows("md-pay-month-table").map((r) => r.dataset.testid);
-    const data = monthlyFixture(new URLSearchParams());
+    const data = monthlyFixture(new URLSearchParams({ type: "staff" }));
     const expected = [...data.months].sort((a, b) => b.companyCost - a.companyCost).map((m) => `row-${m.month}`);
     expect(values).toEqual(expected);
   });
@@ -119,27 +124,62 @@ describe("Monthly tab", () => {
     expect(by(p(), "md-pay-deductions-legend-lossOfPay")?.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("picks a month from the month picker", async () => {
+  it("picks a month and a year from the month picker, and steps with its arrows", async () => {
     page = await openPayroll();
-    await choose(p(), "md-pay-month", "Sep 2026");
+    await choose(p(), "month-select", "Sep");
     expect(url(p())).toBe("/md/payroll?month=2026-09");
     expect(lastRequest(p(), "monthly")?.get("month")).toBe("2026-09");
     expect(textOf(p(), "md-pay-status-month")).toBe("Sep 2026");
-    await choose(p(), "md-pay-month", "Latest month");
-    expect(url(p())).toBe("/md/payroll");
+    await p().click('[data-testid="month-prev"]');
+    expect(url(p())).toBe("/md/payroll?month=2026-08");
+    await choose(p(), "year-select", "2025");
+    expect(url(p())).toBe("/md/payroll?month=2025-09"); // the oldest month with slips: August 2025 has none
+    expect(by(p(), "month-prev")?.hasAttribute("disabled")).toBe(true);
   });
 
-  it("sends the unit, department and type to every request", async () => {
+  it("sends the unit and department, staff only, to every request", async () => {
     page = await openPayroll();
+    // staff and production are separate sides: there is no staff / production select here
+    expect(by(p(), "scope-type")).toBeNull();
     await choose(p(), "scope-branch", "Unit 1");
     await choose(p(), "scope-department", "Cutting");
-    await choose(p(), "scope-type", "Production");
-    expect(url(p())).toBe("/md/payroll?branch=1&department=Cutting&type=production");
+    expect(url(p())).toBe("/md/payroll?branch=1&department=Cutting");
     const last = lastRequest(p(), "monthly")!;
-    expect([last.get("branch"), last.get("department"), last.get("type")]).toEqual(["1", "Cutting", "production"]);
-    // production has no fixed monthly salary: no actual salary, said plainly
-    expect(textOf(p(), "md-pay-kpi-actualSalary-value")).toBe("—");
-    expect(textOf(p(), "md-pay-kpi-actualSalary")).toContain("production is paid per shift");
+    expect([last.get("branch"), last.get("department"), last.get("type")]).toEqual(["1", "Cutting", "staff"]);
+  });
+
+  it("lists only the staff departments the server names in the department filter", async () => {
+    page = await openPayroll("/md/payroll", {
+      "/api/md/payroll/monthly": (params) => ({
+        ...monthlyFixture(params),
+        departments: [{ id: 12, name: "Accounts", branchId: 2 }],
+      }),
+    });
+    await expect(choose(p(), "scope-department", "Cutting")).rejects.toThrow(/All departments \| Accounts/);
+  });
+
+  it("shows where the month stands in HR's workflow and who is not in it", async () => {
+    page = await openPayroll();
+    expect(by(p(), "md-pay-flow-finalized")?.dataset.done).toBe("true");
+    expect(by(p(), "md-pay-flow-paid")?.dataset.done).toBe("false");
+    expect(textOf(p(), "md-pay-flow-finalized")).toContain("payment pending 11 days");
+    expect(textOf(p(), "md-pay-flow-hold-value")).toBe("1");
+    expect(textOf(p(), "md-pay-flow-new-joiners-value")).toBe("1");
+    expect(textOf(p(), "md-pay-flow-not-included-value")).toBe("2");
+    expect(by(p(), "md-pay-not-included-list")).toBeNull();
+    await p().click('[data-testid="md-pay-not-included-toggle"]');
+    expect(textOf(p(), "md-pay-not-included-list")).toContain("Jeeva R");
+    expect(textOf(p(), "md-pay-not-included-list")).toContain("no monthly salary on the profile");
+  });
+
+  it("compares the year so far with the year before", async () => {
+    page = await openPayroll();
+    expect(textOf(p(), "md-pay-year")).toContain("2026 so far against 2025");
+    expect(textOf(p(), "md-pay-year")).toContain("2026 (Jan-Oct): 10 months with payroll, against 2025 (Jan-Oct)");
+    expect(textOf(p(), "md-pay-year-cost-value")).toContain("₹38.1 L");
+    expect(textOf(p(), "md-pay-year-last-year")).toContain("4 months");
+    expect(textOf(p(), "md-pay-year-same-month")).toContain("Oct 2025:");
+    expect(textOf(p(), "md-pay-year-legend")).toContain("2025");
   });
 
   it("says so when there is no payroll at all", async () => {
@@ -182,7 +222,7 @@ describe("Monthly tab", () => {
     expect(textOf(p(), "md-note")).toContain("The list of payroll months could not be loaded");
     // no month to name: the server picks its own
     expect(lastRequest(p(), "people")?.get("month")).toBeNull();
-    expect(textOf(p(), "md-pay-people-count-value")).toBe("29");
+    expect(textOf(p(), "md-pay-people-count-value")).toBe("16");
   });
 
   it("shows the server's notes", async () => {
@@ -201,19 +241,19 @@ describe("Departments tab", () => {
     const req = lastRequest(p(), "department-breakdown")!;
     expect(req.get("month")).toBe("2026-10");
     expect(req.get("department")).toBeNull(); // this tab compares every department
-    expect(textOf(p(), "md-pay-dept-count-value")).toBe("5");
-    expect(textOf(p(), "md-pay-dept-cost-value")).toBe("₹5.7 L");
-    expect(textOf(p(), "md-pay-dept-cost")).toContain("largest: Cutting (29.1%)");
-    expect(textOf(p(), "md-pay-dept-attendance-value")).toBe("98.1%");
+    expect(req.get("type")).toBe("staff");
+    expect(textOf(p(), "md-pay-dept-count-value")).toBe("4");
+    expect(textOf(p(), "md-pay-dept-cost-value")).toBe("₹3.8 L");
+    expect(textOf(p(), "md-pay-dept-cost")).toContain("largest: Cutting (39.6%)");
+    expect(textOf(p(), "md-pay-dept-attendance-value")).toBe("98.4%");
     // the table: biggest company cost first, a totals row, the change against the month before
     expect(rows("md-pay-dept-table").map((r) => r.dataset.testid)).toEqual([
       "row-Cutting|Unit 1",
-      "row-Stitching|Unit 1",
       "row-Maintenance|Unit 1",
       "row-Accounts|Head Office",
-      "row-Packing|Unit 1",
+      "row-Stitching|Unit 1",
     ]);
-    expect(textOf(p(), "row-Packing|Unit 1")).toContain("▼ -24.3%");
+    expect(textOf(p(), "row-Accounts|Head Office")).toContain("+3.5%");
     expect(textOf(p(), "row-totals")).toContain("All departments");
     expect(textOf(p(), "row-totals")).toContain("100%");
   });
@@ -225,7 +265,7 @@ describe("Departments tab", () => {
     await p().click('[data-testid="md-pay-dept-table"] [data-testid="sort-department"]');
     expect(rows("md-pay-dept-table")[0].dataset.testid).toBe("row-Stitching|Unit 1");
     await p().click('[data-testid="md-pay-dept-table"] [data-testid="sort-employees"]');
-    expect(rows("md-pay-dept-table")[0].dataset.testid).toBe("row-Stitching|Unit 1"); // 9 employees
+    expect(rows("md-pay-dept-table")[0].dataset.testid).toBe("row-Cutting|Unit 1"); // 7 staff
   });
 
   it("opens a department's employees on the Employees tab", async () => {
@@ -241,7 +281,7 @@ describe("Departments tab", () => {
     page = await openPayroll("/md/payroll?view=departments&department=Accounts");
     expect(textOf(p(), "md-pay-dept-chosen")).toContain("Accounts is highlighted");
     expect(by(p(), "row-Accounts|Head Office")?.getAttribute("aria-current")).toBe("true");
-    expect(rows("md-pay-dept-table")).toHaveLength(5);
+    expect(rows("md-pay-dept-table")).toHaveLength(4);
   });
 
   it("switches what the comparison chart shows", async () => {
@@ -276,15 +316,16 @@ describe("Employees tab", () => {
       "1",
       "25",
     ]);
-    expect(textOf(p(), "md-pay-people-count-value")).toBe("29");
-    expect(textOf(p(), "md-pay-people-net-value")).toBe("₹4.9 L");
-    expect(rows("md-pay-people-table")).toHaveLength(25);
+    expect(req.get("type")).toBe("staff");
+    expect(textOf(p(), "md-pay-people-count-value")).toBe("16");
+    expect(textOf(p(), "md-pay-people-net-value")).toBe("₹3.3 L");
+    expect(rows("md-pay-people-table")).toHaveLength(16);
     expect(textOf(p(), "row-101")).toContain("Anitha Raman");
-    expect(textOf(p(), "row-101")).toContain("₹31,800");
+    expect(textOf(p(), "row-101")).toContain("₹32,400");
     expect(textOf(p(), "row-106")).toContain("On hold");
-    expect(textOf(p(), "row-103")).toContain("4 periods");
-    expect(textOf(p(), "row-totals")).toContain("All 29 matching");
-    expect(textOf(p(), "md-pay-pager-range")).toBe("1–25 of 29 employees");
+    expect(by(p(), "row-103")).toBeNull(); // a production worker is on the Production side
+    expect(textOf(p(), "row-totals")).toContain("All 16 matching");
+    expect(textOf(p(), "md-pay-pager-range")).toBe("1–16 of 16 employees");
   });
 
   it("searches by name or code once typing pauses, and starts again at page 1", async () => {
@@ -314,7 +355,7 @@ describe("Employees tab", () => {
     await p().click('[data-testid="md-pay-clear-search"]');
     expect(url(p())).toBe("/md/payroll?view=employees");
     expect((by(p(), "md-pay-search") as HTMLInputElement).value).toBe("");
-    expect(rows("md-pay-people-table")).toHaveLength(25);
+    expect(rows("md-pay-people-table")).toHaveLength(16);
   });
 
   it("sorts on the server by a column header, turning the direction on a second click", async () => {
@@ -340,13 +381,20 @@ describe("Employees tab", () => {
   });
 
   it("pages through the list", async () => {
-    page = await openPayroll("/md/payroll?view=employees");
+    // ten a page, so the sixteen staff of the fixture need two
+    page = await openPayroll("/md/payroll?view=employees", {
+      "/api/md/payroll/people": (params) => {
+        const ten = new URLSearchParams(params);
+        ten.set("pageSize", "10");
+        return peopleFixture(ten);
+      },
+    });
     expect(by(p(), "md-pay-page-prev")?.hasAttribute("disabled")).toBe(true);
     await p().click('[data-testid="md-pay-page-next"]');
     expect(url(p())).toBe("/md/payroll?view=employees&page=2");
     expect(lastRequest(p(), "people")?.get("page")).toBe("2");
-    expect(rows("md-pay-people-table")).toHaveLength(4);
-    expect(textOf(p(), "md-pay-pager-range")).toBe("26–29 of 29 employees");
+    expect(rows("md-pay-people-table")).toHaveLength(6);
+    expect(textOf(p(), "md-pay-pager-range")).toBe("11–16 of 16 employees");
     expect(textOf(p(), "md-pay-page-of")).toBe("Page 2 of 2");
     expect(by(p(), "md-pay-page-next")?.hasAttribute("disabled")).toBe(true);
     await p().click('[data-testid="md-pay-page-prev"]');
@@ -383,7 +431,7 @@ describe("Employees tab", () => {
     expect(table.className).toContain("hidden");
     expect(table.className).toContain("@3xl:block");
     expect(cards.className).toContain("@3xl:hidden");
-    expect(cards.querySelectorAll("li")).toHaveLength(25);
+    expect(cards.querySelectorAll("li")).toHaveLength(16);
     expect(by(p(), "md-pay-sort")?.parentElement?.className).toContain("@3xl:hidden");
     // the wide table scrolls inside its own box, never the page
     expect(by(p(), "md-pay-people-table")?.className).toContain("overflow-x-auto");
@@ -457,7 +505,7 @@ describe("An employee's history", () => {
       "hidden @3xl:block",
     );
     expect(cards.querySelectorAll("li")).toHaveLength(14);
-    expect(textOf(p(), "md-pay-history-card-2026-10")).toContain("₹31,800");
+    expect(textOf(p(), "md-pay-history-card-2026-10")).toContain("₹32,400");
     expect(textOf(p(), "md-pay-history-card-2026-09")).not.toContain("Adjustment by HR");
     await p().click('[data-testid="md-pay-history-card-2026-09"] button');
     expect(textOf(p(), "md-pay-history-card-2026-09")).toContain("Adjustment by HR");
@@ -505,6 +553,7 @@ describe("the page", () => {
     const grid = by(p(), "md-pay-kpis")!;
     expect(grid.className).toContain("grid-cols-2");
     expect(grid.className).toContain("@max-3xl:[&>*:last-child:nth-child(odd)]:col-span-2");
-    expect(grid.children).toHaveLength(9);
+    expect(grid.children).toHaveLength(10);
+    expect(grid.className).toContain("@5xl:grid-cols-5");
   });
 });

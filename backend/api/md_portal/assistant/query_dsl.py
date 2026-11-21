@@ -229,7 +229,7 @@ DATASETS: dict[str, Dataset] = {
             branch_path="branch_id",
             notes=(
                 "Check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception; this dataset has no "
-                "check-out time, so durations and 'inside now' are not available.",
+                "check-out time: for 'inside now', time inside and the check-out share use the visitor tools.",
             ),
         ),
         Dataset(

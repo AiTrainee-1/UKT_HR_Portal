@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -83,8 +84,56 @@ def _log_json(log: TeaBreakLog, allowed_minutes: int, now, photos: dict | None =
 # directly from a view of its own -there is only ever one scan endpoint
 # (POST /api/gate-devices/scan), shared across every QR kind.
 
+MAX_SCAN_COOLDOWN_MINUTES = 60
+
+
+def _local_hhmm(moment) -> str:
+    from .clock import FACTORY_TZ
+
+    return moment.astimezone(FACTORY_TZ).strftime("%H:%M")
+
+
+def _cooldown_answer(employee: Employee, last_action: str, last_at, cooldown_minutes: int, now) -> tuple[dict, int]:
+    """A repeat scan inside the cooldown: nothing is recorded; the gate shows when it was scanned and when it may again."""
+    retry_at = last_at + timedelta(minutes=cooldown_minutes)
+    what = "tea break started" if last_action == "out" else "back from the tea break"
+    message = (
+        f"Already scanned at {_local_hhmm(last_at)} ({what}). Scan again after {_local_hhmm(retry_at)}."
+    )
+    return {
+        "result": "cooldown",
+        "kind": "tea_break",
+        "lastAction": last_action,
+        "lastScanAt": last_at.isoformat(),
+        "retryAt": retry_at.isoformat(),
+        "waitSeconds": max(1, int((retry_at - now).total_seconds() + 0.999)),
+        "cooldownMinutes": cooldown_minutes,
+        "message": message,
+        "employee": _employee_json(employee),
+    }, 409
+
+
 def resolve_tea_break_scan(gate: GateDevice, employee: Employee) -> tuple[dict, int]:
+    """Out, back in, or (inside the cooldown after the employee's last successful scan) nothing at all.
+
+    The employee's row is locked for the length of the decision, so two scans arriving together (a double read, two gates)
+    are decided one after the other: the second sees the first's record and gets the cooldown answer instead of a second
+    break."""
+    with transaction.atomic():
+        Employee.objects.select_for_update().filter(pk=employee.pk).first()
+        return _resolve_tea_break_scan_locked(gate, employee)
+
+
+def _resolve_tea_break_scan_locked(gate: GateDevice, employee: Employee) -> tuple[dict, int]:
     now = timezone.now()
+    rule = TeaBreakRule.get()
+    cooldown = max(0, min(MAX_SCAN_COOLDOWN_MINUTES, rule.scan_cooldown_minutes or 0))
+    if cooldown:
+        latest = TeaBreakLog.objects.filter(employee=employee).order_by("-out_at").only("out_at", "in_at").first()
+        if latest is not None:
+            last_action, last_at = ("in", latest.in_at) if latest.in_at else ("out", latest.out_at)
+            if last_at and now - last_at < timedelta(minutes=cooldown):
+                return _cooldown_answer(employee, last_action, last_at, cooldown, now)
     open_log = (
         TeaBreakLog.objects
         .filter(employee=employee, in_at__isnull=True, out_at__gte=now - STALE_OPEN_CUTOFF)
@@ -99,7 +148,8 @@ def resolve_tea_break_scan(gate: GateDevice, employee: Employee) -> tuple[dict, 
         message = f"Tea break ended -{taken_minutes} min, via {gate.name}"
         return {
             "result": "success", "action": "in", "message": message,
-            "takenMinutes": taken_minutes, "employee": _employee_json(employee),
+            "takenMinutes": taken_minutes, "allowedMinutes": rule.allowed_minutes,
+            "employee": _employee_json(employee),
         }, 200
 
     TeaBreakLog.objects.create(employee=employee, out_gate=gate, out_at=now)
@@ -174,15 +224,36 @@ def tea_break_my_status(request: Request) -> Response:
 def tea_break_rule(request: Request) -> Response:
     rule = TeaBreakRule.get()
     if request.method == "PUT":
-        try:
-            minutes = int(request.data.get("allowedMinutes"))
-        except (TypeError, ValueError):
-            return Response({"error": "allowedMinutes must be a whole number"}, status=400)
-        if minutes < 1:
-            return Response({"error": "allowedMinutes must be at least 1"}, status=400)
-        rule.allowed_minutes = minutes
-        rule.save(update_fields=["allowed_minutes", "updated_at"])
-    return Response({"allowedMinutes": rule.allowed_minutes, "updatedAt": rule.updated_at.isoformat()})
+        fields = ["updated_at"]
+        if "allowedMinutes" in request.data or "scanCooldownMinutes" not in request.data:
+            try:
+                minutes = int(request.data.get("allowedMinutes"))
+            except (TypeError, ValueError):
+                return Response({"error": "allowedMinutes must be a whole number"}, status=400)
+            if minutes < 1:
+                return Response({"error": "allowedMinutes must be at least 1"}, status=400)
+            rule.allowed_minutes = minutes
+            fields.append("allowed_minutes")
+        if "scanCooldownMinutes" in request.data:
+            try:
+                cooldown = int(request.data.get("scanCooldownMinutes"))
+            except (TypeError, ValueError):
+                return Response({"error": "scanCooldownMinutes must be a whole number"}, status=400)
+            if not 0 <= cooldown <= MAX_SCAN_COOLDOWN_MINUTES:
+                return Response(
+                    {"error": f"scanCooldownMinutes must be between 0 and {MAX_SCAN_COOLDOWN_MINUTES}"}, status=400
+                )
+            rule.scan_cooldown_minutes = cooldown
+            fields.append("scan_cooldown_minutes")
+        rule.save(update_fields=fields)
+    return Response(
+        {
+            "allowedMinutes": rule.allowed_minutes,
+            # added 2026-11-21: minutes after a successful scan in which the same employee's next scan creates nothing
+            "scanCooldownMinutes": rule.scan_cooldown_minutes,
+            "updatedAt": rule.updated_at.isoformat(),
+        }
+    )
 
 
 @api_view(["GET"])

@@ -1,15 +1,18 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ toast, useToast: () => ({ toast }) }));
 
 import MdLayout from "@/components/md/MdLayout";
+import { preloadMdShell } from "@/components/md/shell/loader";
 import { HODS, PENDING, hod, item } from "./approvals/fixtures";
 import type { HodRequestsResponse } from "./approvals/types";
 import MdApprovals from "./MdApprovals";
 import { renderMdPage, type Fixtures, type RenderedPage } from "./testing/renderMdPage";
 
 let page: RenderedPage | undefined;
+// the MD shell is a lazy chunk (components/md/shell/loader.ts): have it in before the first page renders
+beforeAll(() => preloadMdShell(), 60_000);
 afterEach(() => {
   page?.unmount();
   page = undefined;
@@ -58,11 +61,11 @@ describe("HOD Approvals", () => {
 
   it("starts another head (picked in the sidebar) on every type of request again", async () => {
     page = await renderMdPage(MdApprovals, data(), { path: "/md/approvals/5" });
-    await page.click('[data-testid="md-approvals-group-permission"]');
+    await page.click('[data-testid="md-approvals-kind-permission"]');
     expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(1);
     await page.click('[data-testid="md-nav-approvals-hods"] a[href="/md/approvals/8"]');
     expect(byTestId(page, "md-approvals-panel")?.getAttribute("data-hod")).toBe("8");
-    expect(byTestId(page, "md-approvals-group-all")?.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId(page, "md-approvals-kind-all")?.getAttribute("aria-checked")).toBe("true");
   });
 
   it("shows the sidebar's sub-menu with the heads, each with their count, linking to their pages", async () => {
@@ -127,7 +130,15 @@ describe("HOD Approvals", () => {
 
   it("shows 10 requests a page and the rest through the pages", async () => {
     const many = Array.from({ length: 23 }, (_, i) =>
-      item({ key: `leave-${i + 1}`, id: i + 1, group: i < 20 ? "leave" : "other" }),
+      i < 20
+        ? item({ key: `leave-${i + 1}`, id: i + 1 })
+        : item({
+            key: `resignation-${i + 1}`,
+            id: i + 1,
+            kind: "resignation",
+            kindLabel: "Resignation",
+            group: "other",
+          }),
     );
     const body = { ...PENDING, items: many, counts: { leave: 20, permission: 0, other: 3, total: 23 } };
     page = await renderMdPage(MdApprovals, data({ "/api/md/approvals/hods/5": body }), { path: "/md/approvals/5" });
@@ -144,16 +155,16 @@ describe("HOD Approvals", () => {
     await page.click('[data-testid="md-approvals-page-prev"]');
     expect(range()).toBe("Showing 11–20 of 23");
     // another type starts again at page 1
-    await page.click('[data-testid="md-approvals-group-leave"]');
+    await page.click('[data-testid="md-approvals-kind-leave"]');
     expect(range()).toBe("Showing 1–10 of 20");
-    await page.click('[data-testid="md-approvals-group-other"]');
+    await page.click('[data-testid="md-approvals-kind-resignation"]');
     expect(rows()).toHaveLength(3);
     expect(byTestId(page, "md-approvals-page-prev")).toBeNull(); // one page: no page buttons
   });
 
   it("filters by type, and asks the server for the history when the status changes", async () => {
     page = await renderMdPage(MdApprovals, data(), { path: "/md/approvals/5" });
-    await page.click('[data-testid="md-approvals-group-permission"]');
+    await page.click('[data-testid="md-approvals-kind-permission"]');
     expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(1);
     expect(byTestId(page, "md-approval-permission-48")).not.toBeNull();
     await page.click('[data-testid="md-approvals-status-approved"]');
@@ -265,7 +276,7 @@ describe("HOD Approvals", () => {
     expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Rejected: Surya M's leave" }));
   });
 
-  it("shows when the employee submitted the request, to the minute", async () => {
+  it("shows when the employee submitted the request, to the second", async () => {
     const at = "2026-11-11T09:52:00";
     const body = {
       ...PENDING,
@@ -275,10 +286,112 @@ describe("HOD Approvals", () => {
     page = await renderMdPage(MdApprovals, data({ "/api/md/approvals/hods/5": body }), { path: "/md/approvals/5" });
     const card = byTestId(page, "md-approval-leave-14")!;
     expect(card.querySelector('[data-testid="md-approval-submitted"]')?.textContent).toMatch(
-      /^Submitted 11 Nov 2026, 9:52 am( · .+)?$/,
+      /^Submitted 11 Nov 2026, 9:52:00 am( · .+)?$/,
     );
     expect(card.textContent).toContain("12 Nov 2026 – 13 Nov 2026"); // the dates asked for
     expect(card.textContent).toContain("Fever"); // the employee's reason
+  });
+
+  it("opens on an overview: what waits now, what came in, how it was decided, by type and over six months", async () => {
+    const decided = item({
+      key: "leave-20",
+      id: 20,
+      state: "rejected",
+      status: "rejected",
+      statusLabel: "Rejected",
+      canApprove: false,
+      canReject: false,
+      steps: [
+        {
+          label: null,
+          roles: ["hod"],
+          state: "rejected",
+          by: "Test MD (MD, for Sandhya Krishnan)",
+          at: "2026-11-12T10:00:00",
+          comment: "Clash with the audit",
+        },
+      ],
+    });
+    page = await renderMdPage(
+      MdApprovals,
+      data({
+        "/api/md/approvals/hods/5": (params) =>
+          params.get("status") === "all"
+            ? { ...PENDING, status: "all", items: [...PENDING.items, decided], counts: { ...PENDING.counts, total: 4 } }
+            : { ...PENDING, status: params.get("status") ?? "pending" },
+      }),
+      { path: "/md/approvals/5" },
+    );
+    expect(page.requests()).toContain("/api/md/approvals/hods/5?status=all");
+    expect(byTestId(page, "md-approvals-kpi-waiting-value")?.textContent).toBe("3");
+    expect(byTestId(page, "md-approvals-kpi-received-value")?.textContent).toBe("4");
+    expect(byTestId(page, "md-approvals-kpi-rate-value")?.textContent).toBe("0%");
+    expect(byTestId(page, "md-approvals-summary")?.textContent).toContain("4 requests reached Sandhya");
+    expect(byTestId(page, "md-approvals-by-kind")?.textContent).toContain("Resignation");
+    // a type in the chart narrows the list to it; a status figure switches the list's status
+    await page.click('[data-testid="md-approvals-by-kind"] [data-testid="bar-permission"] button');
+    expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(1);
+    await page.click('[data-testid="md-approvals-kpi-rate"]');
+    expect(page.requests()).toContain("/api/md/approvals/hods/5?status=approved");
+  });
+
+  it("keeps the filters in the address: month, type and search narrow the list", async () => {
+    page = await renderMdPage(MdApprovals, data(), { path: "/md/approvals/5?kind=leave&q=surya" });
+    expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(1);
+    expect(byTestId(page, "md-approvals-kind-leave")?.getAttribute("aria-checked")).toBe("true");
+    expect((byTestId(page, "md-approvals-search") as HTMLInputElement).value).toBe("surya");
+    await page.type('[data-testid="md-approvals-search"]', "nobody");
+    expect(page.text()).toContain("No request matches these filters");
+  });
+
+  it("a month shows only the requests for that month", async () => {
+    page = await renderMdPage(MdApprovals, data(), { path: "/md/approvals/5?month=2026-10" });
+    expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(0);
+    expect(page.text()).toContain("No request matches these filters");
+    await page.click('[data-testid="md-approvals-all-months"]');
+    expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(3);
+  });
+
+  it("every card says the request date, the date(s) it is for and the reason; Details opens it in full", async () => {
+    page = await renderMdPage(MdApprovals, data(), { path: "/md/approvals/5" });
+    const card = byTestId(page, "md-approval-resignation-3")!;
+    expect(card.querySelector('[data-testid="md-approval-facts"]')?.textContent).toContain("Last working day");
+    expect(card.querySelector('[data-testid="md-approval-requested"]')?.textContent).toBe("10 Dec 2026");
+    expect(card.textContent).toContain("Moving away");
+    await page.click('[data-testid="md-approval-resignation-3"] [data-testid="md-approval-details"]');
+    const sheet = document.body.querySelector('[data-testid="md-approval-details-sheet"]');
+    expect(sheet?.textContent).toContain("Request date");
+    expect(sheet?.textContent).toContain("Submitted at");
+    expect(sheet?.querySelector('[data-testid="md-approval-details-reason"]')?.textContent).toBe("Moving away");
+  });
+
+  it("a rejected request shows who rejected it and the reason", async () => {
+    const rejected = item({
+      state: "rejected",
+      status: "rejected",
+      statusLabel: "Rejected",
+      canApprove: false,
+      canReject: false,
+      steps: [
+        {
+          label: null,
+          roles: ["hod"],
+          state: "rejected",
+          by: "Sandhya Krishnan",
+          at: "2026-11-12T10:00:00",
+          comment: "Short staffed",
+        },
+      ],
+    });
+    page = await renderMdPage(
+      MdApprovals,
+      data({ "/api/md/approvals/hods/5": { ...PENDING, status: "rejected", items: [rejected] } }),
+      { path: "/md/approvals/5?status=rejected" },
+    );
+    expect(byTestId(page, "md-approvals-status-rejected")?.getAttribute("aria-checked")).toBe("true");
+    expect(byTestId(page, "md-approval-decision")?.textContent).toBe(
+      "Rejected by Sandhya Krishnan · reason: “Short staffed”",
+    );
   });
 
   it("warns before approving a resignation that may deactivate the employee", async () => {

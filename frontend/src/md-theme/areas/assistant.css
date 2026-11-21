@@ -23,6 +23,96 @@
     display: none;
   }
 }
+/* Its motion, in CSS (the keyframes are in AssistantHost.tsx): it springs in when it appears, grows a little under the
+   pointer and shrinks away when the panel opens. The springs are framer-motion's (stiffness 380 / damping 26 for the
+   launcher, 320 / 24 for the bubble, mass 1) written out as linear() curves, so it moves as it always did without the
+   library; a browser without linear() falls back to the default ease. */
+.md-assistant-launcher {
+  --md-assistant-spring: linear(
+    0,
+    0.0447,
+    0.1535,
+    0.2949,
+    0.4458,
+    0.5903,
+    0.7185,
+    0.8255,
+    0.9097,
+    0.9721,
+    1.0151,
+    1.0418,
+    1.0557,
+    1.0601,
+    1.0579,
+    1.0517,
+    1.0433,
+    1.0343,
+    1.0255,
+    1.0177,
+    1.0111,
+    1.0059,
+    1.002,
+    0.9993,
+    0.9976,
+    0.9967,
+    0.9964,
+    0.9965,
+    0.9968,
+    0.9973,
+    1
+  );
+  --md-assistant-spring-soft: linear(
+    0,
+    0.044,
+    0.1511,
+    0.2907,
+    0.4398,
+    0.5831,
+    0.7106,
+    0.8176,
+    0.9022,
+    0.9654,
+    1.0095,
+    1.0374,
+    1.0525,
+    1.0581,
+    1.0569,
+    1.0515,
+    1.0437,
+    1.0351,
+    1.0266,
+    1.0188,
+    1.0123,
+    1.007,
+    1.0029,
+    1.0001,
+    0.9982,
+    0.9971,
+    0.9967,
+    0.9966,
+    0.9969,
+    0.9973,
+    1
+  );
+}
+@media (prefers-reduced-motion: no-preference) {
+  .md-assistant-launcher[data-state="shown"] {
+    transition: scale 495ms var(--md-assistant-spring);
+    animation: md-assistant-launcher-in 495ms var(--md-assistant-spring) backwards;
+  }
+  .md-assistant-launcher[data-state="shown"]:hover {
+    scale: 1.04;
+  }
+  .md-assistant-launcher[data-state="shown"] .md-assistant-bubble {
+    animation:
+      md-assistant-bubble-in 535ms var(--md-assistant-spring-soft) 350ms backwards,
+      md-assistant-bob 4.2s ease-in-out infinite;
+  }
+  .md-assistant-launcher[data-state="leaving"] {
+    pointer-events: none;
+    animation: md-assistant-launcher-out 340ms ease-out forwards;
+  }
+}
 .md-assistant-launcher button:focus-visible {
   outline: 2px solid var(--md-wine-500);
   outline-offset: -12px;
@@ -98,8 +188,8 @@
     -28px 0 64px -22px rgba(40, 43, 74, 0.4),
     -3px 0 14px rgba(40, 43, 74, 0.07),
     inset 1px 0 0 rgba(255, 255, 255, 0.5);
-  -webkit-backdrop-filter: blur(28px) saturate(1.5);
-  backdrop-filter: blur(28px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
+  backdrop-filter: blur(16px) saturate(1.5);
 }
 
 .md-assistant-header {

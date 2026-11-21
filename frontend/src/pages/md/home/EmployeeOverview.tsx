@@ -1,18 +1,7 @@
-import { Factory, Users, UserRound } from "lucide-react";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { ArrowUpRight, Factory, Users, UserRound } from "lucide-react";
+import { Link } from "wouter";
 import AskAiButton from "@/components/md/kit/AskAiButton";
-import { axisStyle, gridProps, tooltipStyle } from "@/components/md/kit/chartTheme";
+import { Donut, StackedBars } from "@/components/md/kit/LiteCharts";
 import { num, pct } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import type { HomeEmployees } from "./home-types";
@@ -94,16 +83,21 @@ export default function EmployeeOverview({
   const units = data?.units ?? [];
   const split = data
     ? [
-        { name: "Staff", value: data.staff, color: HOME_COLORS.staff },
-        { name: "Production", value: data.production, color: HOME_COLORS.production },
+        { key: "staff", name: "Staff", label: "Staff", value: data.staff, color: HOME_COLORS.staff },
+        {
+          key: "production",
+          name: "Production",
+          label: "Production",
+          value: data.production,
+          color: HOME_COLORS.production,
+        },
       ].filter((s) => s.value > 0)
     : [];
-  const chartHeight = Math.max(160, units.length * 46 + 30);
 
   return (
     <Reveal
-      index={0}
-      className="md-card md-dashboard-card @container"
+      index={1}
+      className="md-card md-dashboard-card md-dashboard-defer @container"
       testId="md-home-employees"
       labelledBy="md-home-employees-title"
     >
@@ -113,10 +107,13 @@ export default function EmployeeOverview({
         subtitle="Active employees: staff and production, and how they are spread across the units"
       >
         <AskAiButton question="How is our workforce split between staff and production in each unit?" />
+        <Link href="/md/employees" className="md-btn md-btn-soft md-btn-sm">
+          Employees <ArrowUpRight size={12} aria-hidden />
+        </Link>
       </OverviewHeader>
 
       {loading || error || !data ? (
-        <CardState loading={loading || (!error && !data)} error={error} onRetry={onRetry} />
+        <CardState loading={loading || (!error && !data)} error={error} onRetry={onRetry} shape="employees" />
       ) : (
         <div className="grid grid-cols-1 items-start gap-6 @4xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
           <div className="space-y-3">
@@ -141,34 +138,16 @@ export default function EmployeeOverview({
             </div>
             {split.length > 0 && (
               <div className="md-panel flex items-center gap-4 rounded-2xl p-3 @lg:p-4">
-                <div
-                  className="relative h-[112px] w-[112px] shrink-0 @lg:h-[132px] @lg:w-[132px]"
-                  data-testid="md-home-split-ring"
+                <Donut
+                  segments={split}
+                  inner={0.66}
+                  format={num}
+                  className="h-[112px] w-[112px] shrink-0 @lg:h-[132px] @lg:w-[132px]"
+                  testId="md-home-split-ring"
                 >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={split}
-                        dataKey="value"
-                        nameKey="name"
-                        innerRadius="66%"
-                        outerRadius="96%"
-                        paddingAngle={2.5}
-                        cornerRadius={5}
-                        stroke="none"
-                      >
-                        {split.map((s) => (
-                          <Cell key={s.name} fill={s.color} />
-                        ))}
-                      </Pie>
-                      <Tooltip contentStyle={tooltipStyle} formatter={(v, name) => [num(Number(v)), name]} />
-                    </PieChart>
-                  </ResponsiveContainer>
-                  <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="md-dashboard-figure text-xl font-black text-md-ink">{num(data.total)}</span>
-                    <span className="text-[11px] font-semibold uppercase tracking-wide text-md-ink-soft">people</span>
-                  </div>
-                </div>
+                  <span className="md-dashboard-figure text-xl font-black text-md-ink">{num(data.total)}</span>
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-md-ink-soft">people</span>
+                </Donut>
                 <ul className="min-w-0 flex-1 space-y-2 text-sm">
                   {split.map((s) => (
                     <li key={s.name} className="flex items-center justify-between gap-2">
@@ -199,34 +178,18 @@ export default function EmployeeOverview({
               <p className="py-8 text-center text-sm text-md-ink-soft">No active employees yet.</p>
             ) : (
               <>
-                <div style={{ height: chartHeight }} data-testid="md-home-units-chart">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart
-                      data={units}
-                      layout="vertical"
-                      margin={{ top: 4, right: 16, bottom: 4, left: 4 }}
-                      barSize={22}
-                    >
-                      <CartesianGrid {...gridProps} horizontal={false} vertical />
-                      <XAxis type="number" allowDecimals={false} tick={axisStyle} axisLine={false} tickLine={false} />
-                      <YAxis
-                        type="category"
-                        dataKey="name"
-                        width={96}
-                        tick={axisStyle}
-                        axisLine={false}
-                        tickLine={false}
-                      />
-                      <Tooltip
-                        contentStyle={tooltipStyle}
-                        cursor={{ fill: "rgba(127, 1, 31, 0.05)" }}
-                        formatter={(v, name) => [num(Number(v)), name === "staff" ? "Staff" : "Production"]}
-                      />
-                      <Bar dataKey="staff" stackId="people" fill={HOME_COLORS.staff} radius={[6, 0, 0, 6]} />
-                      <Bar dataKey="production" stackId="people" fill={HOME_COLORS.production} radius={[0, 6, 6, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <StackedBars
+                  testId="md-home-units-chart"
+                  format={num}
+                  rows={units.map((u) => ({
+                    key: String(u.id ?? u.name),
+                    name: u.name,
+                    parts: [
+                      { key: "staff", label: "Staff", value: u.staff, color: HOME_COLORS.staff },
+                      { key: "production", label: "Production", value: u.production, color: HOME_COLORS.production },
+                    ],
+                  }))}
+                />
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full text-sm" data-testid="md-home-units-table">
                     <thead>

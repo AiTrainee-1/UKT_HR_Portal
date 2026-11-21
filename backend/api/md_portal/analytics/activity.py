@@ -22,9 +22,11 @@ Decisions that make the numbers mean something to an MD (each one is repeated in
   expression) and the Python ``classify`` used by the tests, and a parity test keeps the two identical.
 * **Factory time.** Days and hours are Asia/Kolkata (``FACTORY_TZ``), never UTC: an entry at 23:30 UTC belongs to the
   next morning in Tirupur. Normal working hours are 7 am to 9 pm Monday to Saturday; Sunday is the weekly off.
-* **Honesty about coverage.** Several things are NOT written to the audit trail today (salary-record edits, advances,
-  increments, promotions, payroll approval, leave and missing-punch approvals; a single-employee edit does not say what
-  changed). The provenance says so, so the MD never reads their absence as "nothing happened".
+* **Honesty about coverage.** Since 2026-11 HR's approvals and rejections are written (``hr_access.log_decision``)
+  and every change an HR Manager or HR Assistant saves is written by the permission middleware
+  (``hr_activity_views.record_write``); what is still NOT written (looking at screens, and the changes of Admin
+  accounts on pages that do not log themselves) is said in the provenance, so the MD never reads an absence as
+  "nothing happened".
 * **Privacy.** ``old_values`` / ``new_values`` (which can hold salaries) are never selected. Assistant tools return the
   actor and a generic description of what happened, never the free text of an entry (it can contain employee names).
 
@@ -47,6 +49,7 @@ from django.db.models.functions import ExtractHour, Lower, TruncDate, TruncMinut
 from django.utils import timezone
 
 from ...auth_views import HR_LOCKOUT_THRESHOLD, HR_LOCKOUT_WINDOW_MINUTES
+from ...hr_access import CATEGORY_LABEL
 from ...clock import FACTORY_TZ, ist_today
 from ...models import AuditLog, HRUser, HrLoginAttempt, LoginSession
 from ...permission_registry import resolve_permission
@@ -88,10 +91,10 @@ PRIVILEGED_MODULES = ("payroll", "production_payroll", "salary", "settlement", "
 
 #: What the audit trail does not record today (checked against every ``log_action`` caller). Repeated in provenance.
 NOT_RECORDED = (
-    "The audit trail records changes, deletions, uploads, exports and backups made in the HR portal. It does not record "
-    "looking at screens, and it does not record salary-record edits, advances, increments, promotions, payroll "
-    "approvals, leave or missing-punch approvals; a single-employee edit is recorded without saying what changed. "
-    "Their absence here does not mean they did not happen."
+    "The audit trail records changes, deletions, uploads, exports, backups, settings changes and every approval or "
+    "rejection made in the HR portal, and every change an HR Manager or HR Assistant saves. It does not record looking "
+    "at screens, and some changes an Admin account makes on pages that do not log themselves (a salary-record edit, "
+    "for example) are not written. Their absence here does not mean they did not happen."
 )
 
 # ─── the sensitivity rule table ───────────────────────────────────────────────────────────────────────────────
@@ -159,6 +162,9 @@ class Rule:
 
 _NOT_IN_FILE = "not in the bulk-update file"
 _PAY_MODULES = ("salary", "salary_slip", "increment", "promotion", "settlement")
+# modules some views write under their screen's name (payroll_excess_views.AUDIT_MODULE, salary_slip_center.views)
+PAYROLL_EXCESS_MODULE = "Payroll Excess"
+SALARY_SLIP_MODULE = "Salary Slip"
 _PAYROLL_MODULES = ("payroll", "production_payroll")
 
 #: In priority order: the FIRST rule an entry matches decides its category and severity. The vocabulary is what
@@ -206,12 +212,23 @@ RULES: tuple[Rule, ...] = (
     Rule("app-version", "settings", "medium", "Mobile app version published or changed",
          actions=("create", "update"), modules=("mobile_app_version",)),
     # payroll and pay: what people are paid
+    # Settlement -> advance / term loan decisions (2026-11-20), before the pay-record rule below
+    Rule("advance-decided", "payroll", "medium", "Advance or term loan approved or rejected",
+         actions=("approve", "reject"), modules=("settlement",)),
     Rule("pay-record-changed", "payroll", "high", "Salary, increment, promotion or settlement record changed",
          actions=("create", "update", "approve", "lock", "reject", "delete"), modules=_PAY_MODULES),
     Rule("payroll-finalised", "payroll", "high", "Payroll approved or locked",
          actions=("approve", "lock"), modules=_PAYROLL_MODULES),
     Rule("payroll-generated", "payroll", "high", "Payroll generated or changed", modules=_PAYROLL_MODULES),
     Rule("bonus-generated", "payroll", "medium", "Bonus register generated", actions=("create",), modules=("bonus",)),
+    # Staff / Production Payroll -> Excess (2026-11-20): money added to or detected from a payroll by hand
+    Rule("payroll-excess", "payroll", "high", "Payroll excess or detection added, changed or removed",
+         modules=(PAYROLL_EXCESS_MODULE,)),
+    # Salary Slip (2026-11-20): slips, statements and bank files made from attendance and salary; holds and releases
+    Rule("salary-slip-hold", "payroll", "high", "Salary slip held or released",
+         actions=("hold", "release"), modules=(SALARY_SLIP_MODULE,)),
+    Rule("salary-slip-generated", "payroll", "medium", "Salary slips, statement or bank file generated",
+         modules=(SALARY_SLIP_MODULE,)),
     Rule("overtime-decided", "payroll", "medium", "Overtime assigned, announced or rejected",
          actions=("announce", "assign", "reject"), modules=("compensation",)),
     Rule("compensation-rules", "settings", "high", "Compensation rules or switches changed",
@@ -224,6 +241,17 @@ RULES: tuple[Rule, ...] = (
          modules=("shared_endpoints",)),
     Rule("sms-control", "settings", "high", "SMS code delivery changed (channel, switches or limits)",
          actions=("update",), modules=("sms_control",)),
+    # WhatsApp Control (Meta Cloud API, 2026-11-20), Gmail Control and Phone Notify Control: what the company sends
+    Rule("whatsapp-control", "settings", "high", "WhatsApp messaging changed (switches, templates, numbers or queue)",
+         actions=("create", "update", "delete", "sync"), modules=("whatsapp_control",)),
+    Rule("gmail-control", "settings", "high", "Email (Gmail) sending changed",
+         actions=("create", "update", "delete"), modules=("gmail_control",)),
+    Rule("phone-notify-control", "settings", "medium", "Phone alert settings, recipients or wording changed",
+         actions=("create", "update", "delete"), modules=("phone_notify_control",)),
+    Rule("production-special-shift", "settings", "medium", "Production special shift added, changed or removed",
+         modules=("production_special_shift",)),
+    Rule("md-assistant-settings", "settings", "medium", "Managing Director's assistant settings changed",
+         actions=("update",), modules=("md_assistant",)),
     Rule("bulk-pay-change", "payroll", "high", "Salary or bank details changed by bulk upload",
          modules=("employees",), starts=("Bulk-updated employee",),
          has_any=("salary", "bank", "pf number", "esi number"), burst=True),
@@ -310,11 +338,16 @@ AREAS: dict[str, tuple[str, str]] = {
     "attendance": ("attendance", "Attendance"),
     "shifts": ("attendance", "Attendance"),
     "missing_punch": ("attendance", "Attendance"),
-    "geo_attendance": ("attendance", "Attendance"),
+    "production_special_shift": ("attendance", "Attendance"),  # Manage Shifts -> production special shifts
+    # Geo Attendance (its own module since 2026-11-06) and the On-Duty route tracking
+    "geo_attendance": ("geo", "Geo attendance & tracking"),
+    "geo_tracking": ("geo", "Geo attendance & tracking"),
     "payroll": ("payroll", "Payroll & pay"),
     "production_payroll": ("payroll", "Payroll & pay"),
     "salary": ("payroll", "Payroll & pay"),
     "salary_slip": ("payroll", "Payroll & pay"),
+    SALARY_SLIP_MODULE: ("payroll", "Payroll & pay"),
+    PAYROLL_EXCESS_MODULE: ("payroll", "Payroll & pay"),
     "settlement": ("payroll", "Payroll & pay"),
     "increment": ("payroll", "Payroll & pay"),
     "promotion": ("payroll", "Payroll & pay"),
@@ -322,13 +355,22 @@ AREAS: dict[str, tuple[str, str]] = {
     "compensation": ("compensation", "Overtime & compensation"),
     "compensation_settings": ("settings", "Settings"),
     "production_shift_rules": ("settings", "Settings"),
-    "sms_control": ("settings", "Settings"),
+    "shared_endpoints": ("settings", "Settings"),
+    "id_cards": ("settings", "Settings"),
+    # what the company sends: SMS codes, WhatsApp, email, phone alerts, notices and chat
+    "sms_control": ("messaging", "Messages & alerts"),
+    "whatsapp_control": ("messaging", "Messages & alerts"),
+    "gmail_control": ("messaging", "Messages & alerts"),
+    "phone_notify_control": ("messaging", "Messages & alerts"),
+    "notifications": ("messaging", "Messages & alerts"),
+    "chat": ("messaging", "Messages & alerts"),
     "leave": ("leave", "Leave & requests"),
     "casual_leave": ("leave", "Leave & requests"),
     "requests": ("leave", "Leave & requests"),
     "hod_reminders": ("leave", "Leave & requests"),  # the Requests page's Notify tab (Department Head reminders)
     "recruitment": ("recruitment", "Recruitment"),
     "user_management": ("access", "Accounts & access"),
+    "login_devices": ("access", "Accounts & access"),
     "approval_workflow": ("workflow", "Approval workflow"),
     "settings": ("settings", "Settings"),
     "reports": ("reports", "Reports & exports"),
@@ -336,6 +378,12 @@ AREAS: dict[str, tuple[str, str]] = {
     "mobile_app_version": ("mobile", "Mobile app"),
     # Gate Pass, Manage Gates, Visitors and Tea Break (their own audit entries since 2026-11-18)
     "outpass_visitors": ("gate", "Gate & visitors"),
+    # the Managing Director's own decisions (HOD Approvals) and assistant settings
+    "md_approvals": ("md", "MD portal"),
+    "md_assistant": ("md", "MD portal"),
+    # an HR Manager / HR Assistant change on a page that belongs to no module (hr_activity_views.record_write)
+    "dashboard": ("other", "Other"),
+    "general": ("other", "Other"),
 }
 
 
@@ -345,6 +393,84 @@ def area_of(module: str | None) -> tuple[str, str]:
     if name in AREAS:
         return AREAS[name]
     return f"other:{name}", name.replace("_", " ").capitalize() or "Other"
+
+
+def area_modules(area: str) -> tuple[str, ...]:
+    """The audit modules filed under an area key ("payroll" -> payroll, production_payroll, ...; "other:x" -> x)."""
+    if area.startswith("other:"):
+        return (area[len("other:") :],)
+    return tuple(m for m, (key, _label) in AREAS.items() if key == area)
+
+
+@dataclass(frozen=True)
+class Focus:
+    """What the page is narrowed to (2026-11-21): one area of the system and / or one person (the name the audit trail
+    records). Every action figure follows both; sign-ins follow the person (a sign-in belongs to no area)."""
+
+    area: str | None = None
+    actor: str | None = None
+
+    @classmethod
+    def of(cls, area: str | None = None, actor: str | None = None) -> "Focus":
+        area_key = (area or "").strip() or None
+        if area_key and not (area_key.startswith("other:") or area_modules(area_key)):
+            known = sorted({key for key, _label in AREAS.values()})
+            raise MdParamError(f"'{area_key}' is not an area. Choose one of: {', '.join(known)}.")
+        who = " ".join((actor or "").split())[:150] or None
+        return cls(area_key, who)
+
+    def key(self) -> str:
+        return f"a{self.area or ''}|u{(self.actor or '').lower()}"
+
+    @property
+    def empty(self) -> bool:
+        return not (self.area or self.actor)
+
+    def keep(self, g: "Group", *, area: bool = True, actor: bool = True) -> bool:
+        if area and self.area and area_of(g.module)[0] != self.area:
+            return False
+        return not (actor and self.actor and g.user.lower() != self.actor.lower())
+
+    def q(self) -> Q:
+        """The same narrowing for the database (audit rows)."""
+        q = Q()
+        if self.area:
+            q &= Q(module__in=area_modules(self.area))
+        if self.actor:
+            q &= Q(user_name__iexact=self.actor)
+        return q
+
+    def labels(self) -> list[str]:
+        out = []
+        if self.area:
+            out.append(f"Area: {area_label(self.area)}")
+        if self.actor:
+            out.append(f"Person: {self.actor}")
+        return out
+
+
+NO_FOCUS = Focus()
+
+
+def area_label(area: str) -> str:
+    if area.startswith("other:"):
+        return area_of(area[len("other:") :])[1]
+    return next((label for key, label in AREAS.values() if key == area), area)
+
+
+def _focused(groups: Iterable["Group"], focus: Focus | None, **which: bool) -> list["Group"]:
+    if focus is None or focus.empty:
+        return list(groups)
+    return [g for g in groups if focus.keep(g, **which)]
+
+
+def _focus_notes(focus: Focus | None, *, sign_ins: bool = False) -> list[str]:
+    if focus is None or focus.empty:
+        return []
+    out = [f"Showing only {' and '.join(focus.labels())}."]
+    if sign_ins and focus.area:
+        out.append("Sign-ins belong to no area, so they are shown for everyone (or the chosen person).")
+    return out
 
 
 def area_mapping() -> list[dict]:
@@ -458,6 +584,7 @@ class Account:
     privileged: bool
     created_at: datetime
     last_seen: datetime | None  # latest sign-in (before the date asked for, when one was given)
+    category: str = "Admin"  # Super Admin, Managing Director, Admin, HR Manager or HR Assistant (hr_access)
 
 
 def _is_privileged(user: HRUser) -> bool:
@@ -476,6 +603,15 @@ def _role_name(user: HRUser) -> str | None:
     return "Managing Director" if user.is_md else None
 
 
+def _category_label(user: HRUser) -> str:
+    """The account's category as HR names it (hr_access.CATEGORY_LABEL)."""
+    if user.is_super_admin:
+        return CATEGORY_LABEL["super_admin"]
+    if user.is_md:
+        return CATEGORY_LABEL["md"]
+    return CATEGORY_LABEL.get(getattr(user, "category", None) or "", CATEGORY_LABEL["admin"])
+
+
 def _accounts(as_of: datetime | None = None) -> list[Account]:
     """Every HR account (hidden ones too: the audit trail is complete). Reads only the columns needed, never the
     password hash or master features. With ``as_of`` the last sign-in is the latest one BEFORE that moment."""
@@ -488,6 +624,7 @@ def _accounts(as_of: datetime | None = None) -> list[Account]:
         "is_md",
         "last_login",
         "created_at",
+        "category",
         "role",
         "role__name",
         "role__permissions",
@@ -507,6 +644,7 @@ def _accounts(as_of: datetime | None = None) -> list[Account]:
                 privileged=_is_privileged(u),
                 created_at=u.created_at,
                 last_seen=max(seen) if seen else None,
+                category=_category_label(u),
             )
         )
     return out
@@ -840,13 +978,15 @@ def _prov_failed(rows: int | None = None) -> dict:
 
 
 @cached()
-def activity_summary(period: Period) -> dict:
+def activity_summary(period: Period, focus: Focus | None = None) -> dict:
     """The headline figures of the page, each against the previous period of the same length."""
     previous = period.previous()
-    cur_groups, old_groups = _split(_groups(previous.start, period.end), period)
+    cur_groups, old_groups = _split(_focused(_groups(previous.start, period.end), focus), period)
     cur, old = _tally(cur_groups), _tally(old_groups)
 
     days = _sessions_by_day(previous.start, period.end)
+    if focus is not None and focus.actor:
+        days = tuple(s for s in days if s.label.lower() == focus.actor.lower())
     sign_cur = [s for s in days if s.day >= period.start]
     sign_old = [s for s in days if s.day < period.start]
     sign_ins_now, sign_ins_before = sum(s.n for s in sign_cur), sum(s.n for s in sign_old)
@@ -898,8 +1038,67 @@ def activity_summary(period: Period) -> dict:
             [f"Nothing was recorded in the audit trail or the sign-in log for {_when(period)}."]
             if cur.events == 0 and sign_ins_now == 0
             else []
-        ),
+        )
+        + _focus_notes(focus, sign_ins=True),
     )
+
+
+def activity_options(period: Period) -> dict:
+    """What the page's Area and Person filters offer for a period: every area and every person with an action in it
+    (most active first), each with its count. Not narrowed by a focus (it is what a focus is chosen from)."""
+    areas: Counter = Counter()
+    people: Counter = Counter()
+    for g in _groups(period.start, period.end):
+        n = _events(g)
+        areas[area_of(g.module)] += n
+        if g.user != SYSTEM_USER:
+            people[g.user] += n
+    for s in _sessions_by_day(period.start, period.end):
+        people[s.label] += 0  # someone who only signed in can still be chosen
+    by_label = _by_label(_accounts())
+    return envelope(
+        {
+            "areas": [
+                {"area": key, "label": label, "actions": n}
+                for (key, label), n in sorted(areas.items(), key=lambda kv: (-kv[1], kv[0][1]))
+            ],
+            "people": [
+                {"userName": name, "actions": n, "role": _role_of(name, by_label), "kind": actor_kind(name, by_label)}
+                for name, n in sorted(people.items(), key=lambda kv: (-kv[1], kv[0].lower()))
+            ],
+        },
+        period=period,
+        provenance=[
+            prov(
+                "filters",
+                "Area and person filters",
+                dataset="Audit trail and HR-portal sign-ins",
+                definition=(
+                    "The areas of the system and the people with an action in the period, most active first; someone "
+                    "who only signed in is listed with 0. Choosing one narrows every figure on the page; sign-ins "
+                    "follow only the person (a sign-in belongs to no area)."
+                ),
+                formula="audit entries per area and per name (a bulk upload counts once)",
+                filters=["Sign-in entries are not actions"],
+                caveats=[NOT_RECORDED],
+            )
+        ],
+    )
+
+
+def actor_kind(name: str, by_label: dict[str, list["Account"]]) -> str:
+    """What kind of actor a name in the audit trail is: an HR account's category (Super Admin, Managing Director, Admin,
+    HR Manager, HR Assistant), a gate or reception-desk device, the system, or "Unknown" (no such account any more)."""
+    if name == SYSTEM_USER:
+        return "System"
+    if name.startswith(("Gate - ", "Gate #")):
+        return "Gate device"
+    if name.startswith(("Reception desk - ", "Reception desk #")):
+        return "Reception desk"
+    matches = by_label.get(name, [])
+    if len(matches) != 1:
+        return "Several accounts" if matches else "Unknown"
+    return matches[0].category
 
 
 # ─── trend ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -920,7 +1119,7 @@ def _buckets(period: Period) -> tuple[str, list[tuple[date, date]], Callable[[da
 
 
 @cached()
-def activity_trend(period: Period) -> dict:
+def activity_trend(period: Period, focus: Focus | None = None) -> dict:
     """Actions per day (per week for long periods) with the sensitive ones, after-hours ones, sign-ins and failed
     sign-ins alongside, so one chart and the KPI sparklines come from one source."""
     granularity, spans, key = _buckets(period)
@@ -938,7 +1137,7 @@ def activity_trend(period: Period) -> dict:
     }
     people: dict[date, set] = {start: set() for start, _ in spans}
     events = sensitive = 0
-    for g in _groups(period.start, period.end):
+    for g in _focused(_groups(period.start, period.end), focus):
         n, row = _events(g), rows[key(g.day)]
         row["actions"] += n
         events += n
@@ -950,10 +1149,13 @@ def activity_trend(period: Period) -> dict:
         if g.user != SYSTEM_USER:
             people[key(g.day)].add(g.user)
     for s in _sessions_by_day(period.start, period.end):
+        if focus is not None and focus.actor and s.label.lower() != focus.actor.lower():
+            continue
         rows[key(s.day)]["signIns"] += s.n
         people[key(s.day)].add(s.label)
-    for a in _attempts_by_day(period.start, period.end):
-        rows[key(a.day)]["failedSignIns"] += a.failed
+    if focus is None or not focus.actor:  # failed attempts are per typed username, not per person
+        for a in _attempts_by_day(period.start, period.end):
+            rows[key(a.day)]["failedSignIns"] += a.failed
     points = []
     for start, _end in spans:
         rows[start]["activeUsers"] = len(people[start])
@@ -988,7 +1190,8 @@ def activity_trend(period: Period) -> dict:
             ),
             _prov_sensitive(sensitive),
         ],
-        notes=[] if events or any(p["signIns"] for p in points) else [f"Nothing was recorded for {_when(period)}."],
+        notes=([] if events or any(p["signIns"] for p in points) else [f"Nothing was recorded for {_when(period)}."])
+        + _focus_notes(focus, sign_ins=True),
     )
 
 
@@ -996,10 +1199,11 @@ def activity_trend(period: Period) -> dict:
 
 
 @cached()
-def activity_by_area(period: Period) -> dict:
-    """Actions by area of the system, ranked, each compared with the previous period."""
+def activity_by_area(period: Period, focus: Focus | None = None) -> dict:
+    """Actions by area of the system, ranked, each compared with the previous period. Follows the chosen person; every
+    area stays listed (the page marks the chosen one), so the MD can switch."""
     previous = period.previous()
-    cur_groups, old_groups = _split(_groups(previous.start, period.end), period)
+    cur_groups, old_groups = _split(_focused(_groups(previous.start, period.end), focus, area=False), period)
     areas: dict[str, dict] = {}
 
     def slot(module: str) -> dict:
@@ -1050,7 +1254,7 @@ def activity_by_area(period: Period) -> dict:
                 ),
                 formula="audit entries per area (a bulk upload counts once); share = area ÷ all actions",
                 rows=total,
-                filters=["Sign-in entries left out"],
+                filters=["Sign-in entries left out", *(focus.labels() if focus and focus.actor else [])],
                 caveats=[NOT_RECORDED],
             )
         ],
@@ -1061,11 +1265,12 @@ def activity_by_area(period: Period) -> dict:
 
 
 @cached()
-def activity_users(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict:
-    """Actions by person: the most active first, with their share, sensitive and after-hours actions and last activity."""
+def activity_users(period: Period, limit: int = RANKED_LIMIT_DEFAULT, focus: Focus | None = None) -> dict:
+    """Actions by person: the most active first, with their share, sensitive and after-hours actions and last activity.
+    Follows the chosen area; every person stays listed (the page marks the chosen one)."""
     limit = _clamp(limit, 1, RANKED_LIMIT_MAX, RANKED_LIMIT_DEFAULT)
     previous = period.previous()
-    cur_groups, old_groups = _split(_groups(previous.start, period.end), period)
+    cur_groups, old_groups = _split(_focused(_groups(previous.start, period.end), focus, actor=False), period)
     by_label = _by_label(_accounts())
 
     people: dict[str, dict] = {}
@@ -1095,6 +1300,7 @@ def activity_users(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict:
         {
             "userName": name,
             "role": _role_of(name, by_label),
+            "kind": actor_kind(name, by_label),
             "actions": p["actions"],
             "sharePct": pct(p["actions"], total),
             "sensitive": p["sensitive"],
@@ -1146,9 +1352,9 @@ def activity_users(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict:
 
 
 @cached()
-def activity_heatmap(period: Period) -> dict:
+def activity_heatmap(period: Period, focus: Focus | None = None) -> dict:
     """Actions by weekday and hour of the factory day (7 × 24), plus the busiest cell and the after-hours share."""
-    groups = _groups(period.start, period.end)
+    groups = _focused(_groups(period.start, period.end), focus)
     grid = [[0] * 24 for _ in range(7)]
     for g in groups:
         grid[g.day.isoweekday() - 1][g.hour] += _events(g)
@@ -1199,11 +1405,11 @@ def activity_heatmap(period: Period) -> dict:
 
 
 @cached()
-def activity_after_hours(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict:
+def activity_after_hours(period: Period, limit: int = RANKED_LIMIT_DEFAULT, focus: Focus | None = None) -> dict:
     """Who works outside normal hours, how much of it, and the latest cases."""
     limit = _clamp(limit, 1, RANKED_LIMIT_MAX, RANKED_LIMIT_DEFAULT)
     previous = period.previous()
-    cur_groups, old_groups = _split(_groups(previous.start, period.end), period)
+    cur_groups, old_groups = _split(_focused(_groups(previous.start, period.end), focus), period)
     cur, old = _tally(cur_groups), _tally(old_groups)
     by_label = _by_label(_accounts())
 
@@ -1294,6 +1500,7 @@ def _event_page(
     page: int,
     page_size: int,
     known_total: int | None = None,
+    focus: Focus | None = None,
 ) -> tuple[int, list[dict]]:
     """(how many events match, the events of one page, newest first). An event is one audit row, except a bulk-upload
     burst which is one event for all its rows. Each side is fetched newest-first and cut at what the page needs, so the
@@ -1302,6 +1509,8 @@ def _event_page(
     ``known_total`` is the count when the caller already has it (no search and no person: the figures of the period),
     which saves two counting queries over the whole period; with a search or a person the database counts."""
     base = _audit(period.start, period.end).annotate(rule=_rule_case())
+    if focus is not None and not focus.empty:
+        base = base.filter(focus.q())
     if user and user.strip():
         base = base.filter(user_name__iexact=user.strip())
     if q and q.strip():
@@ -1331,6 +1540,7 @@ def _event_page(
         {
             "sort": (r["created_at"], r["id"]),
             "id": str(r["id"]),
+            "entryId": r["id"],
             "at": r["created_at"],
             "userName": r["user_name"] or "Unknown",
             "action": r["action"],
@@ -1345,6 +1555,7 @@ def _event_page(
         {
             "sort": (r["last"], r["last_id"]),
             "id": f"b{r['last_id']}",
+            "entryId": r["last_id"],
             "at": r["last"],
             "userName": r["user_name"] or "Unknown",
             "action": "bulk",
@@ -1366,6 +1577,7 @@ def _event_json(e: dict, by_label: dict[str, list[Account]], *, compact: bool) -
     local = _local(e["at"])
     out = {
         "id": e["id"],
+        "entryId": e.get("entryId"),
         "at": local.isoformat(timespec="seconds"),
         "userName": e["userName"],
         "role": _role_of(e["userName"], by_label),
@@ -1387,11 +1599,11 @@ def _page_args(page: int | None, page_size: int | None) -> tuple[int, int]:
     return _clamp(page, 1, 10_000, 1), _clamp(page_size, 1, PAGE_SIZE_MAX, PAGE_SIZE_DEFAULT)
 
 
-def _category_counts(period: Period) -> tuple[list[dict], dict]:
+def _category_counts(period: Period, focus: Focus | None = None) -> tuple[list[dict], dict]:
     """Sensitive events per category and severity for the whole period (the filter chips), from the same groups as the
     KPIs, so a chip's number and the KPI can never disagree."""
     cells: Counter = Counter()
-    for g in _groups(period.start, period.end):
+    for g in _focused(_groups(period.start, period.end), focus):
         rule = RULES_BY_ID.get(g.rule)
         if rule:
             cells[(rule.category, rule.severity)] += _events(g)
@@ -1415,11 +1627,12 @@ def activity_sensitive(
     category: str | None = None,
     user: str | None = None,
     compact: bool = False,
+    focus: Focus | None = None,
 ) -> dict:
     """Sensitive actions, newest first, with the filter counts and (for the screen) the rule table that decided them."""
     category = _check_category(category)
     page, page_size = _page_args(page, page_size)
-    categories, by_severity = _category_counts(period)
+    categories, by_severity = _category_counts(period, focus)
     searching = bool((q or "").strip() or (user or "").strip())
     known = None
     if not searching:  # the chips' figures are the count: the same groups as the headline tile
@@ -1433,6 +1646,7 @@ def activity_sensitive(
         page=page,
         page_size=page_size,
         known_total=known,
+        focus=focus,
     )
     by_label = _by_label(_accounts())
     body: dict[str, Any] = {
@@ -1477,11 +1691,12 @@ def activity_feed(
     q: str | None = None,
     user: str | None = None,
     compact: bool = False,
+    focus: Focus | None = None,
 ) -> dict:
     """Everything people did (sign-ins excluded), newest first; sensitive entries carry their category and severity."""
     page, page_size = _page_args(page, page_size)
     total, events = _event_page(
-        period, sensitive_only=False, category=None, q=q, user=user, page=page, page_size=page_size
+        period, sensitive_only=False, category=None, q=q, user=user, page=page, page_size=page_size, focus=focus
     )
     by_label = _by_label(_accounts())
     return envelope(
@@ -1607,14 +1822,17 @@ def _new_devices(period: Period, accounts: list[Account]) -> list[dict]:
 
 
 @cached()
-def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict:
+def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT, focus: Focus | None = None) -> dict:
     """Sign-ins and the security signals around them: per day and per person, new devices, sessions open at the same
     time, failed attempts and lock-outs, and accounts nobody has signed in to for a long time."""
     limit = _clamp(limit, 1, RANKED_LIMIT_MAX, RANKED_LIMIT_DEFAULT)
     previous = period.previous()
     low, high = _day_start(period.start), _day_start(period.end + timedelta(days=1))
     accounts = _accounts(as_of=high)
+    if focus is not None and focus.actor:  # one person: their accounts only (a sign-in belongs to no area)
+        accounts = [a for a in accounts if a.label.lower() == focus.actor.lower()]
     by_id = {a.id: a for a in accounts}
+    chosen_ids = set(by_id) if focus is not None and focus.actor else None
 
     # sessions of this period, plus the ones that could still have been open when it began (for the overlap check)
     spans: dict[int, list[tuple[datetime, datetime, bool]]] = defaultdict(list)
@@ -1625,6 +1843,8 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
         .order_by("created_at", "id")
         .values_list("hr_user_id", "created_at", "revoked_at", "device_label")
     ):
+        if chosen_ids is not None and uid not in chosen_ids:
+            continue
         in_period = created >= low
         spans[uid].append((created, _span_end(created, revoked), in_period))
         if in_period:
@@ -1638,13 +1858,16 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
     granularity, bucket_spans, key = _buckets(period)
     daily = {s: {"date": s.isoformat(), "end": e.isoformat(), "signIns": 0, "failed": 0} for s, e in bucket_spans}
     for s in _sessions_by_day(period.start, period.end):
-        daily[key(s.day)]["signIns"] += s.n
+        if chosen_ids is None or s.user_id in chosen_ids:
+            daily[key(s.day)]["signIns"] += s.n
     attempts = _attempts_by_day(previous.start, period.end)
     for a in attempts:
         if a.day >= period.start:
             daily[key(a.day)]["failed"] += a.failed
     sign_ins_now = sum(counts.values())
-    sign_ins_before = sum(s.n for s in _sessions_by_day(previous.start, previous.end))
+    sign_ins_before = sum(
+        s.n for s in _sessions_by_day(previous.start, previous.end) if chosen_ids is None or s.user_id in chosen_ids
+    )
     failed_now = sum(a.failed for a in attempts if a.day >= period.start)
     failed_before = sum(a.failed for a in attempts if a.day < period.start)
     failed_rows, unknown_names, _ = _failed_accounts(period, accounts)
@@ -1653,7 +1876,8 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
     # who is signed in right now (a snapshot, whatever period is shown): not signed out, token not yet expired
     now = _utc_now()
     live = Counter(
-        LoginSession.objects.filter(
+        uid
+        for uid in LoginSession.objects.filter(
             revoked_at__isnull=True,
             created_at__gt=now - timedelta(hours=HR_TOKEN_HOURS),
             created_at__lte=now,
@@ -1661,6 +1885,7 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
         )
         .order_by()
         .values_list("hr_user_id", flat=True)
+        if uid in by_id
     )
 
     people = []
@@ -1688,6 +1913,8 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
     ranked = sorted(people, key=lambda p: (-p["signIns"], p["userName"].lower()))
     dormant = sorted((p for p in people if p["dormant"]), key=lambda p: (-(p["daysSince"] or 10**6), p["userName"]))
     several = sorted(((by_id[uid].label, n) for uid, n in live.items() if n > 1), key=lambda kv: (-kv[1], kv[0]))
+    if chosen_ids is not None:
+        failed_rows = [r for r in failed_rows if r["knownAccount"] and r["userName"].lower() == focus.actor.lower()]
     overlapping_total = sum(o for o, _ in overlaps.values())
     overlapping_accounts = sorted(
         ({"userName": by_id[uid].label, "overlapping": o, "peak": p} for uid, (o, p) in overlaps.items() if o),
@@ -1721,6 +1948,12 @@ def activity_sign_ins(period: Period, limit: int = RANKED_LIMIT_DEFAULT) -> dict
             "dormant": {"days": DORMANT_DAYS, "count": len(dormant), "accounts": dormant[:5]},
         },
         period=period,
+        notes=_focus_notes(focus, sign_ins=True)
+        + (
+            ["Failed sign-ins and lock-outs in the totals are everyone's: an attempt is stored per typed username."]
+            if chosen_ids is not None
+            else []
+        ),
         provenance=[
             _prov_sign_ins(sign_ins_now),
             _prov_failed(failed_now),
@@ -1983,6 +2216,54 @@ def insights(*, today: date | None = None) -> list[dict]:
             "ask": "Summarise the system activity of the last 7 days.",
         }
     ]
+
+
+ENTRY_TEXT_LIMIT = 1000
+
+
+def activity_entry(entry_id: int) -> dict | None:
+    """One audit entry in full, for the page's detail view: when (factory time), who and what kind of actor, the area and
+    action, the rule that made it sensitive (if any), its whole description, the record it was about and the address it
+    came from. The old and new values are never read (they can hold salaries). None when there is no such entry, or it
+    is a sign-in event (those are shown under Sign-ins)."""
+    row = (
+        AuditLog.objects.filter(pk=entry_id)
+        .exclude(action__in=SIGN_IN_ACTIONS)
+        .values("id", "created_at", "user_name", "action", "module", "record_id", "record_description", "ip_address")
+        .first()
+    )
+    if row is None:
+        return None
+    local = _local(row["created_at"])
+    rule = classify(row["action"], row["module"], row["record_description"])
+    name = row["user_name"] or "Unknown"
+    by_label = _by_label(_accounts())
+    area_key, area_name = area_of(row["module"])
+    return envelope(
+        {
+            "entry": {
+                "id": row["id"],
+                "at": local.isoformat(timespec="seconds"),
+                "userName": name,
+                "role": _role_of(name, by_label),
+                "kind": actor_kind(name, by_label),
+                "area": area_name,
+                "areaKey": area_key,
+                "module": row["module"],
+                "action": row["action"],
+                "recordId": row["record_id"],
+                "description": _clip(row["record_description"], ENTRY_TEXT_LIMIT),
+                "ipAddress": row["ip_address"],
+                "afterHours": _after_kind(local.date(), local.hour),
+                "category": rule.category if rule else None,
+                "categoryLabel": CATEGORIES[rule.category] if rule else None,
+                "severity": rule.severity if rule else None,
+                "title": rule.title if rule else None,
+                "burst": bool(rule and rule.burst),
+            }
+        },
+        provenance=[_prov_actions(1)],
+    )
 
 
 def activity_attention(*, today: date | None = None) -> dict:

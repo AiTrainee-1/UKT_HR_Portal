@@ -18,6 +18,8 @@ import {
   FileClock,
   IndianRupee,
   LayoutDashboard,
+  MessagesSquare,
+  ChartColumnBig,
   MapPinned,
   Search,
   UserCheck,
@@ -35,20 +37,37 @@ export type MdNavItem = {
   navLabel?: string;
   path: string;
   icon: LucideIcon;
+  /** false: the page is shown as it is, without the Operations / Insights frame (a page that is all insights already). */
+  frame?: boolean;
 };
 
 export type MdNavGroup = { heading: string; items: MdNavItem[] };
 
-const item = (id: string, title: string, icon: LucideIcon, path: string, navLabel?: string): MdNavItem => ({
+const item = (
+  id: string,
+  title: string,
+  icon: LucideIcon,
+  path: string,
+  navLabel?: string,
+  frame?: boolean,
+): MdNavItem => ({
   id,
   title,
   navLabel,
   path,
   icon,
+  ...(frame === false ? { frame } : {}),
 });
 
 export const MD_NAV_GROUPS: MdNavGroup[] = [
-  { heading: "Overview", items: [item("dashboard", "Dashboard", LayoutDashboard, "/md/dashboard")] },
+  {
+    heading: "Overview",
+    items: [
+      item("dashboard", "Dashboard", LayoutDashboard, "/md/dashboard"),
+      // the HR Analytics page itself (view only): it is all insights, so no Operations / Insights frame around it
+      item("analytics", "Analytics", ChartColumnBig, "/md/analytics", undefined, false),
+    ],
+  },
   {
     heading: "Workforce",
     items: [
@@ -88,6 +107,7 @@ export const MD_NAV_GROUPS: MdNavGroup[] = [
     heading: "Money & reports",
     items: [
       item("payroll", "Payroll", IndianRupee, "/md/payroll"),
+      item("communications", "Communication usage & cost", MessagesSquare, "/md/communications", "Communication cost"),
       item("reports", "Reports", BarChart3, "/md/reports"),
     ],
   },

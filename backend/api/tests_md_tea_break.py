@@ -62,7 +62,9 @@ from .models import (
     Department,
     Employee,
     EmployeeShiftAssignment,
+    GateDevice,
     HRUser,
+    OutpassGateScan,
     Role,
     ShiftTemplate,
     TeaBreakLog,
@@ -70,6 +72,18 @@ from .models import (
 )
 from .reporting.definitions import gate_visitor_tea_common as TC
 from .tests_md_support import MdApiTestCase, make_md, md_headers
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+def setUpModule():
+    # the tea-break reports were retired from the Report Center's catalog on 2026-11-19 (reporting/layout.py): their
+    # definitions stay (and stay the reference these parity tests compare with), so list them again while this runs
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 NOW = datetime(2026, 9, 15, 10, 0, tzinfo=dt_timezone.utc)  # 15:30 IST on Tuesday 15 Sep 2026
 TODAY = date(2026, 9, 15)
@@ -1438,6 +1452,121 @@ class ReportCenterParityTests(GoldenBase):
         self.assertEqual(self.api("summary")["coverage"]["longCompleted"], 2)
 
 
+class HrTeaPageParityTests(GoldenBase):
+    """The HR Tea Break page (/api/tea-break/records/summary, rebuilt 18-19 Nov 2026) counts EVERY break: its Overtime
+    and completed breaks include the two finished breaks over 60 minutes (c7, c8) that this page counts on their own.
+    Everything else must be the same number."""
+
+    def setUp(self):
+        super().setUp()
+        self.root = HRUser.objects.create(username="hr_root", password_hash="x", is_super_admin=True)
+
+    def test_the_hr_tea_dashboard_differs_by_exactly_the_long_breaks(self):
+        r = self.client.get("/api/tea-break/records/summary", P, **md_headers(self.root))
+        self.assertEqual(r.status_code, 200, r.content[:300])
+        hr = r.json()
+        s = self.api("summary")
+        m, cov = s["metrics"], s["coverage"]
+        self.assertEqual(hr["breaks"], m["breaks"]["value"])  # 28
+        self.assertEqual(hr["employees"], m["employees"]["value"])  # 6
+        self.assertEqual(hr["completed"], m["measured"]["value"] + cov["longCompleted"])  # 24 + 2
+        self.assertEqual(hr["overtime"], m["overruns"]["value"] + cov["longCompleted"])  # 14 + 2
+        self.assertEqual(hr["notReturned"] + hr["onBreakNow"], cov["noReturn"])  # o2, o3
+        # minutes beyond the allowance: ours 200, plus c7 (61 - 15) and c8 (150 - 15)
+        self.assertEqual(hr["overMinutesTotal"], m["minutesLost"]["value"] + 46 + 135)
+
+
+def tea_scan(gate, employee, at, scan_type="tea", result="not_allowed_here"):
+    scan = OutpassGateScan.objects.create(
+        gate=gate, employee=employee, scan_type=scan_type, result=result, message="Not allowed at this gate"
+    )
+    OutpassGateScan.objects.filter(pk=scan.pk).update(scanned_at=at)
+    return scan
+
+
+class GatesAndRefusedScansTests(GoldenBase):
+    """Gates (Manage Gates, 18-19 Nov 2026): A's and B's breaks start at Gate 1, D's at Gate 2, everyone else's have no
+    gate. Gate 2 then stopped taking tea breaks and refused C twice in the period (03-Sep, 10-Sep) and an unknown code
+    once (04-Sep), and D once in the previous period (25-Aug). A refused GATE-PASS exit there is not a tea scan."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.g1 = GateDevice.objects.create(
+            name="Gate 1", branch=cls.u1, username="tg1", password_hash="x", login_token="tt1"
+        )
+        cls.g2 = GateDevice.objects.create(
+            name="Gate 2", branch=cls.u2, username="tg2", password_hash="x", login_token="tt2", allow_tea_break=False
+        )
+        TeaBreakLog.objects.filter(employee__in=[cls.A, cls.B]).update(out_gate=cls.g1)
+        TeaBreakLog.objects.filter(employee=cls.D).update(out_gate=cls.g2)
+        tea_scan(cls.g2, cls.C, ist(9, 3, 10, 0))
+        tea_scan(cls.g2, cls.C, ist(9, 10, 11, 0))
+        tea_scan(cls.g2, None, ist(9, 4, 9, 0))
+        tea_scan(cls.g2, cls.D, ist(8, 25, 9, 0))
+        tea_scan(cls.g2, cls.C, ist(9, 5, 9, 0), scan_type="exit")
+
+    def test_refused_scans_are_counted_beside_the_breaks(self):
+        s = self.api("summary")
+        self.assertEqual(s["refused"], {"value": 3, "previous": 1, "change": {"abs": 2, "pct": 200.0}})
+        self.assertEqual(s["metrics"]["breaks"]["value"], 28)  # never inside the breaks
+        self.assertIn("tea-refused", [p["id"] for p in s["provenance"]])
+        # a scope only counts the scans of its own people (the unknown code belongs to nobody)
+        self.assertEqual(self.api("summary", type="production")["refused"]["value"], 2)
+        self.assertEqual(self.api("summary", type="staff")["refused"]["value"], 0)
+
+    def test_by_gate(self):
+        rows = by_label(self.api("departments", by="gate"))
+        self.assertEqual(set(rows), {"Gate 1", "Gate 2", "Gate not recorded"})
+        g1, g2, none = rows["Gate 1"], rows["Gate 2"], rows["Gate not recorded"]
+        self.assertEqual((g1["breaks"], g1["measured"], g1["overruns"], g1["minutesLost"]), (11, 10, 6, 50))
+        self.assertEqual((g2["breaks"], g2["overruns"], g2["minutesLost"], g2["refused"]), (4, 2, 20, 3))
+        self.assertEqual((none["breaks"], none["overruns"], none["minutesLost"], none["refused"]), (13, 6, 130, 0))
+        self.assertIsNone(g1["headcount"])  # a gate is a place, not a team
+        self.assertEqual(g1["refused"], 0)
+        self.assertEqual(sum(r["minutesLost"] for r in rows.values()), 200)
+
+    def test_records_behind_a_figure(self):
+        refused = self.api("records", status="refused")
+        self.assertEqual(refused["total"], 3)
+        self.assertEqual(
+            [i["outAt"] for i in refused["items"]],
+            ["2026-09-10T11:00:00", "2026-09-04T09:00:00", "2026-09-03T10:00:00"],
+        )
+        self.assertEqual([i["employeeCode"] for i in refused["items"]], ["C", None, "C"])
+        self.assertEqual({i["outGate"] for i in refused["items"]}, {"Gate 2"})
+        self.assertEqual(refused["filters"], ["Refused at the gate"])
+
+        g1 = self.api("records", status="overrun", by="gate", group="Gate 1")
+        self.assertEqual(g1["total"], 6)
+        self.assertEqual({i["employeeCode"] for i in g1["items"]}, {"A", "B"})
+        self.assertTrue(all(i["status"] == "overrun" and i["overMinutes"] > 0 for i in g1["items"]))
+        self.assertEqual(sum(i["overMinutes"] for i in g1["items"]), 50)
+
+        long_ = self.api("records", status="long")
+        self.assertEqual(
+            [(i["minutes"], i["overMinutes"], i["status"]) for i in long_["items"]],
+            [(150, None, "long"), (61, None, "long")],
+        )
+        no_return = self.api("records", status="no_return")
+        self.assertEqual(
+            [(i["date"], i["minutes"], i["status"]) for i in no_return["items"]],
+            [("2026-09-13", None, "no_return"), ("2026-09-12", None, "no_return")],
+        )
+
+        self.assertEqual(self.api("records", employee=self.C.id)["total"], 9)
+        self.assertEqual(self.api("records", by="department", group="Stitching")["total"], 15)  # C, D (Unit 2), F
+        self.assertEqual(self.api("records", by="type", group="staff")["total"], 8)  # A 6, E 2
+        self.assertEqual(self.api("records", by="gate", group=tea.NONE_KEY)["total"], 13)
+        page2 = self.api("records", pageSize=10, page=3)
+        self.assertEqual((page2["total"], len(page2["items"]), page2["hasMore"]), (28, 8, False))
+
+    def test_bad_parameters_are_a_400(self):
+        for params in ({"status": "boss"}, {"by": "shift", "group": "x"}, {"page": "two"}):
+            r = self.get("/api/md/tea-break/records", **P, **params)
+            self.assertEqual(r.status_code, 400, params)
+
+
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 # an independent check: random data, every endpoint against a plain-Python recomputation
 # ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════
@@ -1817,7 +1946,7 @@ class ShapeTests(GoldenBase):
         s = self.api("summary")
         self.assertEqual(
             set(s) - ENVELOPE,
-            {"allowedMinutes", "metrics", "hoursLost", "withinAllowance", "previousPeriod", "coverage"},
+            {"allowedMinutes", "metrics", "hoursLost", "withinAllowance", "previousPeriod", "coverage", "refused"},
         )
         self.assertEqual(
             set(s["metrics"]),
@@ -1898,7 +2027,7 @@ class ShapeTests(GoldenBase):
         self.assertEqual(
             set(o["rows"][0]),
             {
-                "employeeCode", "employeeName", "department", "unit", "type", "breaks", "measured", "overruns",
+                "employeeId", "employeeCode", "employeeName", "department", "unit", "type", "breaks", "measured", "overruns",
                 "overrunPct", "minutesLost", "averageOverBy", "worstMinutes", "worstOverBy", "worstDate",
             },
         )  # fmt: skip

@@ -37,6 +37,8 @@ import {
   statusTone,
   sumFigures,
   typeLabel,
+  kindOf,
+  orgFor,
   withChange,
   words,
 } from "./logic";
@@ -51,6 +53,8 @@ const figures = (over: Partial<PayFigures> = {}): PayFigures => ({
   attendanceDeduction: 2250,
   overtime: 1000,
   bonus: 0,
+  excess: 0,
+  detection: 0,
   deductions: { pf: 1800, esi: 100, tds: 0, advance: 500, late: 250, other: 50, total: 2700 },
   netPaid: 36300,
   employerPfEsi: 2000,
@@ -78,7 +82,6 @@ describe("the page state in the address", () => {
       month: "2026-09",
       branch: "2",
       department: "Cutting",
-      type: "production",
       q: "bala",
       employee: null,
       sort: "netPaid",
@@ -153,8 +156,27 @@ describe("the page state in the address", () => {
     expect(nextSort({ sort: "netPaid", dir: "desc" }, "code")).toEqual({ sort: "code", dir: "asc" });
   });
 
+  it("says which side an address opens: Staff, or Production (also from an older ?type=production link)", () => {
+    expect(kindOf("")).toBe("staff");
+    expect(kindOf("?kind=production&cycle=weekly")).toBe("production");
+    expect(kindOf("?type=production")).toBe("production");
+    expect(kindOf("?kind=staff&type=production")).toBe("staff");
+  });
+
+  it("keeps only the departments of this side in the filter", () => {
+    const org = {
+      branches: [],
+      departments: [
+        { id: 1, name: "Stitching", branchId: 1, branchName: "Unit 1", employees: 4 },
+        { id: 2, name: "Stitching", branchId: 1, branchName: "Unit 1", employees: 9 },
+      ],
+    };
+    expect(orgFor(org, [{ id: 2, name: "Stitching", branchId: 1 }])?.departments.map((d) => d.id)).toEqual([2]);
+    expect(orgFor(org, undefined)).toBe(org);
+  });
+
   it("hands the scope to the filter bar", () => {
-    expect(scopeOf({ branch: "2", department: "Accounts", type: "staff" })).toEqual({
+    expect(scopeOf({ branch: "2", department: "Accounts" })).toEqual({
       branch: "2",
       department: "Accounts",
       type: "staff",
@@ -185,7 +207,7 @@ describe("figures", () => {
 
   it("takes the server's change when it sends one, and works out the rest", () => {
     const data = monthlyFixture(new URLSearchParams());
-    expect(kpiChange(data, "companyCost")).toEqual({ abs: -17112.71, pct: -2.94 });
+    expect(kpiChange(data, "companyCost")).toEqual({ abs: -16512.71, pct: -2.84 });
     // not in the server's change map: worked out from the month and the one before
     const other = kpiChange(data, "otherDeductions");
     const expected = changeBetween(otherDeductions(data.current!), otherDeductions(data.previous!));
@@ -328,7 +350,7 @@ describe("chart rows", () => {
     const rows = flowRows(data.months, "2026-10");
     expect(rows).toHaveLength(12);
     const last = rows.at(-1)!;
-    expect(last).toMatchObject({ key: "2026-10", tick: "Oct", selected: true, netPaid: 487341 });
+    expect(last).toMatchObject({ key: "2026-10", tick: "Oct", selected: true, netPaid: 487941 });
     // the three parts add up to the pay bill before anything was taken: net + deductions + loss of pay
     const c = data.current!;
     expect(last.netPaid + last.otherDeductions + last.attendanceDeduction).toBeCloseTo(

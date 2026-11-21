@@ -56,6 +56,18 @@ from .models import (
     SalarySlip,
 )
 from .tests_md_support import MdApiTestCase, md_headers
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+def setUpModule():
+    # Some checks here run Report Center reports by id; those that left the Report Center's list on 2026-11-19/20
+    # (reporting/layout.py) answer 404 there, but their definitions still hold the rules these checks compare with.
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 TODAY = date(2026, 10, 12)  # a Monday; the salary day (the 5th) is a week past
 AUG, SEP, OCT = (2026, 8), (2026, 9), (2026, 10)

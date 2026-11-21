@@ -357,7 +357,9 @@ test.describe("the AI assistant", () => {
   test("on a phone the panel fills the screen and nothing scrolls sideways", async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 812 });
     await goto(page, "/md/dashboard");
-    await page.getByTestId("assistant-launcher").click();
+    // phones hide the floating mascot (2026-11-14): the sparkle in the top bar opens the assistant there
+    await expect(page.getByTestId("assistant-launcher")).toBeHidden();
+    await page.getByTestId("md-ask-ai-mobile").click();
     const panel = page.getByTestId("assistant-panel");
     await expect(panel).toHaveAttribute("data-open", "true");
     const box = (await panel.boundingBox())!;

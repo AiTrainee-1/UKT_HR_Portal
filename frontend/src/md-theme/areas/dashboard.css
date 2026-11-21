@@ -205,6 +205,13 @@ html[data-md-theme] .md-dashboard-explore [data-testid="ask-ai"]:focus-visible {
   background: linear-gradient(135deg, rgba(245, 235, 208, 0.85), rgba(238, 235, 218, 0.55));
 }
 
+/* a section far down the page (payroll, employees, Explore): the browser skips laying it out and painting it until it is
+   near the screen (2026-11-21, performance), keeping a placeholder height so the scroll bar does not jump */
+.md-dashboard-defer {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 720px;
+}
+
 /* ── rows inside a card ───────────────────────────────────────────────────────────────────────────────────────────────── */
 
 .md-dashboard-row {

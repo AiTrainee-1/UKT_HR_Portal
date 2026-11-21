@@ -9,7 +9,8 @@ THE SCENARIO (September 2026 with August before it; "today" is pinned to Monday 
                 permission 200 = late 500; PF 1,560 on PF wages 13,000 (employer PF 12% = 1,560); net 22,940;
                 Casual Leave: a full day on 10 Sep (present, 1 shift) + a half day on 11 Sep (present, half shift) = 1.5
                 days (= 1,500); a CL on 12 Sep (an absent day) and a pending one on 15 Sep do not count. Cleared (verified,
-                not paid). HR added a bonus of 500 and raised the deductions by 200 afterwards: adjustment +300
+                not paid). HR added a bonus of 500 (an older HR bonus: it counts as Excess) and raised the
+                deductions by 200 afterwards (payroll row: deductions 2,260, net 23,240; adjustment -200)
            Aug: 26 of 26 days, earned 26,000, net 26,000; August was finalized and marked paid
   B2 Bala  staff, Accounts / Unit 2    salary 20,000, 25 company days: all paid -> earned 20,000; ESI 150 on 10,000
                 (employer ESI 3.25% = 325); advance 1,000; net 18,850; ON HOLD. Aug 20,000
@@ -21,8 +22,9 @@ THE SCENARIO (September 2026 with August before it; "today" is pinned to Monday 
                 Aug 1-31: 16 shifts = 8,000, cleared
 
   September: 4 employees; earned 66,500; actual (staff) 56,000; loss of pay 2,000; late 600; attendance deduction 2,600;
-             overtime 1,000; deductions 3,310 (PF 1,560, ESI 150, advance 1,000, late 600); net 64,190; employer PF/ESI
-             1,885; company cost 69,385; CL 1.5 days / 1,500; working days 107, paid days 100, LOP days 7
+             overtime 1,000; bonus (excess) 500; deductions 3,510 (PF 1,560, ESI 150, advance 1,000, late 600, other 200 =
+             HR's change); net 64,490 (the payroll rows, as HR's pages and the bank file); employer PF/ESI 1,885; company
+             cost 69,885; CL 1.5 days / 1,500; working days 107, paid days 100, LOP days 7
   August:    3 employees; earned 54,000; company cost 54,000
 """
 
@@ -339,14 +341,14 @@ class MonthlyTests(Base):
         near(self, cur["lateDeduction"], 600)  # Asha's late 300 + permission 200, Gita's late 100
         near(self, cur["attendanceDeduction"], 2600)
         near(self, cur["overtime"], 1000)
-        near(self, cur["bonus"], 0)
+        self.assertEqual((cur["bonus"], cur["excess"], cur["detection"]), (500.0, 500.0, 0.0))  # HR's bonus on Asha
         self.assertEqual(
             cur["deductions"],
-            {"pf": 1560.0, "esi": 150.0, "tds": 0.0, "advance": 1000.0, "late": 600.0, "other": 0.0, "total": 3310.0},
+            {"pf": 1560.0, "esi": 150.0, "tds": 0.0, "advance": 1000.0, "late": 600.0, "other": 200.0, "total": 3510.0},
         )
-        near(self, cur["netPaid"], 64190)
+        near(self, cur["netPaid"], 64490)  # the payroll rows' final salary, HR's change included
         near(self, cur["employerPfEsi"], 1885)  # 12% of 13,000 + 3.25% of 10,000
-        near(self, cur["companyCost"], 69385)
+        near(self, cur["companyCost"], 69885)  # earned + overtime + bonus + employer
         self.assertEqual((cur["clDays"], cur["clAmount"]), (1.5, 1500.0))
         self.assertEqual((cur["workingDays"], cur["paidDays"], cur["lopDays"]), (107.0, 100.0, 7.0))
 
@@ -356,7 +358,7 @@ class MonthlyTests(Base):
         prev = body["previous"]
         self.assertEqual((prev["month"], prev["employees"]), ("2026-08", 3))
         near(self, prev["companyCost"], 54000)
-        self.assertEqual(body["change"]["companyCost"], {"abs": 15385.0, "pct": 28.5})
+        self.assertEqual(body["change"]["companyCost"], {"abs": 15885.0, "pct": 29.4})
         self.assertEqual(body["change"]["employees"], {"abs": 1.0, "pct": 33.3})
         self.assertEqual(set(body["change"]), set(PP.CHANGE_KEYS))
         self.assertEqual(body["available"], ["2026-09", "2026-08"])
@@ -410,18 +412,18 @@ class DepartmentTests(Base):
         st = rows["Stitching"]
         self.assertEqual((st["unit"], st["employees"]), ("Unit 1", 3))  # Asha, Gita and Dev (who has left)
         near(self, st["earnedSalary"], 46500)
-        near(self, st["companyCost"], 49060)
+        near(self, st["companyCost"], 49560)
         near(self, st["averageEarned"], 15500)
-        near(self, st["averageNetPaid"], 15113.33)
+        near(self, st["averageNetPaid"], 15213.33)
         near(self, st["attendancePct"], 91.5, places=1)  # 75 paid of 82 working days
-        near(self, st["sharePct"], 70.7, places=1)
+        near(self, st["sharePct"], 70.9, places=1)
         near(self, st["previousCompanyCost"], 34000)
-        self.assertEqual(st["change"], {"abs": 15060.0, "pct": 44.3})
+        self.assertEqual(st["change"], {"abs": 15560.0, "pct": 45.8})
         acc = rows["Accounts"]
         near(self, acc["companyCost"], 20325)  # Bala (held) 20,000 + employer ESI 325; Chitra is not payroll yet
         self.assertEqual((acc["employees"], acc["attendancePct"]), (1, 100.0))
         near(self, sum(r["companyCost"] for r in body["rows"]), body["totals"]["companyCost"])
-        near(self, body["totals"]["companyCost"], 69385)
+        near(self, body["totals"]["companyCost"], 69885)
         near(self, body["totals"]["averageEarned"], 16625)  # 66,500 / 4
 
     def test_a_department_filter_and_a_type(self):
@@ -467,7 +469,8 @@ class PeopleTests(Base):
         near(self, asha["earnedSalary"], 24000)
         near(self, asha["lossOfPay"], 2000)
         near(self, asha["attendanceDeduction"], 2500)
-        near(self, asha["companyCost"], 26560)  # 24,000 + 1,000 overtime + 1,560 employer PF
+        near(self, asha["companyCost"], 27060)  # 24,000 + 1,000 overtime + 500 bonus + 1,560 employer PF
+        near(self, asha["netPaid"], 23240)  # the payroll row's final salary (the slip says 22,940)
         self.assertEqual((asha["clDays"], asha["clAmount"]), (1.5, 1500.0))
         self.assertEqual((asha["onHold"], asha["paymentStatus"], asha["periods"]), (False, "not_paid", 0))
         bala = self.rows(q="Bala")[0]
@@ -498,7 +501,7 @@ class PeopleTests(Base):
         body = self.api("people", month="2026-09", page=2, pageSize=2)
         self.assertEqual((body["page"], body["pageSize"], body["total"]), (2, 2, 4))
         self.assertEqual([r["code"] for r in body["rows"]], ["D4", "P1"])
-        near(self, body["totals"]["companyCost"], 69385)  # every match, not just this page
+        near(self, body["totals"]["companyCost"], 69885)  # every match, not just this page
         self.assertEqual(body["totals"]["employees"], 4)
         self.assertEqual(self.api("people", month="2026-09", page=9)["rows"], [])
         self.assertEqual(self.api("people", month="2026-09", pageSize=5000)["pageSize"], PP.PAGE_SIZE_MAX)
@@ -523,7 +526,9 @@ class PeopleTests(Base):
         monthly = self.api("monthly", month="2026-09")["current"]
         for key in ("earnedSalary", "netPaid", "companyCost", "attendanceDeduction", "clAmount", "lossOfPay"):
             near(self, sum(r[key] or 0 for r in people["rows"]), monthly[key], msg=key)
-        self.assertEqual(people["totals"], {k: v for k, v in monthly.items() if k not in ("month", "label", "status")})
+        self.assertEqual(
+            people["totals"], {k: v for k, v in monthly.items() if k not in ("month", "label", "status", "workflow")}
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -557,7 +562,8 @@ class PersonTests(Base):
         self.assertEqual(
             (sep["dailyRate"], sep["presentDays"], sep["holidayDays"], sep["lateDays"]), (1000.0, 22.0, 2.0, 3.0)
         )
-        self.assertEqual(sep["adjustment"], 300.0)  # HR's bonus 500 less the 200 HR added to the deductions
+        self.assertEqual(sep["adjustment"], -200.0)  # HR added 200 to the deductions (the bonus is its own line)
+        self.assertEqual((sep["bonus"], sep["excess"]), (500.0, 500.0))
         self.assertIsNone(aug["adjustment"])
         self.assertEqual((sep["clDays"], sep["clAmount"], sep["lopDays"]), (1.5, 1500.0, 2.0))
         self.assertEqual(
@@ -664,15 +670,23 @@ class RuleTests(Base):
         self.assertEqual((dev["workingDays"], dev["paidDays"]), (26.0, 26.0))  # from the slip's own columns
 
     def test_staff_figures_agree_with_the_payroll_analysis(self):
-        for scope in (Scope(), Scope(employment_type="staff"), Scope(employment_type="production")):
-            with self.subTest(scope=scope.employment_type):
+        # payroll.py (the assistant's tools, the dashboard card) reads the SLIPS; this page reads the payroll rows' money
+        # as HR's pages do. They differ by exactly what HR changed on a payroll row after the slip was computed (Asha:
+        # +200 deductions, net +300 with her bonus of 500) and by the bonus in the company cost.
+        for kind, (net, ded, extra) in {
+            "staff": (300, 200, 500),
+            None: (300, 200, 500),
+            "production": (0, 0, 0),
+        }.items():
+            scope = Scope(employment_type=kind)
+            with self.subTest(scope=kind):
                 mine = PP.payroll_monthly(scope, "2026-09")["current"]
                 theirs = P._summary(P._context(scope, "2026-09"))["totals"]
                 self.assertEqual(mine["earnedSalary"], theirs["salaryEarned"])
-                self.assertEqual(mine["netPaid"], theirs["netPay"])
-                self.assertEqual(mine["deductions"]["total"], theirs["totalDeductions"])
+                near(self, mine["netPaid"], theirs["netPay"] + net)
+                near(self, mine["deductions"]["total"], theirs["totalDeductions"] + ded)
                 self.assertEqual(mine["employees"], theirs["headcount"])
-                near(self, mine["companyCost"], theirs["employerCost"])
+                near(self, mine["companyCost"], theirs["employerCost"] + extra)
 
     def test_every_endpoint_is_read_only_and_bounded(self):
         with read_only_db():  # the database itself refuses a write here
@@ -704,7 +718,8 @@ class RuleTests(Base):
             staff_slip(emp, SEP, monthly=26000, company=26, paid=26, days=[day("2026-09-10")])
             CasualLeaveRequest.objects.create(employee=emp, date=date(2026, 9, 10), portion="full", status="approved")
         self.assertEqual(counts(), small)  # a fixed number of queries, however many people
-        self.assertLessEqual(max(small.values()), 15)
+        # monthly: the slips, their payroll rows, CL (2), the month states (3), not included (2), the departments, ...
+        self.assertLessEqual(max(small.values()), 20)
 
     def test_the_routes_are_locked_to_the_md_and_get_only(self):
         clerk = HRUser.objects.create(username="clerk", password_hash="x")
@@ -717,6 +732,111 @@ class RuleTests(Base):
     def test_a_bad_parameter_is_an_error_the_caller_can_read(self):
         with self.assertRaises(MdParamError):
             PP.payroll_people(Scope(), "2026-09", None, "salary")
+
+
+class StaffRoundTests(Base):
+    """The 2026-11-21 round: the Staff side follows HR's current staff payroll (Excess / Detection, the payroll rows'
+    money, the month workflow, Not included) and compares years."""
+
+    def test_the_month_workflow_in_numbers(self):
+        w = self.api("monthly", month="2026-09")["current"]["workflow"]
+        self.assertEqual(
+            {k: w[k] for k in ("slips", "paidSlips", "clearedSlips", "onHold", "newJoinersWaiting", "leftSince")},
+            {"slips": 5, "paidSlips": 1, "clearedSlips": 2, "onHold": 1, "newJoinersWaiting": 1, "leftSince": 1},
+        )
+        self.assertEqual((w["staffState"], w["locked"], w["leftSinceNet"]), ("generated", False, 10000.0))
+        aug = self.api("monthly", month="2026-08")["current"]["workflow"]
+        self.assertEqual((aug["locked"], aug["markedPaidAt"], aug["daysToPay"]), (True, "2026-09-06T09:00:00", 1))
+        notes = self.api("monthly", month="2026-09", type="staff")["notes"]
+        self.assertTrue(any("1 person paid in Sep 2026 has left since" in n for n in notes), notes)
+
+    def test_excess_and_detection_are_the_two_sides_of_the_bonus(self):
+        slip = SalarySlip.objects.get(employee=self.a1, month=9, year=2026)
+        slip.breakdown_details = {
+            **slip.breakdown_details,
+            "excess": {"excess": 800.0, "detection": 300.0, "net": 500.0},
+        }
+        slip.save(update_fields=["breakdown_details"])
+        cur = self.api("monthly", month="2026-09")["current"]
+        self.assertEqual((cur["bonus"], cur["excess"], cur["detection"]), (500.0, 800.0, 300.0))
+        near(self, cur["earnedSalary"], 66500)  # the bonus is never taken off (nor added to) the earned salary
+        near(self, cur["companyCost"], 69885)
+        # a block that does not add up to the payroll's bonus is not trusted: the bonus is all excess
+        slip.breakdown_details = {**slip.breakdown_details, "excess": {"excess": 900.0, "detection": 300.0}}
+        slip.save(update_fields=["breakdown_details"])
+        cur = self.api("monthly", month="2026-09")["current"]
+        self.assertEqual((cur["excess"], cur["detection"]), (500.0, 0.0))
+
+    def test_a_detection_larger_than_the_excess(self):
+        Payroll.objects.filter(employee=self.b2, month=9).update(bonus=D(-400), final_salary=D(18450))
+        bala = self.api("people", month="2026-09", q="bala")["rows"][0]
+        self.assertEqual(
+            (bala["bonus"], bala["excess"], bala["detection"], bala["netPaid"]), (-400.0, 0.0, 400.0, 18450.0)
+        )
+        near(self, bala["companyCost"], 20000 - 400 + 325)
+
+    def test_the_year_so_far_against_the_year_before(self):
+        body = self.api("monthly", month="2026-09")
+        yearly = body["yearly"]
+        self.assertEqual(
+            (yearly["current"]["from"], yearly["current"]["to"], yearly["current"]["months"]), ("2026-01", "2026-09", 2)
+        )
+        near(self, yearly["current"]["companyCost"], 54000 + 69885)
+        self.assertIsNone(yearly["previous"])
+        self.assertIsNone(yearly["sameMonthLastYear"])
+        staff_slip(self.a1, (2025, 9), monthly=26000, company=26, paid=26)
+        yearly = self.api("monthly", month="2026-09")["yearly"]
+        self.assertEqual((yearly["previous"]["label"], yearly["previous"]["months"]), ("2025 (Jan-Sep)", 1))
+        near(self, yearly["previous"]["companyCost"], 26000)
+        self.assertEqual(yearly["change"]["companyCost"], {"abs": 97885.0, "pct": 376.5})
+        self.assertEqual(yearly["sameMonthLastYear"]["month"], "2025-09")
+        self.assertEqual(yearly["sameMonthChange"]["companyCost"], {"abs": 43885.0, "pct": 168.8})
+        self.assertEqual(yearly["previousFull"]["to"], "2025-12")
+
+    def test_staff_not_included_in_the_month(self):
+        def staff(code, salary, join="2020-01-01"):
+            return Employee.objects.create(
+                employee_code=code,
+                first_name=code,
+                last_name="New",
+                employment_type="staff",
+                department=self.accounts,
+                branch=self.u2,
+                status="active",
+                join_date=join,
+                salary_amount=salary,
+            )
+
+        staff("E5", D(15000))
+        staff("E6", None)
+        staff("E7", D(15000), join="2026-10-05")  # joined after September: not expected in it
+        body = self.api("monthly", month="2026-09", type="staff")
+        self.assertEqual(
+            {k: body["notIncluded"][k] for k in ("count", "noSalary", "notGenerated")},
+            {"count": 2, "noSalary": 1, "notGenerated": 1},
+        )
+        self.assertEqual(
+            [(p["code"], p["reason"]) for p in body["notIncluded"]["people"]],
+            [("E5", "not_generated"), ("E6", "no_salary")],
+        )
+        self.assertIsNone(self.api("monthly", month="2026-09", type="production")["notIncluded"])
+
+    def test_the_department_options_follow_the_kind(self):
+        self.assertEqual(
+            [d["name"] for d in self.api("monthly", type="staff")["departments"]], ["Accounts", "Stitching"]
+        )
+        self.assertEqual(self.api("monthly", type="production")["departments"], [])
+        Department.objects.filter(pk=self.stitching.pk).update(category="production")
+        self.assertEqual([d["name"] for d in self.api("monthly", type="production")["departments"]], ["Stitching"])
+
+    def test_a_production_worker_parked_in_new_joiners_is_left_out(self):
+        Payroll.objects.filter(employee=self.p1, period_start=date(2026, 9, 15)).update(
+            new_joiner_parked=True, parked_reason=Payroll.PARKED_NEW_JOINER
+        )
+        cur = self.api("monthly", month="2026-09")["current"]
+        near(self, cur["earnedSalary"], 66500 - 6500)
+        self.assertEqual((cur["employees"], cur["workflow"]["productionParked"]), (4, 1))
+        self.assertIn("1 production worker waiting in a pay period's New Joiners.", cur["status"]["detail"])
 
 
 class EmptyTests(MdApiTestCase):

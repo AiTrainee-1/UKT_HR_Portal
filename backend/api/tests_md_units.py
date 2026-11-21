@@ -479,13 +479,13 @@ class PeriodTests(World):
         rows = {r["name"]: r for r in body["rows"]}
         self.assertEqual(v(rows["Unit A"], "attendancePct"), 75.0)  # A1 P, A2 p, A3 A, A5 P
         self.assertEqual(v(rows["Unit B"], "attendancePct"), 50.0)  # B1 P, B2 A
-        self.assertEqual(v(rows["Unit A"], "latePct"), 25.0)  # one late of four worked
+        self.assertEqual(v(rows["Unit A"], "latePct"), 33.3)  # one late of the three who worked (A3 was absent)
 
     def test_today_is_never_part_of_a_rate(self):
         body = self.summary({"from": "2026-09-13", "to": "2026-09-14"})  # Sunday + today (Monday)
         self.assertEqual(body["measured"], {"start": "2026-09-13", "end": "2026-09-13", "days": 1})
         self.assertIsNone(body["company"]["metrics"]["attendancePct"])  # a Sunday: nobody is scheduled
-        body = self.summary(period="today")
+        body = self.summary({"period": "today"})
         self.assertIsNone(body["measured"])
         self.assertIsNone(body["company"]["metrics"]["attendancePct"])
         self.assertIsNone(body["rows"][0]["metrics"]["overtimeHours"]["value"])  # nothing measured: not "0 hours"
@@ -606,8 +606,9 @@ class TrendTests(World):
         self.assertEqual(self.series(absent)["Unit A"], [0.0, 25.0, 25.0, 25.0, 0.0, 0.0])
         self.assertEqual(absent["company"][2], 50.0)
         late = self.api("trend", metric="latePct")
-        self.assertEqual(self.series(late)["Unit A"], [0.0, 25.0, 0.0, 0.0, 0.0, 0.0])
-        self.assertEqual(late["company"], [0.0, 16.7, 0.0, 0.0, 0.0, 0.0])
+        # late arrivals are a share of the days WORKED (as in the week: 1 / 19): Tuesday A worked 3 (A3 absent), B 1
+        self.assertEqual(self.series(late)["Unit A"], [0.0, 33.3, 0.0, 0.0, 0.0, 0.0])
+        self.assertEqual(late["company"], [0.0, 25.0, 0.0, 0.0, 0.0, 0.0])
 
     def test_a_long_period_is_drawn_by_week(self):
         body = self.api("trend", {"from": "2026-06-01", "to": "2026-09-13"}, metric="attendancePct")
@@ -728,7 +729,7 @@ class AttentionTests(World):
         self.assertEqual(item["title"], "Unit B attendance is 22.1 points below the company average")
         self.assertEqual(item["metric"], "-22.1 pts")
         self.assertEqual(item["page"], "branches")
-        self.assertIn("50% against 72.1% for the company".replace("50%", "50%"), item["detail"])
+        self.assertIn("Unit B 50.0% against 72.1% for the company", item["detail"])
         self.assertIn("Unit B", item["ask"])
 
     def test_a_gap_under_the_critical_mark_is_a_warning(self):

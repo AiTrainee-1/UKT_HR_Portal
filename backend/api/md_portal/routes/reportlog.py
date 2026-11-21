@@ -8,6 +8,9 @@ function in analytics/reportlog.py and returns its envelope.
   GET gaps         the gap calendar and the days nobody made the call
   GET departments  follow-up by department / unit / staff-vs-production (?by=department|unit|type&limit=)
   GET exports      who exports attendance reports and how often (whole company; period only; ?limit=)
+  GET scheduled    the attendance reports scheduled in Attendance Notify: runs, recipients reached, failures (whole company)
+  GET absences     drill-down: the absences behind a figure (?mark=informed|not_informed|unmarked&day=&by=&group=&page=
+                   &pageSize=), newest first
   GET attention    "needs your attention" for the selected period and scope
 """
 
@@ -61,6 +64,27 @@ def exports(request):
 
 
 @md_get
+def scheduled(request):
+    params = request_params(request)
+    return rl.reportlog_scheduled(resolve_period(params, default=DEFAULT_PERIOD), limit=params.get("limit"))
+
+
+@md_get
+def absences(request):
+    params = request_params(request)
+    return rl.reportlog_absences(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        mark=params.get("mark") or "all",
+        day=params.get("day") or None,
+        by=params.get("by") or None,
+        group=params.get("group"),
+        page=params.get("page"),
+        page_size=params.get("pageSize"),
+    )
+
+
+@md_get
 def attention(request):
     params = request_params(request)
     return rl.reportlog_attention(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
@@ -73,5 +97,7 @@ urlpatterns = [
     path("gaps", gaps),
     path("departments", departments),
     path("exports", exports),
+    path("scheduled", scheduled),
+    path("absences", absences),
     path("attention", attention),
 ]

@@ -115,12 +115,17 @@ export function RecordsView() {
   };
 
   return (
-    <section aria-labelledby="gate-records-title" className="flex min-w-0 flex-col gap-3" data-testid="gate-records">
+    // a light sheet on the kiosk's dark page: the filters and the table are the HR kit's, drawn for a light background
+    <section
+      aria-labelledby="gate-records-title"
+      className="gk-light gk-enter flex min-w-0 flex-col gap-3 rounded-3xl border border-white/10 bg-slate-50 p-3 text-slate-900 sm:p-5"
+      data-testid="gate-records"
+    >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="gate-records-title" className="text-lg font-bold text-slate-900">
           Gate records
         </h2>
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-slate-600">
           {fmtRangeLabel(f.dateRange.from, f.dateRange.to)} · You see only this gate's records.
         </p>
       </div>

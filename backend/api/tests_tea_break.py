@@ -52,12 +52,22 @@ class ResolveTeaBreakScanTests(TestCase):
         self.assertIsNotNone(log.out_at)
         self.assertIsNone(log.in_at)
 
+    def wait_past_cooldown(self, minutes: int = 6):
+        """As if `minutes` passed since every scan so far (the 5-minute scan cooldown, 2026-11-21)."""
+        for log in TeaBreakLog.objects.filter(employee=self.emp):
+            log.out_at -= timedelta(minutes=minutes)
+            if log.in_at:
+                log.in_at -= timedelta(minutes=minutes)
+            log.save(update_fields=["out_at", "in_at"])
+
     def test_second_scan_closes_the_open_row_as_in(self):
         resolve_tea_break_scan(self.gate, self.emp)
+        self.wait_past_cooldown()
         body, status = resolve_tea_break_scan(self.other_gate, self.emp)
         self.assertEqual(status, 200)
         self.assertEqual(body["action"], "in")
         self.assertIn("takenMinutes", body)
+        self.assertEqual(body["allowedMinutes"], 15)  # the gate warns when the break ran over (2026-11-21)
 
         log = TeaBreakLog.objects.get(employee=self.emp)
         self.assertEqual(log.in_gate_id, self.other_gate.id)
@@ -68,10 +78,55 @@ class ResolveTeaBreakScanTests(TestCase):
 
     def test_third_scan_after_a_completed_cycle_starts_a_fresh_out_row(self):
         resolve_tea_break_scan(self.gate, self.emp)
+        self.wait_past_cooldown(20)
         resolve_tea_break_scan(self.gate, self.emp)
+        self.wait_past_cooldown()
         body, status = resolve_tea_break_scan(self.gate, self.emp)
         self.assertEqual(body["action"], "out")
         self.assertEqual(TeaBreakLog.objects.filter(employee=self.emp).count(), 2)
+
+    # ── the scan cooldown (owner 2026-11-21: no duplicate breaks from a repeat scan) ──
+
+    def test_a_repeat_scan_inside_the_cooldown_records_nothing_and_says_when_it_may_scan_again(self):
+        resolve_tea_break_scan(self.gate, self.emp)
+        body, status = resolve_tea_break_scan(self.other_gate, self.emp)
+        self.assertEqual((status, body["result"], body["kind"], body["lastAction"]), (409, "cooldown", "tea_break", "out"))
+        self.assertEqual(body["cooldownMinutes"], 5)
+        self.assertTrue(0 < body["waitSeconds"] <= 300)
+        self.assertIn("Already scanned at", body["message"])
+        self.assertIn("tea break started", body["message"])
+        self.assertEqual(body["employee"]["employeeCode"], "TEABREAK_EMP1")
+        log = TeaBreakLog.objects.get(employee=self.emp)  # still the one break, still open
+        self.assertIsNone(log.in_at)
+
+    def test_the_return_scan_starts_its_own_cooldown(self):
+        resolve_tea_break_scan(self.gate, self.emp)
+        self.wait_past_cooldown(12)
+        back, _ = resolve_tea_break_scan(self.gate, self.emp)
+        self.assertEqual(back["action"], "in")
+        body, status = resolve_tea_break_scan(self.gate, self.emp)  # scanned again right after coming back
+        self.assertEqual((status, body["result"], body["lastAction"]), (409, "cooldown", "in"))
+        self.assertIn("back from the tea break", body["message"])
+        self.assertEqual(TeaBreakLog.objects.filter(employee=self.emp).count(), 1)
+
+    def test_after_the_cooldown_the_next_scan_is_the_return(self):
+        resolve_tea_break_scan(self.gate, self.emp)
+        self.wait_past_cooldown(5)  # exactly the cooldown: allowed again
+        body, status = resolve_tea_break_scan(self.gate, self.emp)
+        self.assertEqual((status, body["action"]), (200, "in"))
+
+    def test_the_cooldown_follows_the_rule_and_zero_switches_it_off(self):
+        rule = TeaBreakRule.get()
+        rule.scan_cooldown_minutes = 0
+        rule.save()
+        resolve_tea_break_scan(self.gate, self.emp)
+        body, status = resolve_tea_break_scan(self.gate, self.emp)
+        self.assertEqual((status, body["action"]), (200, "in"))
+        rule.scan_cooldown_minutes = 10
+        rule.save()
+        self.wait_past_cooldown(6)
+        body, status = resolve_tea_break_scan(self.gate, self.emp)
+        self.assertEqual((status, body["result"], body["cooldownMinutes"]), (409, "cooldown", 10))
 
     def test_stale_open_row_is_not_closed_by_a_much_later_scan(self):
         stale = TeaBreakLog.objects.create(
@@ -195,6 +250,33 @@ class TeaBreakHrEndpointsTests(TestCase):
         put_response = tea_break_rule(put_request)
         self.assertEqual(put_response.data["allowedMinutes"], 20)
         self.assertEqual(TeaBreakRule.get().allowed_minutes, 20)
+
+    def test_the_scan_cooldown_is_part_of_the_rule(self):
+        auth = f"Bearer {sign_token({'role': 'hr', 'hrUserId': 1})}"
+        get_response = tea_break_rule(self._hr_request("/api/tea-break/rule", branch_id=None))
+        self.assertEqual(get_response.data["scanCooldownMinutes"], 5)
+        # the cooldown alone can be saved: the allowed break length is left as it was
+        put = tea_break_rule(
+            self.factory.put("/api/tea-break/rule", {"scanCooldownMinutes": 3}, format="json", HTTP_AUTHORIZATION=auth)
+        )
+        self.assertEqual((put.data["scanCooldownMinutes"], put.data["allowedMinutes"]), (3, 15))
+        both = tea_break_rule(
+            self.factory.put(
+                "/api/tea-break/rule",
+                {"allowedMinutes": 20, "scanCooldownMinutes": 0},
+                format="json",
+                HTTP_AUTHORIZATION=auth,
+            )
+        )
+        self.assertEqual((both.data["scanCooldownMinutes"], both.data["allowedMinutes"]), (0, 20))
+        for bad in (-1, 61, "x"):
+            r = tea_break_rule(
+                self.factory.put(
+                    "/api/tea-break/rule", {"scanCooldownMinutes": bad}, format="json", HTTP_AUTHORIZATION=auth
+                )
+            )
+            self.assertEqual(r.status_code, 400, bad)
+        self.assertEqual(TeaBreakRule.get().scan_cooldown_minutes, 0)
 
     def test_rule_put_rejects_non_positive_value(self):
         request = self.factory.put(

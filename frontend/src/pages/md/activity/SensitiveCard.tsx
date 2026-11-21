@@ -4,15 +4,15 @@ import AskAiButton from "@/components/md/kit/AskAiButton";
 import SectionCard from "@/components/md/kit/SectionCard";
 import { EmptyBlock, ErrorBanner } from "@/components/md/kit/states";
 import { Input } from "@/components/ui/input";
-import { describeMdError, useMdQuery } from "@/lib/api-client/custom-hooks/md";
+import { describeMdError, useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
 import { num } from "@/lib/md/format";
-import type { PeriodChoice } from "@/lib/md/period";
 import { cn } from "@/lib/utils";
+import EntrySheet from "./EntrySheet";
 import FeedRow from "./FeedRow";
 import RuleTable from "./RuleTable";
 import { MAX_PAGE_SIZE, PAGE_STEP, ask, canShowMore, feedParams, nextPageSize } from "./logic";
 import { FilterChip } from "./parts";
-import type { ActivityFeed, ActivitySensitive, CategoryId } from "./types";
+import type { ActivityFeed, ActivitySensitive, CategoryId, FeedItem } from "./types";
 
 type Mode = "sensitive" | "all";
 
@@ -22,19 +22,21 @@ const MODES: { id: Mode; label: string }[] = [
 ];
 
 /** The sensitive actions, newest first, with the category filters, a search, and a switch to the whole activity feed.
- *  "Show more" asks the server for ten more at a time (a bulk upload is one line, so lists stay short). */
+ *  "Show more" asks the server for ten more at a time (a bulk upload is one line, so lists stay short). `base` is the
+ *  page's period and focus (area / person) as query parameters; a line opens its full details. */
 export default function SensitiveCard({
-  period,
+  base,
   label,
   user,
   onUserChange,
 }: {
-  period: PeriodChoice;
+  base: MdQueryParams;
   label: string;
-  /** A person picked in the people table: only their actions are listed. */
+  /** The person the page is narrowed to (shown as a pill that clears it). */
   user: string | null;
   onUserChange: (name: string | null) => void;
 }) {
+  const [openItem, setOpenItem] = useState<FeedItem | null>(null);
   const [mode, setMode] = useState<Mode>("sensitive");
   const [category, setCategory] = useState<CategoryId | null>(null);
   const [text, setText] = useState("");
@@ -48,11 +50,15 @@ export default function SensitiveCard({
   }, [text]);
 
   // how many lines are shown resets whenever the question changes
-  const questionKey = JSON.stringify([period, mode, mode === "sensitive" ? category : null, q, user]);
+  const questionKey = JSON.stringify([base, mode, mode === "sensitive" ? category : null, q]);
   const [size, setSize] = useState({ key: questionKey, n: PAGE_STEP });
   const pageSize = size.key === questionKey ? size.n : PAGE_STEP;
 
-  const params = feedParams(period, { pageSize, q, category: mode === "sensitive" ? category : null, user });
+  const params = feedParams(base as Record<string, string | number>, {
+    pageSize,
+    q,
+    category: mode === "sensitive" ? category : null,
+  });
   const sensitive = useMdQuery<ActivitySensitive>("activity/sensitive", params, { enabled: mode === "sensitive" });
   const feed = useMdQuery<ActivityFeed>("activity/feed", params, { enabled: mode === "all" });
   const query = mode === "sensitive" ? sensitive : feed;
@@ -170,7 +176,7 @@ export default function SensitiveCard({
           <>
             <ul data-testid="md-activity-feed">
               {data.items.map((item) => (
-                <FeedRow key={item.id} item={item} />
+                <FeedRow key={item.id} item={item} onOpen={setOpenItem} />
               ))}
             </ul>
             <div className="flex flex-wrap items-center justify-between gap-2 border-t border-md-line pt-3 text-xs font-medium text-md-ink-soft">
@@ -216,6 +222,7 @@ export default function SensitiveCard({
             )}
           </div>
         )}
+        <EntrySheet item={openItem} onClose={() => setOpenItem(null)} />
         {coverage && (
           <p className="text-[11px] leading-snug text-md-ink-soft" data-testid="md-activity-coverage">
             {coverage}

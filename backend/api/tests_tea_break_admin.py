@@ -48,6 +48,18 @@ from .models import (
     TeaBreakRule,
 )
 from .reporting.definitions import gate_visitor_tea_common as C
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
+
+
+def setUpModule():
+    # The parity check compares with the Tea Break Register, which left the Report Center's list on 2026-11-19
+    # (reporting/layout.py, answers 404 there); its definition still holds the rules this page shares.
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
+
 
 NOW = datetime(2026, 11, 18, 10, 0, tzinfo=dt_timezone.utc)  # 15:30 IST
 WEEK = {"from": "2026-11-16", "to": "2026-11-18"}

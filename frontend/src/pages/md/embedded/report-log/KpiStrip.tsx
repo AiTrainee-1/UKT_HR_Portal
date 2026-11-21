@@ -12,6 +12,9 @@ import {
 } from "lucide-react";
 import StatCard, { type StatTone } from "@/components/md/kit/StatCard";
 import { kpiTiles, previousText, type TileIcon } from "./logic";
+import { drillClick } from "../shared/drill";
+import { tileMark } from "./scheduled-logic";
+import type { AbsenceMark } from "./types";
 import { refreshingClass } from "./parts";
 import type { RlSummary, RlTrend } from "./types";
 
@@ -43,9 +46,12 @@ const SKELETON: { id: string; label: string; icon: TileIcon; tone: StatTone }[] 
 export default function KpiStrip({
   summary,
   trend,
+  onDrill,
 }: {
   summary: UseQueryResult<RlSummary>;
   trend: UseQueryResult<RlTrend>;
+  /** Opens the absences behind a tile (all, informed, not informed, not yet marked). */
+  onDrill?: (mark: AbsenceMark, title: string) => void;
 }) {
   const data = summary.data;
   return (
@@ -68,6 +74,12 @@ export default function KpiStrip({
                 spark={tile.spark}
                 provenance={data.provenance}
                 provenanceIds={tile.provenanceIds}
+                onClick={(() => {
+                  const mark = tileMark(tile.id);
+                  return mark && onDrill && data.metrics.absences.value
+                    ? drillClick(() => onDrill(mark, tile.label))
+                    : undefined;
+                })()}
               />
             ))
           : SKELETON.map((tile) => (

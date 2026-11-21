@@ -10,9 +10,12 @@ analytics/recruitment.py and returns its envelope.
   GET joiners       who joined, by department and unit, and early attrition
   GET trend         joiners against leavers for the last 12 months and the gap to the plan (no period)
   GET sources       which pipeline candidates entered through
+  GET resignations/<id>  one resignation in full: dates, notice, every approval step with its remark, the reason's
+                         group (never its words)
 """
 
 from django.urls import path
+from rest_framework.exceptions import NotFound
 
 from ..analytics import recruitment as recruitment_analytics
 from ..common import MdParamError, md_get, request_params, resolve_period, resolve_scope
@@ -83,6 +86,14 @@ def sources(request):
     return recruitment_analytics.sources(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
 
 
+@md_get
+def resignation(request, resignation_id: int):
+    found = recruitment_analytics.resignation_detail(resignation_id)
+    if found is None:
+        raise NotFound({"error": "There is no resignation with that id."})  # {"error": ...} like every other MD error
+    return found
+
+
 urlpatterns = [
     path("summary", summary),
     path("attention", attention),
@@ -92,4 +103,5 @@ urlpatterns = [
     path("joiners", joiners),
     path("trend", trend),
     path("sources", sources),
+    path("resignations/<int:resignation_id>", resignation),
 ]

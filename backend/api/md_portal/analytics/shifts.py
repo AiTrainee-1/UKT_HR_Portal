@@ -18,6 +18,15 @@ The rules this module applies (the tests pin each of them)
 * A **shift change** is a new assignment that follows a different shift (a move). A new assignment for someone who had
   none before is a first assignment; one that follows the same shift (new dates, new custom timings) is a renewal.
 
+Production (2026-11-16, Manage Shifts -> Production). Once the production rules are in force (Settings -> Production
+Shifts switched on, on or after their effective date, with a default group enabled), a production worker is not on a
+shift template any more: every production day is judged by the DEFAULT production shifts of Settings (Day, Night,
+Sunday ... picked by the first punch), unless the worker is on a SPECIAL shift (``ProductionSpecialShiftAssignment``)
+that covers the day. The old Production Shift template is retired (only days before the effective date use it), so in
+that mode production workers are never "without a shift", their template assignments are not counted, and they are filed
+under "Production shifts (Settings)" or their special shift. Staff keep their shift templates exactly as before. Without
+the rules in force (an older database) production workers are read from their templates, as the attendance engine does.
+
 Attendance by shift does not re-derive anything: it classifies the same day records, with the same Report Center helpers,
 as the Attendance analytics (``attendance.frame_for``), and files each day under the shift the employee was on that day.
 
@@ -30,10 +39,20 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 from typing import Iterable
 
+from dataclasses import dataclass, field
+from functools import cached_property
+
 from django.db.models import Case, CharField, Count, Exists, F, OuterRef, Q, Subquery, Value, When
+from django.db.models.functions import Lower
 
 from ...clock import ist_today
-from ...models import EmployeeShiftAssignment, ShiftTemplate
+from ...models import (
+    EmployeeShiftAssignment,
+    ProductionShiftConfig,
+    ProductionShiftGroup,
+    ProductionSpecialShiftAssignment,
+    ShiftTemplate,
+)
 from ...reporting.formatting import parse_date
 from ..assistant.tools_base import integer_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, prov
@@ -72,6 +91,10 @@ FLOW_ROWS = 12
 
 FIRST, MOVED, RENEWED = "first", "moved", "renewed"
 NONE_KEY = "none"
+PRODUCTION_KEY = "production"
+SPECIAL_PREFIX = "special-"
+PRODUCTION_LABEL = "Production shifts (Settings)"
+APPLIES_ON_TEXT = {"mon_sat": "Monday to Saturday", "sunday": "Sunday", "all": "Every day"}
 OTHER_KEY = "__other__"
 NO_SHIFT_LABEL = "No shift assigned"
 NO_DEPARTMENT = "No department"
@@ -148,6 +171,147 @@ def _person(first: str | None, last: str | None, code: str | None) -> str:
     return f"{first or ''} {last or ''}".strip() or (code or "Unknown")
 
 
+# ─── the production rules (Settings -> Production Shifts, Manage Shifts -> Production) ───────────────────────────
+
+
+def _hm(t) -> str | None:
+    return t.strftime("%H:%M") if t else None
+
+
+@dataclass
+class ProductionRules:
+    """What decides a production worker's shift: the rules switch and effective date, the enabled default groups and
+    special shifts, and who is on a special shift when. Read in three small queries."""
+
+    enabled: bool = False
+    effective_from: date | None = None
+    defaults: list[dict] = field(default_factory=list)
+    specials: dict[int, dict] = field(default_factory=dict)
+    #: (employee id, group id, first day, last day or None) of every special assignment of an enabled special shift
+    assignments: list[tuple[int, int, date, date | None]] = field(default_factory=list)
+
+    def applies_on(self, day: date) -> bool:
+        """True when production days on ``day`` are judged by the rules (not by a shift template)."""
+        return bool(self.enabled and self.effective_from is not None and day >= self.effective_from and self.defaults)
+
+    def special_on(self, employee_id: int, day: date) -> int | None:
+        for emp_id, group_id, start, end in self._by_employee.get(employee_id, ()):
+            if start <= day and (end is None or day <= end):
+                return group_id
+        return None
+
+    @cached_property
+    def _by_employee(self) -> dict[int, list[tuple[int, int, date, date | None]]]:
+        index: dict[int, list] = defaultdict(list)
+        for row in self.assignments:
+            index[row[0]].append(row)
+        for rows in index.values():
+            rows.sort(key=lambda r: r[2], reverse=True)  # the latest start first
+        return index
+
+    def ref(self, key: str) -> dict:
+        """A production row as a shift row shows it."""
+        if key == PRODUCTION_KEY:
+            starts = ", ".join(f"{g['label']} {g['start']}" for g in self.defaults if g["start"])
+            return {
+                "id": None,
+                "key": PRODUCTION_KEY,
+                "label": PRODUCTION_LABEL,
+                "name": PRODUCTION_LABEL,
+                "unit": None,
+                "unitId": None,
+                "type": "production",
+                "start": None,
+                "end": None,
+                "isActive": True,
+                "source": "production",
+                "detail": starts or None,
+            }
+        group_id = int(key[len(SPECIAL_PREFIX) :])
+        g = self.specials.get(group_id) or {"label": "Special shift", "start": None, "mainOut": None}
+        return {
+            "id": group_id,
+            "key": key,
+            "label": f"{g['label']} (special)",
+            "name": g["label"],
+            "unit": None,
+            "unitId": None,
+            "type": "production",
+            "start": g["start"],
+            "end": g["mainOut"],
+            "isActive": True,
+            "source": "special",
+            "detail": APPLIES_ON_TEXT.get(g.get("appliesOn") or "", None),
+        }
+
+
+def _group_doc(g: dict) -> dict:
+    return {
+        "id": g["id"],
+        "label": g["label"],
+        "kind": g["kind"],
+        "appliesOn": g["applies_on"],
+        "appliesOnText": APPLIES_ON_TEXT.get(g["applies_on"], g["applies_on"]),
+        "start": _hm(g["start_time"]),
+        "firstPunchFrom": _hm(g["first_punch_from"]),
+        "firstPunchTo": _hm(g["first_punch_to"]),
+        "mainOut": _hm(g["main_out_time"]),
+        "mainOutNextDay": bool(g["main_out_next_day"]),
+    }
+
+
+def production_rules() -> ProductionRules:
+    """The production rules as they stand (read-only: the config row may not exist on an older database)."""
+    config = (
+        ProductionShiftConfig.objects.filter(pk=1).only("rules_enabled", "rules_effective_from").first()
+    )  # never .get(): it would INSERT
+    groups = list(
+        ProductionShiftGroup.objects.filter(enabled=True)
+        .order_by("order", "id")
+        .values(
+            "id",
+            "label",
+            "kind",
+            "applies_on",
+            "start_time",
+            "first_punch_from",
+            "first_punch_to",
+            "main_out_time",
+            "main_out_next_day",
+            "is_special",
+        )
+    )
+    specials = {g["id"]: _group_doc(g) for g in groups if g["is_special"]}
+    assignments = (
+        list(
+            ProductionSpecialShiftAssignment.objects.filter(group_id__in=list(specials)).values_list(
+                "employee_id", "group_id", "effective_from", "effective_to"
+            )
+        )
+        if specials
+        else []
+    )
+    return ProductionRules(
+        enabled=bool(config is not None and getattr(config, "rules_enabled", True)),
+        effective_from=getattr(config, "rules_effective_from", None) if config is not None else None,
+        defaults=[_group_doc(g) for g in groups if not g["is_special"]],
+        specials=specials,
+        assignments=[(e, g, a, b) for e, g, a, b in assignments if b is None or b >= a],
+    )
+
+
+def _covering_special(day: date) -> Subquery:
+    """The special shift (group id) a production worker is on for ``day``, latest start first."""
+    return Subquery(
+        ProductionSpecialShiftAssignment.objects.filter(
+            employee_id=OuterRef("pk"), group__enabled=True, group__is_special=True
+        )
+        .filter(_covers(day))
+        .order_by("-effective_from", "-id")
+        .values("group_id")[:1]
+    )
+
+
 # ─── who is on which shift: the queries ─────────────────────────────────────────────────────────────────────────────
 
 #: An assignment closed before it started (a cancelled one) covers no day.
@@ -171,30 +335,38 @@ def _on_a_shift(day: date) -> Exists:
     return Exists(_assignments_of().filter(_covers(day)))
 
 
-def _scoped_templates(scope: Scope) -> Q:
-    """The shift templates a scope concerns: the chosen unit(s) and type. A department has no shifts of its own."""
+def _scoped_templates(scope: Scope, staff_only: bool = False) -> Q:
+    """The shift templates a scope concerns: the chosen unit(s) and type. A department has no shifts of its own. Once
+    the production rules are in force the production templates are retired, so only staff templates are "the shifts"."""
     q = Q()
     if scope.branch_ids:
         q &= Q(branch_id__in=scope.branch_ids)
     if scope.employment_type:
         q &= Q(shift_type=scope.employment_type)
+    if staff_only:
+        q &= Q(shift_type="staff")
     return q
 
 
-def _load_shifts(ids: Iterable[int], scope: Scope | None = None) -> tuple[dict[int, dict], set[int]]:
+def _load_shifts(
+    ids: Iterable[int], scope: Scope | None = None, staff_only: bool = False
+) -> tuple[dict[int, dict], set[int]]:
     """({shift id: shift description}, ids of the ACTIVE shifts of the scope). One query. A shift's label is its name,
     plus the unit when two shifts share a name (each unit keeps its own Morning), plus the type when even that is not
     enough."""
     wanted = Q(pk__in=list(ids))
     if scope is not None:
-        wanted |= Q(is_active=True) & _scoped_templates(scope)
+        wanted |= Q(is_active=True) & _scoped_templates(scope, staff_only)
     rows = list(
         ShiftTemplate.objects.filter(wanted)
         .order_by("name", "id")
         .values("id", "name", "shift_type", "start_time", "end_time", "is_active", "branch_id", "branch__name")
     )
-    by_name = Counter(r["name"] for r in rows)
-    by_name_unit = Counter((r["name"], r["branch__name"]) for r in rows)
+    # a shift keeps ONE label on every view: whether a name needs its unit is decided against every shift there is,
+    # not just the ones this answer happens to load (Unit 2's Morning stays "Morning (Unit 2)" when filtered to Unit 2)
+    every = list(ShiftTemplate.objects.values_list("name", "branch__name")) if rows else []
+    by_name = Counter(name for name, _unit in every)
+    by_name_unit = Counter(every)
     shifts: dict[int, dict] = {}
     active_in_scope: set[int] = set()
     for r in rows:
@@ -215,6 +387,8 @@ def _load_shifts(ids: Iterable[int], scope: Scope | None = None) -> tuple[dict[i
             "start": r["start_time"].strftime("%H:%M") if r["start_time"] else None,
             "end": r["end_time"].strftime("%H:%M") if r["end_time"] else None,
             "isActive": bool(r["is_active"]),
+            "source": "template",
+            "detail": None,
         }
         # only the active shifts that belong to the scope's unit(s) and type count as "its" shifts
         if (
@@ -222,6 +396,7 @@ def _load_shifts(ids: Iterable[int], scope: Scope | None = None) -> tuple[dict[i
             and r["is_active"]
             and (not scope.branch_ids or r["branch_id"] in scope.branch_ids)
             and (not scope.employment_type or r["shift_type"] == scope.employment_type)
+            and (not staff_only or r["shift_type"] == "staff")
         ):
             active_in_scope.add(r["id"])
     return shifts, active_in_scope
@@ -238,6 +413,7 @@ def _shift_ref(shifts: dict[int, dict], shift_id: int | None) -> dict:
             "unit": None,
             "unitId": None,
             "type": None,
+            "source": "none",
         }
     found = shifts.get(shift_id)
     if found is None:
@@ -249,8 +425,18 @@ def _shift_ref(shifts: dict[int, dict], shift_id: int | None) -> dict:
             "unit": None,
             "unitId": None,
             "type": None,
+            "source": "template",
         }
     return dict(found)
+
+
+def _ref_for(key: str, shifts: dict[int, dict], rules: ProductionRules) -> dict:
+    """Any row key (a template id, "none", "production", "special-<id>") as a shift row shows it."""
+    if key == NONE_KEY:
+        return _shift_ref(shifts, None)
+    if key == PRODUCTION_KEY or key.startswith(SPECIAL_PREFIX):
+        return rules.ref(key)
+    return _shift_ref(shifts, int(key))
 
 
 # ─── provenance (what a card's "How is this calculated?" says, and what the assistant quotes) ──────────────────────
@@ -404,6 +590,22 @@ def _provenance(scope: Scope, period: Period | None, today: date, *, rows: dict[
             rows=rows.get("scheduled"),
             filters=[*over, "Complete days only: today is left out"],
         ),
+        "shift-production": prov(
+            "shift-production",
+            "Production shifts",
+            dataset="Settings -> Production Shifts, special shift assignments (Manage Shifts -> Production)",
+            definition=(
+                "Once the production rules are in force (switched on, on or after their effective date), every production "
+                "day is judged by the default production shifts of Settings, picked by the worker's first punch (Day, "
+                "Night, Sunday ...), unless the worker is on a special shift that covers the day: a special shift judges "
+                "and pays its workers on its own days. The old Production Shift template only judges the days before the "
+                "effective date, so production workers are never counted as 'without a shift' and their template "
+                "assignments are left out."
+            ),
+            formula="production workers on a special shift today + on the default shifts = production workers",
+            filters=filters,
+            caveats=["Which default shift a worker works (Day or Night) is decided each day by the first punch."],
+        ),
         "shift-previous": prov(
             "shift-previous",
             "Comparison with the previous period",
@@ -455,15 +657,15 @@ def _balance(shifts: list[dict]) -> list[dict]:
     return out
 
 
-@cached()
-def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
-    """Who is on each shift today: people per shift (staff / production split, share), the shift × department grid
-    (departments beyond the biggest ten are one 'Other departments' column), people on no shift, shifts nobody is on, and
-    how evenly the shifts of one unit and type are staffed."""
-    today = today or ist_today()
-    rows = list(
-        scope.employees()
-        .annotate(cur=_current_shift(today))
+def _people_by_shift(scope: Scope, today: date, rules: ProductionRules, in_force: bool) -> list[tuple[str, str, int, int, int]]:
+    """(row key, department, people, staff, production) for the active employees of the scope, grouped by the shift
+    they are on today: their covering template assignment; once the production rules are in force, production workers
+    by their special shift or the default production shifts instead. Two grouped queries at most."""
+    base = scope.employees()
+    out: list[tuple[str, str, int, int, int]] = []
+    on_templates = base.exclude(employment_type="production") if in_force else base
+    for r in (
+        on_templates.annotate(cur=_current_shift(today))
         .values("cur", "department__name")
         .annotate(
             n=Count("id"),
@@ -471,37 +673,78 @@ def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
             production=Count("id", filter=Q(employment_type="production")),
         )
         .order_by()
-    )
-    total = sum(r["n"] for r in rows)
-    per_shift: dict[int, dict] = {}
+    ):
+        key = str(r["cur"]) if r["cur"] else NONE_KEY
+        out.append((key, r["department__name"] or NO_DEPARTMENT, r["n"], r["staff"], r["production"]))
+    if in_force:
+        for r in (
+            base.filter(employment_type="production")
+            .annotate(sp=_covering_special(today))
+            .values("sp", "department__name")
+            .annotate(n=Count("id"))
+            .order_by()
+        ):
+            key = f"{SPECIAL_PREFIX}{r['sp']}" if r["sp"] and r["sp"] in rules.specials else PRODUCTION_KEY
+            out.append((key, r["department__name"] or NO_DEPARTMENT, r["n"], 0, r["n"]))
+    return out
+
+
+def _production_block(rules: ProductionRules, in_force: bool, per_shift: dict[str, dict], workers: int) -> dict:
+    specials = []
+    for group_id, g in rules.specials.items():
+        slot = per_shift.get(f"{SPECIAL_PREFIX}{group_id}")
+        specials.append({**g, "key": f"{SPECIAL_PREFIX}{group_id}", "people": slot["people"] if slot else 0})
+    specials.sort(key=lambda g: (-g["people"], g["label"]))
+    on_special = sum(g["people"] for g in specials)
+    return {
+        "inForce": in_force,
+        "effectiveFrom": rules.effective_from.isoformat() if rules.effective_from else None,
+        "workers": workers,
+        "onDefaults": (workers - on_special) if in_force else None,
+        "onSpecial": on_special if in_force else None,
+        "defaults": rules.defaults,
+        "specials": specials,
+    }
+
+
+@cached()
+def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
+    """Who is on each shift today: people per shift (staff / production split, share), the shift × department grid
+    (departments beyond the biggest ten are one 'Other departments' column), people on no shift, shifts nobody is on, and
+    how evenly the shifts of one unit and type are staffed. Production workers follow the production rules once they
+    are in force (the default production shifts of Settings or a special shift), see the module docstring."""
+    today = today or ist_today()
+    rules = production_rules()
+    in_force = rules.applies_on(today)
+    rows = _people_by_shift(scope, today, rules, in_force)
+    total = sum(r[2] for r in rows)
+    workers = sum(r[4] for r in rows)
+    per_shift: dict[str, dict] = {}
     per_dept: Counter = Counter()
     cell: Counter = Counter()
-    for r in rows:
-        sid = r["cur"] or 0
-        dept = r["department__name"] or NO_DEPARTMENT
-        slot = per_shift.setdefault(sid, {"people": 0, "staff": 0, "production": 0, "departments": set()})
-        slot["people"] += r["n"]
-        slot["staff"] += r["staff"]
-        slot["production"] += r["production"]
+    for key, dept, n, staff, production in rows:
+        slot = per_shift.setdefault(key, {"people": 0, "staff": 0, "production": 0, "departments": set()})
+        slot["people"] += n
+        slot["staff"] += staff
+        slot["production"] += production
         slot["departments"].add(dept)
-        per_dept[dept] += r["n"]
-        cell[(sid, dept)] += r["n"]
+        per_dept[dept] += n
+        cell[(key, dept)] += n
 
-    shifts, active_ids = _load_shifts([s for s in per_shift if s], scope)
-    used_anywhere = set(
-        EmployeeShiftAssignment.objects.filter(_covers(today), employee__status="active").values_list(
-            "shift_id", flat=True
-        )
-    )
+    template_ids = [int(k) for k in per_shift if k.isdigit()]
+    shifts, active_ids = _load_shifts(template_ids, scope, staff_only=in_force)
+    in_use = EmployeeShiftAssignment.objects.filter(_covers(today), employee__status="active")
+    if in_force:
+        in_use = in_use.exclude(employee__employment_type="production")
+    used_anywhere = set(in_use.values_list("shift_id", flat=True))
 
     shift_rows = []
-    for sid, slot in per_shift.items():
-        if not sid:
+    for key, slot in per_shift.items():
+        if key == NONE_KEY:
             continue
-        ref = _shift_ref(shifts, sid)
         shift_rows.append(
             {
-                **ref,
+                **_ref_for(key, shifts, rules),
                 "people": slot["people"],
                 "staff": slot["staff"],
                 "production": slot["production"],
@@ -510,8 +753,9 @@ def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
             }
         )
     shift_rows.sort(key=lambda s: (-s["people"], s["label"]))
-    balance = _balance(shift_rows)
-    none_people = per_shift.get(0, {}).get("people", 0)
+    # only shift templates of one unit and type are staffed side by side; production groups are picked by the first punch
+    balance = _balance([r for r in shift_rows if r["source"] == "template"])
+    none_people = per_shift.get(NONE_KEY, {}).get("people", 0)
 
     # the grid's columns: the biggest departments, the rest together
     ranked = sorted(per_dept.items(), key=lambda kv: (-kv[1], kv[0]))
@@ -522,21 +766,29 @@ def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
         columns.append(
             {"key": OTHER_KEY, "label": "Other departments", "people": sum(per_dept[n] for n in rest), "other": True}
         )
-    shown_ids = {s["id"] for s in shift_rows[:SHIFT_ROWS_MAX]}
+    shown = {s["key"] for s in shift_rows[:SHIFT_ROWS_MAX]} | {NONE_KEY}
     folded: Counter = Counter()
-    for (sid, dept), n in cell.items():
-        if sid and sid not in shown_ids:
+    for (key, dept), n in cell.items():
+        if key not in shown:
             continue
-        folded[(sid or None, dept if dept in kept else OTHER_KEY)] += n
+        folded[(key, dept if dept in kept else OTHER_KEY)] += n
+
+    def _order(key: str) -> tuple:
+        return (0, int(key), "") if key.isdigit() else (1 if key == NONE_KEY else 2, 0, key)
+
     cells = [
-        {"shift": str(sid) if sid else NONE_KEY, "department": dept, "people": n}
-        for (sid, dept), n in sorted(folded.items(), key=lambda kv: (kv[0][0] or 0, kv[0][1]))
+        {"shift": key, "department": dept, "people": n}
+        for (key, dept), n in sorted(folded.items(), key=lambda kv: (_order(kv[0][0]), kv[0][1]))
     ]
 
     unused_ids = sorted((active_ids - used_anywhere), key=lambda i: (shifts[i]["label"], i))
     templates = {"active": len(active_ids), "inUse": len(active_ids & used_anywhere), "unused": len(unused_ids)}
     by_type = Counter(shifts[i]["type"] for i in active_ids)
-    templates["staff"], templates["production"] = by_type.get("staff", 0), by_type.get("production", 0)
+    templates["staff"] = by_type.get("staff", 0)
+    # once the production templates are retired, production's shifts are the enabled production groups
+    templates["production"] = (
+        len(rules.defaults) + len(rules.specials) if in_force else by_type.get("production", 0)
+    )
     people_by_type = {
         "staff": sum(slot["staff"] for slot in per_shift.values()),
         "production": sum(slot["production"] for slot in per_shift.values()),
@@ -546,10 +798,15 @@ def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
     notes = []
     if not total:
         notes.append(f"There are no active employees in this selection ({scope.describe()}).")
-    if per_shift.get(0) and total and none_people * 10 >= total:
+    if none_people and total and none_people * 10 >= total:
         notes.append(
             f"{_num(none_people)} of {_num(total)} active employees are on no shift today, so they are not in any "
             "shift's count."
+        )
+    if in_force and workers:
+        notes.append(
+            "Production workers follow the production shifts of Settings (picked by the first punch) unless they are "
+            "on a special shift; their old shift-template assignments are not counted."
         )
     return envelope(
         {
@@ -567,9 +824,12 @@ def shifts_coverage(scope: Scope, *, today: date | None = None) -> dict:
             "balance": balance,
             "imbalanceFlagPct": IMBALANCE_FLAG_PCT,
             "imbalanceMinLargest": IMBALANCE_MIN_LARGEST,
+            "production": _production_block(rules, in_force, per_shift, workers),
         },
         scope=scope,
-        provenance=_pick(entries, "shift-people", "shift-balance", "shift-templates", "shift-coverage"),
+        provenance=_pick(
+            entries, "shift-people", "shift-balance", "shift-templates", "shift-coverage", "shift-production"
+        ),
         notes=notes,
     )
 
@@ -602,16 +862,20 @@ def shifts_unassigned(scope: Scope, *, limit: int = LIST_DEFAULT, today: date | 
         .values("shift__name")[:1]
     )
     people = scope.employees().annotate(has_shift=_on_a_shift(today))
+    # once the production rules are in force a production worker is always on the production shifts
+    no_shift = Q(has_shift=False)
+    if production_rules().applies_on(today):
+        no_shift &= ~Q(employment_type="production")
 
-    totals = people.aggregate(active=Count("id"), without=Count("id", filter=Q(has_shift=False)))
-    without_qs = people.filter(has_shift=False).annotate(next_start=later, last_end=last_end)
+    totals = people.aggregate(active=Count("id"), without=Count("id", filter=no_shift))
+    without_qs = people.filter(no_shift).annotate(next_start=later, last_end=last_end)
     split = without_qs.aggregate(
         starts_later=Count("id", filter=Q(next_start__isnull=False)),
         never=Count("id", filter=Q(next_start__isnull=True, last_end__isnull=True)),
     )
     by_department = list(
         people.values("department__name")
-        .annotate(total=Count("id"), without=Count("id", filter=Q(has_shift=False)))
+        .annotate(total=Count("id"), without=Count("id", filter=no_shift))
         .filter(without__gt=0)
         .order_by("-without", "department__name")[:LIST_MAX]
     )
@@ -718,6 +982,8 @@ def shifts_watch(
     today = today or ist_today()
     horizon = today + timedelta(days=days)
     base = EmployeeShiftAssignment.objects.filter(scope.employee_q("employee__"), employee__status="active")
+    if production_rules().applies_on(today):  # production workers are on the production rules, not on templates
+        base = base.exclude(employee__employment_type="production")
     covering = base.filter(_covers(today))
 
     # ending soon, and not followed by anything
@@ -812,9 +1078,16 @@ def shifts_watch(
 # ─── shift changes: who moved, and when ─────────────────────────────────────────────────────────────────────────────
 
 
+def _retired_from() -> date | None:
+    """The day from which the production templates no longer decide anything (the rules' effective date), or None."""
+    rules = production_rules()
+    return rules.effective_from if rules.enabled and rules.effective_from and rules.defaults else None
+
+
 def _starts(scope: Scope, lo: date, hi: date):
     """The assignments that START in [lo, hi] (cancelled ones excluded), each labelled FIRST (the employee had no earlier
-    assignment), MOVED (the one before it was another shift) or RENEWED (the same shift again)."""
+    assignment), MOVED (the one before it was another shift) or RENEWED (the same shift again). A production template's
+    assignment starting once the production rules are in force changes nothing and is left out."""
     prior = (
         EmployeeShiftAssignment.objects.filter(
             _VALID, employee_id=OuterRef("employee_id"), effective_from__lt=OuterRef("effective_from")
@@ -822,11 +1095,14 @@ def _starts(scope: Scope, lo: date, hi: date):
         .order_by("-effective_from", "-id")
         .values("shift_id")[:1]
     )
+    qs = EmployeeShiftAssignment.objects.filter(
+        scope.employee_q("employee__"), _VALID, effective_from__gte=lo, effective_from__lte=hi
+    )
+    retired = _retired_from()
+    if retired is not None:
+        qs = qs.exclude(shift__shift_type="production", effective_from__gte=retired)
     return (
-        EmployeeShiftAssignment.objects.filter(
-            scope.employee_q("employee__"), _VALID, effective_from__gte=lo, effective_from__lte=hi
-        )
-        .annotate(prev_shift=Subquery(prior))
+        qs.annotate(prev_shift=Subquery(prior))
         .annotate(
             kind=Case(
                 When(prev_shift__isnull=True, then=Value(FIRST)),
@@ -897,7 +1173,8 @@ def shifts_changes(scope: Scope, period: Period, *, today: date | None = None) -
         by_week: dict[date, list[date]] = {}
         for d in period_days:
             by_week.setdefault(d - timedelta(days=d.weekday()), []).append(d)
-        points = [_point(days[0], days, per_day) for days in by_week.values()]
+        # a week is dated by its Monday (as every weekly chart of the portal), even when the period starts mid-week
+        points = [_point(monday, days, per_day) for monday, days in by_week.items()]
     else:
         points = [_point(d, [d], per_day) for d in period_days]
 
@@ -927,6 +1204,9 @@ def shifts_changes(scope: Scope, period: Period, *, today: date | None = None) -
     flow_rows.sort(key=lambda r: (-abs(r["net"]), -(r["movedIn"] + r["movedOut"]), r["label"]))
 
     scheduled = sum(sum(v.values()) for d, v in per_day.items() if d > today)
+    special_starts = ProductionSpecialShiftAssignment.objects.filter(
+        scope.employee_q("employee__"), effective_from__gte=period.start, effective_from__lte=period.end
+    ).filter(Q(effective_to__isnull=True) | Q(effective_to__gte=F("effective_from")))
     entries = _provenance(scope, period, today, rows={"started": cur["started"]})
     notes = [] if cur["started"] else [f"No shift was assigned or changed {_within(period)} ({scope.describe()})."]
     if scheduled:
@@ -941,6 +1221,7 @@ def shifts_changes(scope: Scope, period: Period, *, today: date | None = None) -
             "totals": {
                 **cur,
                 "scheduled": scheduled,
+                "specialStarts": special_starts.count(),
                 "previous": prev,
                 "change": {
                     "moved": change(cur["moved"], prev["moved"]),
@@ -1002,15 +1283,24 @@ def shifts_attendance(scope: Scope, period: Period, *, today: date | None = None
         )
     measured = win.measured
     roster = frame.roster
+    rules = production_rules()
+
+    def key_of(eid: int, d: date) -> str:
+        person = frame.people.get(eid)
+        kind = getattr(person, "employment_type", None) or getattr(person, "kind", None)
+        if kind == "production" and rules.applies_on(d):
+            special = rules.special_on(eid, d)
+            return f"{SPECIAL_PREFIX}{special}" if special in rules.specials else PRODUCTION_KEY
+        assignment = roster.assignment_on(eid, d)
+        return str(assignment.shift_id) if assignment else NONE_KEY
 
     def file_under(rows):
-        tallies: dict[int, list[int]] = defaultdict(att.new_tally)
-        people: dict[int, set[int]] = defaultdict(set)
+        tallies: dict[str, list[int]] = defaultdict(att.new_tally)
+        people: dict[str, set[int]] = defaultdict(set)
         for d, eid, code, flags in rows:
-            assignment = roster.assignment_on(eid, d)
-            sid = assignment.shift_id if assignment else 0
-            att.add_row(tallies[sid], code, flags)
-            people[sid].add(eid)
+            key = key_of(eid, d)
+            att.add_row(tallies[key], code, flags)
+            people[key].add(eid)
         return tallies, people
 
     cur_rows = frame.window(measured.start, measured.end)
@@ -1021,7 +1311,7 @@ def shifts_attendance(scope: Scope, period: Period, *, today: date | None = None
     overall = _att_figures(overall_cur)
     overall_prev_fig = _att_figures(overall_prev) if overall_prev else None
 
-    shifts, _ = _load_shifts({s for s in cur if s})
+    shifts, _ = _load_shifts({int(k) for k in cur if k.isdigit()})
     rows = []
     for sid, tally in cur.items():
         f = _att_figures(tally)
@@ -1033,7 +1323,7 @@ def shifts_attendance(scope: Scope, period: Period, *, today: date | None = None
         )
         rows.append(
             {
-                **_shift_ref(shifts, sid),
+                **_ref_for(sid, shifts, rules),
                 "people": len(cur_people[sid]),
                 **f,
                 "lowSample": f["workedDays"] < MIN_SAMPLE_DAYS,
@@ -1064,7 +1354,7 @@ def shifts_attendance(scope: Scope, period: Period, *, today: date | None = None
         )
     if not getattr(frame.settings, "morning_late_in_enabled", True):
         notes.append("Morning Late-In detection is switched off in Settings, so late figures are understated.")
-    unassigned_days = cur.get(0)
+    unassigned_days = cur.get(NONE_KEY)
     if unassigned_days and overall["workedDays"] and att.t_worked(unassigned_days) * 10 >= overall["workedDays"]:
         notes.append(
             f"{_num(att.t_worked(unassigned_days))} of {_num(overall['workedDays'])} worked days belong to employees "
@@ -1084,6 +1374,102 @@ def shifts_attendance(scope: Scope, period: Period, *, today: date | None = None
         scope=scope,
         provenance=_pick(entries, "shift-late", "shift-attendance"),
         notes=notes,
+    )
+
+
+# ─── the people on one shift (the Insights drill-down) ──────────────────────────────────────────────────────────────
+
+
+@cached()
+def shifts_people(
+    scope: Scope, shift: str, *, page: int = 1, page_size: int = 25, today: date | None = None
+) -> dict:
+    """The active employees on one shift today, a page at a time: ``shift`` is a shift template id, "none" (no shift),
+    "production" (the default production shifts of Settings) or "special-<id>" (a special production shift). Each row
+    has the assignment's first and last day where there is one."""
+    today = today or ist_today()
+    key = str(shift or "").strip().lower()
+    page_size = _int_arg(page_size, "pageSize", 25, 1, 100)
+    rules = production_rules()
+    in_force = rules.applies_on(today)
+    people = scope.employees()
+    since = until = None
+    if key == NONE_KEY:
+        people = people.annotate(has_shift=_on_a_shift(today)).filter(has_shift=False)
+        if in_force:
+            people = people.exclude(employment_type="production")
+    elif key == PRODUCTION_KEY or key.startswith(SPECIAL_PREFIX):
+        if not in_force:
+            raise MdParamError("The production rules are not in force, so production workers are on shift templates.")
+        people = people.filter(employment_type="production").annotate(sp=_covering_special(today))
+        if key == PRODUCTION_KEY:
+            people = people.filter(Q(sp__isnull=True) | ~Q(sp__in=list(rules.specials)))
+        else:
+            ident = key[len(SPECIAL_PREFIX) :]
+            if not ident.isdigit():
+                raise MdParamError("A special shift is written special-<id>, for example special-4.")
+            people = people.filter(sp=int(ident))
+            covering = (
+                ProductionSpecialShiftAssignment.objects.filter(employee_id=OuterRef("pk"), group_id=int(ident))
+                .filter(_covers(today))
+                .order_by("-effective_from", "-id")
+            )
+            since, until = Subquery(covering.values("effective_from")[:1]), Subquery(covering.values("effective_to")[:1])
+    elif key.isdigit():
+        people = people.annotate(cur=_current_shift(today)).filter(cur=int(key))
+        if in_force:
+            people = people.exclude(employment_type="production")
+        covering = (
+            _assignments_of().filter(_covers(today), shift_id=int(key)).order_by("-effective_from", "id")
+        )
+        since, until = Subquery(covering.values("effective_from")[:1]), Subquery(covering.values("effective_to")[:1])
+    else:
+        raise MdParamError("'shift' must be a shift id, none, production or special-<id>.")
+    if since is not None:
+        people = people.annotate(since=since, until=until)
+
+    total = people.count()
+    pages = max(1, -(-total // page_size))
+    page = min(_int_arg(page, "page", 1, 1, 1_000_000), pages)
+    fields = ["id", "employee_code", "first_name", "last_name", "employment_type", "department__name", "branch__name"]
+    if since is not None:
+        fields += ["since", "until"]
+    listing = list(
+        people.order_by(Lower("first_name"), Lower("last_name"), "employee_code").values(*fields)[
+            (page - 1) * page_size : page * page_size
+        ]
+    )
+    shifts, _ = _load_shifts([int(key)] if key.isdigit() else [])
+    ref = _ref_for(key, shifts, rules)
+    rows = [
+        {
+            "employeeId": r["id"],
+            "employeeCode": r["employee_code"],
+            "employeeName": _person(r["first_name"], r["last_name"], r["employee_code"]),
+            "department": r["department__name"] or NO_DEPARTMENT,
+            "unit": r["branch__name"] or NO_UNIT,
+            "type": r["employment_type"],
+            "since": r["since"].isoformat() if r.get("since") else None,
+            "until": r["until"].isoformat() if r.get("until") else None,
+        }
+        for r in listing
+    ]
+    entries = _provenance(scope, None, today, rows={"active": total})
+    return envelope(
+        {
+            "asOf": today.isoformat(),
+            "shift": ref,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "pages": pages,
+            "rows": rows,
+        },
+        scope=scope,
+        provenance=_pick(
+            entries, "shift-production" if ref.get("source") in ("production", "special") else "shift-people"
+        ),
+        notes=[] if total else [f"Nobody in this selection is on {ref['label']} today ({scope.describe()})."],
     )
 
 
@@ -1127,6 +1513,13 @@ def shifts_summary(scope: Scope, period: Period, *, today: date | None = None) -
                 "startsLater": watch["startsLater"]["count"],
             },
             "balance": {"groups": len(cov["balance"]), "flagged": len(flagged), "worst": flagged[0] if flagged else None},
+            "production": {
+                "inForce": cov["production"]["inForce"],
+                "workers": cov["production"]["workers"],
+                "onSpecial": cov["production"]["onSpecial"],
+                "defaults": len(cov["production"]["defaults"]),
+                "specials": len(cov["production"]["specials"]),
+            },
             "previousPeriod": period.previous().to_json(),
         },
         period=period,
@@ -1187,7 +1580,8 @@ def shifts_briefing(scope: Scope, period: Period, *, today: date | None = None) 
                     "watch",
                 )
             )
-        shifts = cov["shifts"]
+        # the biggest shift a person is ASSIGNED to (the production groups are picked by the first punch each day)
+        shifts = [r for r in cov["shifts"] if r.get("source", "template") != "production"]
         if shifts:
             big = shifts[0]
             text = (
@@ -1204,6 +1598,22 @@ def shifts_briefing(scope: Scope, period: Period, *, today: date | None = None) 
             else:
                 text += "."
             sentences.append(_line("balance", text, "watch" if worst else "neutral"))
+        prod = cov["production"]
+        if prod["inForce"] and prod["workers"]:
+            names = ", ".join(g["label"] for g in prod["defaults"]) or "the default shifts"
+            special = (
+                f"; {_num(prod['onSpecial'])} {_plural(prod['onSpecial'], 'is', 'are')} on a special shift"
+                if prod["onSpecial"]
+                else ""
+            )
+            sentences.append(
+                _line(
+                    "production",
+                    f"{_num(prod['workers'])} production {_plural(prod['workers'], 'worker follows', 'workers follow')} "
+                    f"the production shifts of Settings ({names}){special}.",
+                    "neutral",
+                )
+            )
 
     if ch["started"] or ch["previous"]["started"]:
         moved_change = summary["changes"]["change"]["moved"]

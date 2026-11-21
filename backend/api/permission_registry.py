@@ -87,6 +87,7 @@ MD_HR_GRANTS: dict[str, str] = {
     "settlement": "edit",
     "notifications": "view",
     "recruitment": "view",
+    # Analytics (2026-11-21, /md/analytics) needs no line here: its key follows "attendance" above, and the page only reads
 }
 
 # Modules the Managing Director may only VIEW (2026-10-10, the product owner: "the MD only needs to view those requests"):

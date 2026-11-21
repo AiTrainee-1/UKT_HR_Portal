@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
-@import "./md-theme/index.css";
+/* only the md-* colour utilities: the MD skin itself is loaded by the MD shell (see md-theme/tailwind.css) */
+@import "./md-theme/tailwind.css";
 @plugin "@tailwindcss/typography";
 
 /* ── UKT Clay Tab System ────────────────────────────────────────── */

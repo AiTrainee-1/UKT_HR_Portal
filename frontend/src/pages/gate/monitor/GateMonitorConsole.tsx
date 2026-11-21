@@ -1,6 +1,12 @@
-// The gate monitor console (/gatemonitor/console): one top bar (the gate, its branch, the connection, the time, Sign out),
-// the scan card and the big result banner on the left, today's counters, Export and the latest scans on the right, and a
-// Gate records view (dates, type, result, search, files). A scanner in keyboard-wedge mode scans from anywhere on the page.
+// The gate monitor console (/gatemonitor/console): a kiosk for an operator standing at a gate. One top bar (the gate, its
+// branch, the connection, the time, Sign out), the big scanner card and the latest scan's result card on the left, today's
+// counters, Export and the latest scans on the right, and a Gate records view (dates, type, result, search, files). A
+// scanner in keyboard-wedge mode scans from anywhere on the page.
+//
+// Every answer lights the whole page in its colour for a few seconds (GLOW_MS): an edge light round the screen, a wash
+// behind the panels, the scanner card; green = let through, orange = stop and look, red = refused, blue = back from a tea
+// break, grey = nothing decided (scan-result.ts). The result card keeps the answer until the next scan, and the answer is
+// read out in an aria-live line and by the voice. The look and the motion are in gate-kiosk.css.
 //
 // It talks to the server only through ./client (the gate token, never the HR one). The session is checked on load, every
 // 5 minutes and whenever the tab comes back into view (GET me, which also renews the token); when it is over, client.ts
@@ -11,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Redirect, useLocation } from "wouter";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, LogOut, ScanLine } from "lucide-react";
+import "./gate-kiosk.css";
 import type { GateMonitorGate, GateScanResult } from "@/lib/api-client/custom-hooks/gate-monitor";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { UktLogoMark } from "@/components/ui/UktLogoMark";
@@ -42,27 +49,27 @@ import {
   SIGN_IN_PATH,
 } from "./client";
 import {
-  CARD,
   ConnectionDot,
   LatestScans,
   LiveClock,
-  ResultBanner,
-  ScanCard,
+  PANEL,
+  PILL,
   ScannerBadge,
   takesLabel,
   TodayCounters,
   VoiceToggle,
 } from "./parts";
 import { RecordsView } from "./RecordsView";
-import { describeScan, OFFLINE_RESULT, type ScanTone } from "./scan-result";
+import { ResultBanner, ScanCard, type ScanGlow } from "./scan-cards";
+import { describeScan, OFFLINE_RESULT } from "./scan-result";
 import { makeDuplicateGuard, speak, useScannerConnection, useWedgeScanner } from "./scanner";
 
 /** GET me this often (and on the tab coming back): it keeps the token fresh and notices a sign-out from HR. */
 export const HEARTBEAT_MS = 5 * 60_000;
 /** Today's counters and the latest scans are read again this often while the tab is visible. */
 export const REFRESH_MS = 20_000;
-/** How long the scan zone keeps the last answer's colour. */
-const FLASH_MS = 1800;
+/** How long the page keeps the last answer's colour (the glow) before it fades back to Ready; the result card stays. */
+export const GLOW_MS = 4500;
 const LATEST_ROWS = 8;
 const VIEW_DEFAULTS = { view: "scan" };
 
@@ -78,7 +85,7 @@ function GateConsole() {
   const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [{ view }, setView] = useUrlParams(VIEW_DEFAULTS);
+  const [{ view: viewParam }, setView] = useUrlParams(VIEW_DEFAULTS);
   const stored = readGateSession();
   const [gate, setGate] = useState<GateMonitorGate | null>(null);
   const [heartbeatOffline, setHeartbeatOffline] = useState(false);
@@ -87,10 +94,11 @@ function GateConsole() {
   );
   const [result, setResult] = useState<GateScanResult | null>(null);
   const [resultAt, setResultAt] = useState<Date | null>(null);
-  const [flash, setFlash] = useState<ScanTone | "idle">("idle");
+  const [glow, setGlow] = useState<ScanGlow | null>(null);
+  const [announce, setAnnounce] = useState("");
   const [busy, setBusy] = useState(false);
   const [confirmOut, setConfirmOut] = useState(false);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const glowTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Every scan gets the next number; an answer is shown and said only while its scan is still the latest. The scanner
   // does not wait for a slow answer (and a typed code can be followed by a scan), so an older answer arriving last must
   // not replace the newer one on the banner or in the voice.
@@ -167,7 +175,7 @@ function GateConsole() {
   const handleScan = useCallback(
     async (raw: string) => {
       if (!acceptRead(raw)) return; // the scanner fired twice for one pass
-      if (view === "records") setView({ view: "scan" }); // the answer shows on the scan screen
+      if (viewParam === "records") setView({ view: "scan" }); // the answer shows on the scan screen
       const seq = ++scanSeq.current;
       const isLatest = () => seq === scanSeq.current;
       setBusy(true);
@@ -194,19 +202,23 @@ function GateConsole() {
       const shown = describeScan(body);
       setResult(body);
       setResultAt(new Date());
-      setFlash(shown.tone);
+      setGlow({ tone: shown.tone, seq, on: true });
+      // the same answer twice in a row must be read out again: the zero-width space makes the text differ
+      const who = body.employee?.name ? ` ${body.employee.name}.` : "";
+      const note = shown.note ? ` ${shown.note.text}` : "";
+      setAnnounce(`${shown.title}.${who}${note}${seq % 2 ? "" : "\u200b"}`);
       void speak(shown.voice);
-      if (flashTimer.current) clearTimeout(flashTimer.current);
-      flashTimer.current = setTimeout(() => setFlash("idle"), FLASH_MS);
+      if (glowTimer.current) clearTimeout(glowTimer.current);
+      glowTimer.current = setTimeout(() => setGlow((g) => (g && g.seq === seq ? { ...g, on: false } : g)), GLOW_MS);
       if (body.result !== "offline") refreshLists();
     },
-    [acceptRead, refreshLists, setView, view],
+    [acceptRead, refreshLists, setView, viewParam],
   );
 
   useWedgeScanner((raw) => void handleScan(raw));
   useEffect(
     () => () => {
-      if (flashTimer.current) clearTimeout(flashTimer.current);
+      if (glowTimer.current) clearTimeout(glowTimer.current);
     },
     [],
   );
@@ -227,22 +239,54 @@ function GateConsole() {
   const branch = gate?.branchName;
   const takes = gate ? takesLabel(gate.allowOutpass, gate.allowTeaBreak) : "Gate passes and tea breaks";
   const s = summary.data;
+  const view = result ? describeScan(result) : null;
+  const glowing = !!glow?.on;
+  const screen = viewParam === "records" ? "records" : "scan";
 
   return (
-    <div className="flex min-h-screen min-w-0 flex-col bg-slate-50" data-testid="gate-monitor-console">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span className="flex size-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white">
+    <div
+      className="gk-root flex min-h-screen min-w-0 flex-col bg-slate-950"
+      data-testid="gate-monitor-console"
+      data-scan-tone={glowing ? glow!.tone : "idle"}
+      data-busy={busy ? "true" : undefined}
+    >
+      <div className="gk-bg" aria-hidden="true" />
+      {glow && (
+        <>
+          <div
+            key={`wash-${glow.seq}`}
+            className="gk-wash"
+            data-gk-tone={glow.tone}
+            data-on={glow.on ? "true" : "false"}
+            aria-hidden="true"
+          />
+          <div
+            key={`edge-${glow.seq}`}
+            className="gk-edge"
+            data-gk-tone={glow.tone}
+            data-on={glow.on ? "true" : "false"}
+            aria-hidden="true"
+            data-testid="scan-glow"
+          />
+        </>
+      )}
+      <p className="sr-only" aria-live="assertive" aria-atomic="true" data-testid="scan-announce">
+        {announce}
+      </p>
+
+      <header className="border-b border-white/[0.06]">
+        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-x-4 gap-y-3 px-4 py-3">
+          <div className="flex min-w-[15rem] flex-1 items-center gap-3">
+            <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-white">
               <UktLogoMark className="h-7" />
             </span>
             <div className="min-w-0">
-              <p className="truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="truncate text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400">
                 UK Textiles HRMS · Gate Monitor
               </p>
-              <h1 className="truncate text-lg font-bold leading-tight text-slate-900" data-testid="gate-name">
+              <h1 className="truncate text-lg font-bold leading-tight text-white sm:text-xl" data-testid="gate-name">
                 {gateName}
-                {branch && <span className="font-medium text-slate-500"> · {branch}</span>}
+                {branch && <span className="font-medium text-slate-400"> · {branch}</span>}
               </h1>
             </div>
           </div>
@@ -254,7 +298,7 @@ function GateConsole() {
             <button
               type="button"
               onClick={() => setConfirmOut(true)}
-              className="inline-flex h-11 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              className={cn(PILL, "hover:bg-white/[0.09] hover:text-white")}
               data-testid="gate-sign-out"
             >
               <LogOut size={15} aria-hidden="true" /> Sign out
@@ -263,9 +307,9 @@ function GateConsole() {
         </div>
       </header>
 
-      <main className="mx-auto flex w-full min-w-0 max-w-7xl flex-1 flex-col gap-4 p-4">
+      <main className="mx-auto flex w-full min-w-0 max-w-7xl flex-1 flex-col gap-4 px-4 pb-8 pt-4">
         <div
-          className="flex w-full overflow-hidden rounded-lg border border-slate-200 bg-white sm:w-auto sm:self-start"
+          className="flex w-full rounded-2xl border border-white/10 bg-white/[0.04] p-1 sm:w-auto sm:self-start"
           role="group"
           aria-label="Screen"
         >
@@ -274,8 +318,8 @@ function GateConsole() {
               { value: "scan", label: "Scan", icon: ScanLine },
               { value: "records", label: "Gate records", icon: ClipboardList },
             ] as const
-          ).map((v, i) => {
-            const on = (view === "records" ? "records" : "scan") === v.value;
+          ).map((v) => {
+            const on = screen === v.value;
             const Icon = v.icon;
             return (
               <button
@@ -284,9 +328,8 @@ function GateConsole() {
                 aria-pressed={on}
                 onClick={() => setView({ view: v.value })}
                 className={cn(
-                  "inline-flex h-11 flex-1 items-center justify-center gap-2 px-4 text-sm font-semibold sm:flex-none",
-                  i > 0 && "border-l border-slate-200",
-                  on ? "bg-primary text-primary-foreground" : "text-slate-700 hover:bg-slate-50",
+                  "gk-seg inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-xl px-5 text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-sky-300/70 sm:flex-none",
+                  on ? "bg-white text-slate-900" : "text-slate-300 hover:bg-white/[0.06] hover:text-white",
                 )}
                 data-testid={`view-${v.value}`}
               >
@@ -296,61 +339,83 @@ function GateConsole() {
           })}
         </div>
 
-        {view === "records" ? (
+        {screen === "records" ? (
           <RecordsView />
         ) : (
-          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(320px,400px)]">
+          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(340px,410px)]">
             <div className="flex min-w-0 flex-col gap-4">
-              <ScanCard flash={flash} busy={busy} takes={takes} onSubmitCode={(code) => void handleScan(code)} />
+              <ScanCard
+                glow={glow}
+                view={view}
+                person={result?.employee ?? null}
+                busy={busy}
+                online={online}
+                takes={takes}
+                onSubmitCode={(code) => void handleScan(code)}
+              />
               <ResultBanner
                 result={result}
                 at={resultAt}
+                seq={glow?.seq ?? 0}
                 onDone={() => {
                   setResult(null);
                   setResultAt(null);
+                  setGlow((g) => (g ? { ...g, on: false } : g)); // the page goes back to Ready with it
                 }}
               />
             </div>
-            <div className="flex min-w-0 flex-col gap-4">
-              <section aria-labelledby="gate-today-title" className={cn(CARD, "p-4")} data-testid="today-card">
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <h2 id="gate-today-title" className="text-base font-bold text-slate-900">
-                    Today at this gate
-                  </h2>
+            <div className="grid min-w-0 content-start gap-4 md:grid-cols-2 lg:grid-cols-1">
+              <section aria-labelledby="gate-today-title" className={cn(PANEL, "p-4 sm:p-5")} data-testid="today-card">
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <div className="min-w-0">
+                    <h2 id="gate-today-title" className="text-base font-bold text-white">
+                      Today at this gate
+                    </h2>
+                    {s && (
+                      <p className="mt-0.5 text-xs text-slate-400">
+                        {s.total === 1 ? "1 scan" : `${s.total.toLocaleString("en-IN")} scans`} so far
+                      </p>
+                    )}
+                  </div>
                   <ExportButton
                     title="Gate records"
                     run={exportToday}
                     label="Export today"
                     hints={{ xlsx: "Today's records of this gate", pdf: "Today's records of this gate" }}
                     testId="today-export"
-                    className="ml-auto h-11 sm:h-11"
+                    className="ml-auto h-11 rounded-xl border-white/[0.15] bg-white/[0.06] text-slate-100 hover:bg-white/[0.12] hover:text-white sm:h-11"
                   />
                 </div>
                 <TodayCounters summary={s} loading={summary.isLoading} />
                 {s && (
-                  <p className="mt-3 text-sm text-slate-600" data-testid="today-out-now">
+                  <p
+                    className="mt-3 rounded-xl border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-sm text-slate-300"
+                    data-testid="today-out-now"
+                  >
                     {s.outNow === 0
                       ? "Everyone who went out through this gate today is back."
                       : `Out now: ${s.passesOutNow} on a gate pass, ${s.teaOutNow} on a tea break.`}
                   </p>
                 )}
                 {!!summary.error && !(summary.error instanceof GateSessionEndedError) && (
-                  <p className="mt-3 text-sm text-rose-700">{(summary.error as Error).message}</p>
+                  <p className="mt-3 text-sm text-rose-300">{(summary.error as Error).message}</p>
                 )}
               </section>
-              <LatestScans
-                rows={latest.data?.items}
-                loading={latest.isLoading}
-                error={
-                  latest.error && !(latest.error instanceof GateSessionEndedError)
-                    ? (latest.error as Error).message
-                    : null
-                }
-                onSeeAll={() => setView({ view: "records" })}
-              />
-              <p className="text-center text-xs font-medium uppercase tracking-wide text-slate-500">
-                You see only this gate's records.
-              </p>
+              <div className="flex min-w-0 flex-col gap-3">
+                <LatestScans
+                  rows={latest.data?.items}
+                  loading={latest.isLoading}
+                  error={
+                    latest.error && !(latest.error instanceof GateSessionEndedError)
+                      ? (latest.error as Error).message
+                      : null
+                  }
+                  onSeeAll={() => setView({ view: "records" })}
+                />
+                <p className="text-center text-xs font-medium uppercase tracking-[0.12em] text-slate-400">
+                  You see only this gate's records.
+                </p>
+              </div>
             </div>
           </div>
         )}

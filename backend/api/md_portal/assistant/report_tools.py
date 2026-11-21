@@ -69,7 +69,10 @@ def find_reports(*, query: str, limit: int = 6) -> dict:
     from ...reporting.types import CATEGORIES
 
     labels = {c[0]: c[1] for c in CATEGORIES}
-    specs = all_specs()
+    from ...reporting.layout import is_listed
+
+    # only reports the Report Center still lists (the rest were retired on 2026-11-19/20 and answer 404)
+    specs = [s for s in all_specs() if is_listed(s)]
     words = _words(query)
     ranked = sorted(
         ((_score(words, s, labels.get(s.category, s.category)), s) for s in specs),

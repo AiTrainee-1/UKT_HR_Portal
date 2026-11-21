@@ -1,4 +1,4 @@
-import { FileClock, PieChart } from "lucide-react";
+import { CheckCircle2, FileClock, PieChart } from "lucide-react";
 import AskAiButton from "@/components/md/kit/AskAiButton";
 import BarList from "@/components/md/kit/BarList";
 import { CHART } from "@/components/md/kit/chartTheme";
@@ -10,7 +10,14 @@ import { dayLong, dayShort, num } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import { daysLeftText, daysText, outlookLine, plural, reasonSlices, waitTone } from "./logic";
 import { Avatar, Chip, Expandable, QueryError } from "./parts";
-import type { OnNoticeRow, OutlookWindow, PendingResignation, QueryLike, RecruitmentResignations } from "./types";
+import type {
+  OnNoticeRow,
+  OutlookWindow,
+  PendingResignation,
+  QueryLike,
+  RecruitmentResignations,
+  ResignationDecision,
+} from "./types";
 
 function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
   return [
@@ -68,14 +75,19 @@ function pendingColumns(warnAfter: number): Column<PendingResignation>[] {
   ];
 }
 
-function NoticeList({ rows, total }: { rows: OnNoticeRow[]; total: number }) {
+function NoticeList({ rows, total, onOpen }: { rows: OnNoticeRow[]; total: number; onOpen?: (id: number) => void }) {
   if (rows.length === 0) return null;
   return (
     <div className="md-panel mt-5 p-4" data-testid="md-recruitment-on-notice">
       <p className="md-people-overline mb-1.5">Serving notice ({total})</p>
       <ul>
         {rows.map((r) => (
-          <li key={r.id} className="md-people-row">
+          <li
+            key={r.id}
+            className={cn("md-people-row", onOpen && "cursor-pointer rounded-lg hover:bg-md-wine/[0.03]")}
+            onClick={onOpen ? () => onOpen(r.id) : undefined}
+            data-testid={`md-recruitment-notice-${r.id}`}
+          >
             <span className="flex min-w-0 items-center gap-2.5">
               <Avatar name={r.employeeName} className="md-people-avatar-sm" />
               <span className="min-w-0 text-sm">
@@ -105,9 +117,72 @@ function OutlookTile({ window, testId, tone }: { window: OutlookWindow; testId: 
   );
 }
 
-/** Resignations: what waits for a decision (and for whom), who is serving notice, who is due to leave soon, why people
- *  resign, and where. Names appear only in the two short lists; reasons are counted by group, never quoted. */
-export default function ResignationsSection({ query }: { query: QueryLike<RecruitmentResignations> }) {
+/** The requests decided in the period: who decided, at which step, and a rejection's reason (required since
+ *  2026-11-21). The employee's own reason is never shown here. */
+function DecisionList({
+  rows,
+  total,
+  onOpen,
+}: {
+  rows: ResignationDecision[];
+  total: number;
+  onOpen?: (id: number) => void;
+}) {
+  if (rows.length === 0) {
+    return (
+      <EmptyBlock icon={CheckCircle2} title="No resignation was decided in this period">
+        Approvals and rejections appear here with who decided them and why a request was rejected.
+      </EmptyBlock>
+    );
+  }
+  return (
+    <ul className="space-y-2" data-testid="md-recruitment-decisions">
+      {rows.map((d) => (
+        <li key={d.id}>
+          <button
+            type="button"
+            onClick={onOpen ? () => onOpen(d.id) : undefined}
+            className="w-full rounded-xl bg-white/55 px-3 py-2.5 text-left hover:bg-white/80"
+            data-testid={`md-recruitment-decision-${d.id}`}
+          >
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <Chip tone={d.status === "approved" ? "green" : "red"}>
+                {d.status === "approved" ? "Approved" : "Rejected"}
+              </Chip>
+              <b className="text-sm font-semibold text-md-ink">{d.employeeName}</b>
+              <span className="text-xs text-md-ink-soft">{d.department}</span>
+            </span>
+            <span className="mt-1 block text-xs text-md-ink-soft">
+              {dayShort(d.decidedOn)} · {d.decidedBy ? `${d.decidedBy} (${d.stage})` : d.stage}
+              {d.lastWorkingDate && d.status === "approved" ? ` · last day ${dayShort(d.lastWorkingDate)}` : ""}
+            </span>
+            {d.remark && (
+              <span className="mt-1 block text-xs text-md-ink">
+                {d.status === "rejected" ? "Reason: " : ""}“{d.remark}”
+              </span>
+            )}
+          </button>
+        </li>
+      ))}
+      {total > rows.length && (
+        <li className="text-[11px] text-md-ink-soft">
+          The {rows.length} most recent of {total} decisions are listed.
+        </li>
+      )}
+    </ul>
+  );
+}
+
+/** Resignations: what waits for a decision (and for whom), who is serving notice, who is due to leave soon, what was
+ *  decided and why, why people resign, and where. Names appear only in the short lists; reasons are counted by group,
+ *  never quoted. `onOpen` opens one resignation in full. */
+export default function ResignationsSection({
+  query,
+  onOpen,
+}: {
+  query: QueryLike<RecruitmentResignations>;
+  onOpen?: (id: number) => void;
+}) {
   const data = query.data;
   const warnAfter = data?.summary.warnAfterDays ?? 7;
   const total = data?.reasons.reduce((sum, r) => sum + r.count, 0) ?? 0;
@@ -149,9 +224,10 @@ export default function ResignationsSection({ query }: { query: QueryLike<Recrui
                     rowKey={(r) => r.id}
                     initialSort={{ key: "raised", dir: "desc" }}
                     pageSize={6}
+                    onRowClick={onOpen ? (r) => onOpen(r.id) : undefined}
                   />
                 )}
-                <NoticeList rows={data.onNotice} total={data.summary.onNotice} />
+                <NoticeList rows={data.onNotice} total={data.summary.onNotice} onOpen={onOpen} />
               </>
             ))}
         </SectionCard>
@@ -199,6 +275,21 @@ export default function ResignationsSection({ query }: { query: QueryLike<Recrui
             </>
           )}
         </SectionCard>
+
+        {data?.decisions && (
+          <SectionCard
+            className="min-w-0 @4xl:col-span-12"
+            testId="md-recruitment-decisions-card"
+            title="Decided in the period"
+            subtitle={`${plural(data.decisionsTotal ?? data.decisions.length, "decision")} in the period · who decided, and why a request was rejected`}
+            loading={query.isPending}
+            provenance={data.provenance}
+            provenanceIds={["resignation-decisions"]}
+            actions={<AskAiButton question="Which resignations were rejected recently, by whom, and why?" />}
+          >
+            <DecisionList rows={data.decisions} total={data.decisionsTotal ?? data.decisions.length} onOpen={onOpen} />
+          </SectionCard>
+        )}
 
         <SectionCard
           className="min-w-0 @4xl:col-span-5"

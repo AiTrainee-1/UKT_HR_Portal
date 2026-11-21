@@ -13,13 +13,13 @@ const hrefFor = (id: string) => reportHref(id, MD_REPORTS_PATH);
 
 /** One of the MD's own reports: the shelf at the top of the page. A large glass card with a wine gradient icon tile, a
  *  plain-English description and where it leads; the card lifts on hover and its "Open report" pill fills in. */
-export function ExecutiveCard({ group, order = 0 }: { group: ReportGroup; order?: number }) {
+export function ExecutiveCard({ group, order = 0, href }: { group: ReportGroup; order?: number; href?: string }) {
   const report = group.primary;
   const Icon = iconFor(report.icon);
   const views = group.variants.length;
   return (
     <Link
-      href={hrefFor(report.id)}
+      href={href ?? hrefFor(report.id)}
       data-testid={`executive-card-${report.id}`}
       className="md-card md-money-exec md-money-t-wine motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2 motion-safe:duration-300 motion-safe:fill-mode-backwards"
       style={order ? { animationDelay: `${order * 40}ms` } : undefined}

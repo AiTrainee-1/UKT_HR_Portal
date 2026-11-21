@@ -253,6 +253,68 @@ export type RecruitmentResignations = MdEnvelope & {
     withoutDate: number;
     byDepartment: { department: string; departmentId: number | null; count: number }[];
   };
+  /** Requests approved or rejected in the period, newest first (2026-11-21): who decided, at which step, and for a
+   *  rejection its reason. Optional: an older server does not send it. */
+  decisions?: ResignationDecision[];
+  decisionsTotal?: number;
+};
+
+export type ResignationDecision = {
+  id: number;
+  employeeId: number;
+  employeeName: string;
+  department: string;
+  departmentId: number | null;
+  requestedOn: string;
+  status: "approved" | "rejected";
+  decidedOn: string;
+  decidedBy: string | null;
+  stage: string;
+  remark: string | null;
+  lastWorkingDate: string | null;
+};
+
+export type ResignationStep = {
+  label: string | null;
+  roles: string[];
+  state: string;
+  by: string | null;
+  at: string | null;
+  comment: string | null;
+};
+
+/** GET /api/md/recruitment/resignations/<id>: one resignation in full (its reason only as a group). */
+export type ResignationDetail = MdEnvelope & {
+  resignation: {
+    id: number;
+    employeeId: number;
+    employeeCode: string | null;
+    employeeName: string;
+    department: string;
+    designation: string | null;
+    unit: string | null;
+    type: string | null;
+    joinDate: string | null;
+    serviceDays: number | null;
+    requestedOn: string;
+    submittedAt: string | null;
+    lastWorkingDate: string | null;
+    noticeDays: number | null;
+    daysToLastDay: number | null;
+    status: "pending" | "approved" | "rejected" | string;
+    waitingFor: string[];
+    waitingForText: string;
+    daysWaiting: number | null;
+    steps: ResignationStep[];
+    decision: {
+      status: string;
+      decidedOn: string | null;
+      decidedBy: string | null;
+      stage: string;
+      remark: string | null;
+    } | null;
+    reasonGroup: { id: string; label: string };
+  };
 };
 
 // ─── joiners and trend ───

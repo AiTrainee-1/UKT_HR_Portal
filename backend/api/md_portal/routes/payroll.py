@@ -5,7 +5,12 @@ closed month, i.e. the most recent month that has ended and has salary slips).
 
 The employee-focused Payroll page (owner 2026-11-14; analytics/payroll_people.py, contract
 frontend/src/pages/md/payroll-dashboard/types.ts) adds monthly, department-breakdown, people and people/<id>; their
-default month is the latest month WITH slips, and an unknown employee is a 404."""
+default month is the latest month WITH slips, and an unknown employee is a 404.
+
+Staff and Production separated (owner 2026-11-21; analytics/payroll_production.py, the Prod* types of the same contract):
+production/overview, production/departments, production/people and production/people/<id> take ?cycle=weekly|biweekly|
+monthly|none&periodStart=YYYY-MM-DD&periodEnd=YYYY-MM-DD&branch=&department= (the type is always production; default: the
+cycle with the latest ended period and that period)."""
 
 from django.urls import path
 from rest_framework.decorators import api_view
@@ -15,6 +20,7 @@ from rest_framework.response import Response
 from ...auth import require_md
 from ..analytics import payroll as analytics
 from ..analytics import payroll_people as people_analytics
+from ..analytics import payroll_production as production_analytics
 from ..common import MdParamError, md_get, parse_month, read_only_db, request_params, resolve_scope
 
 NO_SUCH_EMPLOYEE = "There is no employee with this id."
@@ -154,6 +160,67 @@ def person(request: Request, employee_id: int) -> Response:
     return Response(body)
 
 
+# ─── Production payroll by cycle and pay period (owner 2026-11-21): analytics/payroll_production.py ──────────────
+
+
+def _production_args(params: dict) -> tuple:
+    return (
+        production_analytics.production_scope(resolve_scope(params)),
+        production_analytics.normalise_cycle(params.get("cycle")),
+        production_analytics.parse_period(params.get("periodStart"), params.get("periodEnd")),
+    )
+
+
+@md_get
+def production_overview(request):
+    params = request_params(request)
+    scope, cycle, period = _production_args(params)
+    return production_analytics.production_overview(
+        scope,
+        cycle,
+        period,
+        _int(params, "periods", production_analytics.PERIODS_DEFAULT, 2, production_analytics.PERIODS_MAX),
+    )
+
+
+@md_get
+def production_departments(request):
+    scope, cycle, period = _production_args(request_params(request))
+    return production_analytics.production_departments(scope, cycle, period)
+
+
+@md_get
+def production_people(request):
+    params = request_params(request)
+    scope, cycle, period = _production_args(params)
+    return production_analytics.production_people(
+        scope,
+        cycle,
+        period,
+        str(params.get("q") or "").strip()[:100] or None,
+        str(params.get("sort") or "name").strip(),
+        str(params.get("dir") or "asc").strip().lower(),
+        _int(params, "page", 1, 1, 100_000),
+        _int(params, "pageSize", production_analytics.PAGE_SIZE_DEFAULT, 1, production_analytics.PAGE_SIZE_MAX),
+    )
+
+
+@api_view(["GET"])
+@require_md
+def production_person(request: Request, employee_id: int) -> Response:
+    """Read-only like an @md_get view, but an employee who does not exist is a 404."""
+    params = request_params(request)
+    try:
+        periods = _int(params, "periods", production_analytics.PERIODS_DEFAULT, 1, production_analytics.PERIODS_MAX)
+        with read_only_db():
+            body = production_analytics.production_person(employee_id, periods)
+    except MdParamError as exc:
+        return Response({"error": str(exc)}, status=400)
+    if body is None:
+        return Response({"error": NO_SUCH_EMPLOYEE, "code": "no_such_employee"}, status=404)
+    return Response(body)
+
+
 urlpatterns = [
     path("summary", summary),
     path("trend", trend),
@@ -169,4 +236,8 @@ urlpatterns = [
     path("department-breakdown", department_breakdown),
     path("people", people),
     path("people/<int:employee_id>", person),
+    path("production/overview", production_overview),
+    path("production/departments", production_departments),
+    path("production/people", production_people),
+    path("production/people/<int:employee_id>", production_person),
 ]

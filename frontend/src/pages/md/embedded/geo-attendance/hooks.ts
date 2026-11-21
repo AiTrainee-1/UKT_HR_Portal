@@ -7,6 +7,7 @@ import type {
   GeoPeople,
   GeoReach,
   GeoSummary,
+  GeoTracking,
   GeoTrend,
   GeoUnusual,
   GeoVerification,
@@ -29,6 +30,7 @@ export function useGeoData(params: MdQueryParams, scope: MdQueryParams, by: Grou
     reach: useMdQuery<GeoReach>("geo/reach", params),
     unusual: useMdQuery<GeoUnusual>("geo/unusual", { ...params, limit: 25 }),
     people: useMdQuery<GeoPeople>("geo/people", { ...params, limit: 25 }),
+    tracking: useMdQuery<GeoTracking>("geo/tracking", params),
     live: useMdQuery<GeoLive>("geo/live", scope, { refetchInterval: LIVE_REFRESH_MS }),
   };
 }

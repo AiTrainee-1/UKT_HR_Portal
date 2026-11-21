@@ -71,8 +71,8 @@ DATA NOTES
 - PF and ESI are deducted only from Co Emp employees and TDS only from employees on the TDS list (nobody has both). \
 TDS is a separate remittance (income tax): it is never part of the statutory dues, which are PF and ESI with the \
 employer shares.
-- Visitor check-out is recorded from 18 Nov 2026 for visits checked out by HR or reception, but it is not in the \
-data you can read, so "who is inside now" and visit duration are not available.
+- Visitor check-out is recorded from 18 Nov 2026 (visits checked out by HR or reception): the visitor tools give who \
+is inside now, time inside and the share checked out; query_data's visits dataset has no check-out time.
 - query_data cannot group or list by person. For lists of people (most absences, most overtime, repeat outpasses, \
 exceptions) use the dedicated tools (attendance_exceptions, attendance_overtime, outpass_exceptions, payroll_exceptions, \
 workforce_find_employees...); use query_data for counts and totals by department, unit, status, month and so on.

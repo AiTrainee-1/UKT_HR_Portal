@@ -1,8 +1,17 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { act } from "react";
 import { closeAssistant, openAssistant } from "@/lib/md/assistant-store";
 import { renderMdPage, type Fixtures, type RenderedPage } from "@/pages/md/testing/renderMdPage";
 import AssistantHost from "./AssistantHost";
+import { preloadAssistantPanel } from "./panel-loader";
+import { preloadMdShell } from "../shell/loader";
+
+// The launcher waits for the MD skin (it arrives with the MD shell's chunk) and the panel is a chunk of its own: let both
+// be in before the first test, as they are in the browser by the time the MD reaches for the assistant.
+// (a generous limit: on a busy full run the first transform of these two chunks can take longer than the 10 s default)
+beforeAll(async () => {
+  await Promise.all([preloadMdShell(), preloadAssistantPanel()]);
+}, 60_000);
 
 let page: RenderedPage | undefined;
 afterEach(() => {

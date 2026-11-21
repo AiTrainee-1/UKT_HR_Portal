@@ -107,6 +107,8 @@ MANY_PUNCHES_PER_DAY = 6
 #: A device with at least this share of double taps (and DUPLICATE_MIN of them) has a sensor worth checking.
 DUPLICATE_DEVICE_WARN_PCT = 10.0
 DUPLICATE_MIN = 20
+#: On-Duty punches waiting for HR's verification from this many are worth the MD's attention.
+HELD_ON_DUTY_WARN = 5
 COVERAGE_WARN_PCT = attendance_analytics.COVERAGE_WARN_PCT
 WEEKLY_ROLLUP_AFTER_DAYS = attendance_analytics.WEEKLY_ROLLUP_AFTER_DAYS
 HEATMAP_MAX_DAYS = attendance_analytics.HEATMAP_MAX_DAYS
@@ -121,8 +123,9 @@ _SEVERITY_RANK = {"critical": 0, "warning": 1, "info": 2, "good": 3}
 
 # ─── how a punch arrived ────────────────────────────────────────────────────────────────────────────────────────────
 
-#: In the order the charts stack them (devices at the bottom).
-FAMILY_ORDER = ("biometric", "geo", "on_duty", "import", "missing_punch", "manual", "other")
+#: In the order the charts stack them (devices at the bottom). "auto" (2026-11-05) is the MD department's generated
+#: Full-Day Present punches (md_auto_attendance, tag "auto:md"): neither a device nor a person.
+FAMILY_ORDER = ("biometric", "geo", "on_duty", "import", "missing_punch", "manual", "auto", "other")
 #: Punches a person entered rather than a device or a phone captured.
 HAND_ENTERED = ("manual", "missing_punch")
 #: A raw source tag per family that ``source_label`` words the way HR does ("Biometric", "Geo Punch", "HR Entry", ...).
@@ -132,6 +135,7 @@ _FAMILY_TAG = {
     "on_duty": "on_duty:approved",
     "missing_punch": "missing_punch:approved",
     "manual": "manual",
+    "auto": "auto:md",
 }
 FAMILY_LABEL = {
     **{family: source_label(tag) for family, tag in _FAMILY_TAG.items()},
@@ -156,6 +160,8 @@ def family_of(source: str | None) -> str:
         return "missing_punch"
     if tag.startswith("manual"):
         return "manual"
+    if tag.startswith("auto"):
+        return "auto"
     return "other"
 
 
@@ -167,6 +173,7 @@ def _family_case() -> Case:
         When(source="on_duty:approved", then=Value("on_duty")),
         When(source="missing_punch:approved", then=Value("missing_punch")),
         When(source__startswith="manual", then=Value("manual")),
+        When(source__startswith="auto", then=Value("auto")),
         default=Value("other"),
         output_field=CharField(),
     )
@@ -327,6 +334,25 @@ def _odd_days(scope: Scope, start: date, end: date) -> list[tuple[int, str, date
         .order_by()
     )
     return [(r["employee_id"], r["employee__department__name"] or NO_DEPARTMENT, r["date"], r["n"]) for r in rows]
+
+
+def _held_on_duty(scope: Scope, start: date, end: date) -> dict:
+    """On-Duty punches that are not attendance yet: still waiting for HR (``pending``) or turned down (``rejected``).
+    HR's Attendance page lists them as "not counted" chips; they reach the punch log only once HR approves."""
+    from ...models import OnDutyPunchVerification
+
+    agg = OnDutyPunchVerification.objects.filter(
+        scope.employee_q("employee__"), punch_date__gte=start, punch_date__lte=end
+    ).aggregate(
+        pending=Count("id", filter=Q(status=OnDutyPunchVerification.STATUS_PENDING)),
+        rejected=Count("id", filter=Q(status=OnDutyPunchVerification.STATUS_REJECTED)),
+        people=Count("employee_id", distinct=True, filter=Q(status=OnDutyPunchVerification.STATUS_PENDING)),
+    )
+    return {
+        "pending": int(agg["pending"] or 0),
+        "rejected": int(agg["rejected"] or 0),
+        "people": int(agg["people"] or 0),
+    }
 
 
 def _punch_days_by_day(scope: Scope, start: date, end: date) -> dict[date, int]:
@@ -616,8 +642,7 @@ def _coverage_core(scope: Scope, start: date, end: date, punch_days: dict[date, 
         return None
     records = AttendanceDayRecord.objects.filter(scope.employee_q("employee__"), date__gte=start, date__lte=end)
     with_record = {
-        r["date"]: r["n"]
-        for r in records.filter(_punch_exists()).values("date").annotate(n=Count("id")).order_by()
+        r["date"]: r["n"] for r in records.filter(_punch_exists()).values("date").annotate(n=Count("id")).order_by()
     }
     stale = records.filter(_punch_exists(), status="absent").count()
     # a day the engine pays without punches ON PURPOSE (paid birthday leave, a compensation relaxation) is no leftover
@@ -663,7 +688,14 @@ def _unmatched_core(scope: Scope, period: Period, limit: int) -> dict:
     """Device user IDs that punch but match no employee. They belong to nobody, so they cannot be placed in a unit or a
     department: under a filter they are not listed (and the answer says so)."""
     if not scope.is_everyone():
-        return {"available": False, "unresolved": None, "activeInPeriod": None, "punches": None, "rows": [], "byDevice": []}
+        return {
+            "available": False,
+            "unresolved": None,
+            "activeInPeriod": None,
+            "punches": None,
+            "rows": [],
+            "byDevice": [],
+        }
     qs = UnmatchedPunch.objects.filter(resolved=False)
     items = list(
         qs.order_by("-punch_count", "device_user_id", "device_serial").values(
@@ -680,16 +712,18 @@ def _unmatched_core(scope: Scope, period: Period, limit: int) -> dict:
     status_of = dict(Employee.objects.filter(employee_code__in=codes).values_list("employee_code", "status"))
     by_device: Counter = Counter()
     for u in active:
-        by_device[u["device_label"] or (u["device_serial"] and f"Device {u['device_serial']}") or "Unknown device"] += u[
-            "punch_count"
-        ]
+        by_device[u["device_label"] or (u["device_serial"] and f"Device {u['device_serial']}") or "Unknown device"] += (
+            u["punch_count"]
+        )
     rows = []
     for u in active[:limit]:
         known = status_of.get(u["device_user_id"])
         rows.append(
             {
                 "deviceUserId": u["device_user_id"],
-                "device": u["device_label"] or (u["device_serial"] and f"Device {u['device_serial']}") or "Unknown device",
+                "device": u["device_label"]
+                or (u["device_serial"] and f"Device {u['device_serial']}")
+                or "Unknown device",
                 "punches": u["punch_count"],
                 "firstSeen": _local_iso(u["first_seen_at"])[:10] if u["first_seen_at"] else None,
                 "lastPunchDate": _iso(u["last_punch_date"]),
@@ -740,12 +774,16 @@ def _provenance(scope: Scope, period: Period, rows: dict[str, int | None] | None
             definition=(
                 "Each punch carries a tag for how it arrived. They are grouped as HR names them: Biometric devices "
                 "(pushed by the device or read from it), Geo Punch, On-Duty, Excel import, Missing Punch (an approved "
-                "correction), HR Entry (typed in by HR) and Other (anything else, such as test data)."
+                "correction), HR Entry (typed in by HR, Punch View uploads included), Auto Attendance (the MD "
+                "department's generated Full-Day Present punches) and Other (anything else, such as test data). On-Duty "
+                "punches still waiting for HR (or turned down) are not punches yet: they are counted on their own."
             ),
             formula="share = punches of one group ÷ all punches × 100",
             rows=rows.get("punches"),
             filters=filters,
-            caveats=["A punch is stored once: if the same punch reached the server by two routes, the first one is kept."],
+            caveats=[
+                "A punch is stored once: if the same punch reached the server by two routes, the first one is kept."
+            ],
         ),
         "punches-hand-entered": prov(
             "punches-hand-entered",
@@ -777,7 +815,9 @@ def _provenance(scope: Scope, period: Period, rows: dict[str, int | None] | None
             formula="punches per device; change = this period - previous period",
             rows=rows.get("devicePunches"),
             filters=filters,
-            caveats=["Units and departments filter the people, not the machines: a device with nobody from the selection is not listed."],
+            caveats=[
+                "Units and departments filter the people, not the machines: a device with nobody from the selection is not listed."
+            ],
         ),
         "punches-silent": prov(
             "punches-silent",
@@ -805,7 +845,7 @@ def _provenance(scope: Scope, period: Period, rows: dict[str, int | None] | None
             dataset="Attendance punches",
             definition=(
                 "An employee-day with an odd number of punches: someone punched in and never out, or the reverse (the "
-                "Punch Log report's \"Days with odd punch count\"). Today is left out, because the employee may still "
+                'Punch Log report\'s "Days with odd punch count"). Today is left out, because the employee may still '
                 "be in the shift."
             ),
             formula="employee-days with an odd number of punches ÷ employee-days with any punch × 100",
@@ -855,7 +895,9 @@ def _provenance(scope: Scope, period: Period, rows: dict[str, int | None] | None
             formula="employee-days with punches and a day record ÷ employee-days with punches × 100",
             rows=rows.get("punchDays"),
             filters=filters,
-            caveats=["Today is left out. A missing record is not lost data: opening Attendance for the date creates it."],
+            caveats=[
+                "Today is left out. A missing record is not lost data: opening Attendance for the date creates it."
+            ],
         ),
         "punches-duplicates": prov(
             "punches-duplicates",
@@ -943,6 +985,7 @@ def _briefing(
     devices: dict,
     missing: dict,
     unmatched: dict,
+    held: dict | None = None,
 ) -> dict:
     """Two to four plain sentences, every figure taken from the numbers on this page. No AI: the MD asks for an
     explanation on demand."""
@@ -987,6 +1030,12 @@ def _briefing(
             f"{_num(n)} device {_plural(n, 'ID punches', 'IDs punch')} but {_plural(n, 'matches', 'match')} no employee, "
             "so that attendance is being thrown away."
         )
+    if held and held.get("pending"):
+        n = held["pending"]
+        sentences.append(
+            f"{_num(n)} On-Duty {_plural(n, 'punch is', 'punches are')} still waiting for HR to verify, so "
+            f"{_plural(n, 'it is', 'they are')} not attendance yet."
+        )
     return {
         "sentences": sentences,
         "text": " ".join(sentences),
@@ -1017,7 +1066,9 @@ def _summary_core(scope: Scope, period: Period, today: date) -> dict:
     cur, prev = miss["cur"], miss["prev"]
     unmatched = _unmatched_core(scope, period, LIST_DEFAULT)
     coverage = _coverage_core(scope, period.start, miss["end"], miss["punchDays"])
+    held = _held_on_duty(scope, period.start, period.end)
     return {
+        "held": held,
         "per": per,
         "fam": fam,
         "prev_fam": prev_fam,
@@ -1101,7 +1152,9 @@ def punch_summary(scope: Scope, period: Period) -> dict:
     notes = [] if total else [_no_data_note(period)]
     notes.extend(_today_note(period, _today()))
     if total and total < MIN_PUNCHES_FOR_SHARE:
-        notes.append(f"Only {_num(total)} punches in this selection: shares are not shown below {MIN_PUNCHES_FOR_SHARE}.")
+        notes.append(
+            f"Only {_num(total)} punches in this selection: shares are not shown below {MIN_PUNCHES_FOR_SHARE}."
+        )
     if not core["missing"]["complete"]:
         notes.append("This period has no complete day yet, so missing punches cannot be judged.")
     if unmatched.get("available") is False:
@@ -1131,9 +1184,17 @@ def punch_summary(scope: Scope, period: Period) -> dict:
                 "punches": unmatched["punches"],
             },
             "coverage": coverage,
+            "heldOnDuty": core["held"],
             "previousPeriod": core["previous"].to_json(),
             "briefing": _briefing(
-                period, scope, fam, prev_fam, block, {**missing, "complete": core["missing"]["complete"]}, unmatched
+                period,
+                scope,
+                fam,
+                prev_fam,
+                block,
+                {**missing, "complete": core["missing"]["complete"]},
+                unmatched,
+                core["held"],
             ),
         },
         period=period,
@@ -1177,7 +1238,9 @@ def punch_sources(scope: Scope, period: Period) -> dict:
         row = grid[k]
         total = sum(row.values())
         hand = sum(row[f] for f in HAND_ENTERED)
-        points.append({"date": k.isoformat(), **row, "total": total, "handEntered": hand, "handEnteredPct": pct(hand, total)})
+        points.append(
+            {"date": k.isoformat(), **row, "total": total, "handEntered": hand, "handEnteredPct": pct(hand, total)}
+        )
 
     fam, prev_fam = _family_totals(per, period.start, period.end), _family_totals(per, previous.start, previous.end)
     total, prev_total = sum(fam.values()), sum(prev_fam.values())
@@ -1289,6 +1352,7 @@ def _person_rows(ids: list[int]) -> dict[int, dict]:
 
 def _person_fields(r: dict) -> dict:
     return {
+        "employeeId": r["id"],
         "employeeCode": r["employee_code"],
         "employeeName": _person_name(r["first_name"], r["last_name"]),
         "department": r["department__name"] or NO_DEPARTMENT,
@@ -1298,7 +1362,9 @@ def _person_fields(r: dict) -> dict:
 
 
 @cached()
-def punch_missing(scope: Scope, period: Period, limit: int = LIST_DEFAULT, min_days: int = MISSING_REPEAT_MIN_DAYS) -> dict:
+def punch_missing(
+    scope: Scope, period: Period, limit: int = LIST_DEFAULT, min_days: int = MISSING_REPEAT_MIN_DAYS
+) -> dict:
     """Days with a punch missing (in without out, or the reverse): how many, how many already have a correction request,
     when and in which department they cluster, and the people who have them again and again."""
     limit = _int_arg(limit, "limit", LIST_DEFAULT, 1, LIST_MAX)
@@ -1574,7 +1640,9 @@ def punch_manual(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dic
     statuses = {r["status"]: r["n"] for r in edits_qs.values("status").annotate(n=Count("id")).order_by()}
     oldest = edits_qs.filter(status="pending").order_by("created_at").values_list("created_at", flat=True).first()
     oldest_days = (today - oldest.astimezone(FACTORY_TZ).date()).days if oldest else None
-    records = AttendanceDayRecord.objects.filter(scope.employee_q("employee__"), date__gte=period.start, date__lte=period.end)
+    records = AttendanceDayRecord.objects.filter(
+        scope.employee_q("employee__"), date__gte=period.start, date__lte=period.end
+    )
     agg = records.aggregate(total=Count("id"), manual=Count("id", filter=Q(source="manual")))
 
     entries = _provenance(scope, period, rows={"punches": total, "handEntered": hand})
@@ -1616,7 +1684,11 @@ def punch_manual(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> dic
                 "total": sum(statuses.values()),
                 "oldestPendingDays": oldest_days,
             },
-            "dayOverrides": {"count": agg["manual"], "ofDayRecords": agg["total"], "sharePct": pct(agg["manual"], agg["total"])},
+            "dayOverrides": {
+                "count": agg["manual"],
+                "ofDayRecords": agg["total"],
+                "sharePct": pct(agg["manual"], agg["total"]),
+            },
             "minPunches": MIN_PUNCHES_FOR_SHARE,
             "previousPeriod": previous.to_json(),
         },
@@ -1720,20 +1792,23 @@ def punch_anomalies(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> 
 
     def devices_list(counter: Counter) -> list[dict]:
         return [
-            {"label": label, "count": n, "ratePct": pct(n, by_label_total.get(label)), "punches": by_label_total.get(label, 0)}
+            {
+                "label": label,
+                "count": n,
+                "ratePct": pct(n, by_label_total.get(label)),
+                "punches": by_label_total.get(label, 0),
+            }
             for label, n in counter.most_common(limit)
         ]
 
-    entries = _provenance(
-        scope, period, rows={"duplicates": len(duplicates), "oddHours": odd_total, "punches": total}
-    )
+    entries = _provenance(scope, period, rows={"duplicates": len(duplicates), "oddHours": odd_total, "punches": total})
     entries["punches-many"] = prov(
         "punches-many",
         "Days with many punches",
         dataset="Attendance punches",
         definition=(
             f"An employee-day with {MANY_PUNCHES_PER_DAY} or more punches: usually repeated taps, or two people "
-            "sharing one device ID (the Report Center's \"Many punches\")."
+            'sharing one device ID (the Report Center\'s "Many punches").'
         ),
         formula=f"employee-days with ≥ {MANY_PUNCHES_PER_DAY} punches",
         rows=len(many),
@@ -1758,9 +1833,7 @@ def punch_anomalies(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> 
             "manyPunchDays": {
                 "count": len(many),
                 "minPunches": MANY_PUNCHES_PER_DAY,
-                "people": [
-                    {**_person_fields(many_people[e]), "days": n} for e, n in top_many if e in many_people
-                ],
+                "people": [{**_person_fields(many_people[e]), "days": n} for e, n in top_many if e in many_people],
             },
             "byHour": by_hour,
         },
@@ -1791,7 +1864,11 @@ def punch_unmatched(scope: Scope, period: Period, limit: int = LIST_DEFAULT) -> 
     elif not data["unresolved"]:
         notes.append("Every device ID that has punched matches an employee.")
     return envelope(
-        {**data, "total": data["activeInPeriod"], "truncated": bool(data["activeInPeriod"] and data["activeInPeriod"] > limit)},
+        {
+            **data,
+            "total": data["activeInPeriod"],
+            "truncated": bool(data["activeInPeriod"] and data["activeInPeriod"] > limit),
+        },
         period=period,
         scope=scope,
         provenance=_pick(entries, "punches-unmatched"),
@@ -1815,7 +1892,8 @@ def punch_coverage(scope: Scope, period: Period) -> dict:
     if data and data["staleAbsent"]:
         notes.append(
             f"{_num(data['staleAbsent'])} day {_plural(data['staleAbsent'], 'record says', 'records say')} absent although "
-            "the person punched: the record is out of date, open the day in Attendance to recompute it."
+            "the person punched: the punches came after the day was worked out. The background attendance refresh "
+            "recomputes such days every few minutes; one that stays is fixed by opening the day in Attendance."
         )
     return envelope(
         {"complete": data is not None, "coverage": data, "scheduled": scheduled},
@@ -1823,6 +1901,109 @@ def punch_coverage(scope: Scope, period: Period) -> dict:
         scope=scope,
         provenance=_pick(entries, "punches-coverage"),
         notes=notes,
+    )
+
+
+# ─── drill-down: one employee's punches ──────────────────────────────────────────────────────────────────────────────
+
+EMPLOYEE_MAX_DAYS = 93
+
+
+def punch_employee(employee_id: int, period: Period) -> dict:
+    """Every punch of one employee in the period, day by day, with how each arrived (the family and HR's label), the
+    days with an odd number of punches, the On-Duty punches still waiting for HR or turned down (not counted), and the
+    missing-punch requests: the drill-down of a person on the Attendance Search Insights."""
+    from ...models import OnDutyPunchVerification
+
+    if period.days > EMPLOYEE_MAX_DAYS:
+        raise MdParamError(f"One employee's punches are shown for at most {EMPLOYEE_MAX_DAYS} days at a time.")
+    emp = (
+        Employee.objects.filter(pk=employee_id)
+        .values("id", "employee_code", "first_name", "last_name", "employment_type", "department__name", "branch__name")
+        .first()
+    )
+    if emp is None:
+        raise MdParamError(f"There is no employee with id {employee_id}.")
+    logs = (
+        AttendanceLog.objects.filter(employee_id=employee_id, date__gte=period.start, date__lte=period.end)
+        .order_by("date", "punch_time", "id")
+        .values_list("date", "punch_time", "punch_type", "source")
+    )
+    days: dict[date, dict] = {}
+    families = dict.fromkeys(FAMILY_ORDER, 0)
+    for d, t, ptype, source in logs:
+        family = family_of(source)
+        families[family] += 1
+        day = days.setdefault(d, {"date": d.isoformat(), "punches": [], "held": []})
+        day["punches"].append(
+            {
+                "time": t.strftime("%H:%M:%S"),
+                "type": ptype,
+                "family": family,
+                "label": source_label(source),
+                "device": device_of(source) if family == "biometric" else None,
+            }
+        )
+    held = OnDutyPunchVerification.objects.filter(
+        employee_id=employee_id,
+        punch_date__gte=period.start,
+        punch_date__lte=period.end,
+        status__in=(OnDutyPunchVerification.STATUS_PENDING, OnDutyPunchVerification.STATUS_REJECTED),
+    ).values_list("punch_date", "punch_time", "punch_type", "status")
+    held_counts = {"pending": 0, "rejected": 0}
+    for d, t, ptype, status in held:
+        held_counts[status] += 1
+        day = days.setdefault(d, {"date": d.isoformat(), "punches": [], "held": []})
+        day["held"].append({"time": t.strftime("%H:%M:%S"), "type": ptype, "status": status})
+    requests = {
+        d: status
+        for d, status in MissingPunchRequest.objects.filter(
+            employee_id=employee_id, date__gte=period.start, date__lte=period.end
+        ).values_list("date", "status")
+    }
+    for d, status in requests.items():
+        days.setdefault(d, {"date": d.isoformat(), "punches": [], "held": []})["request"] = status
+    today = _today()
+    out_days = []
+    for d in sorted(days, reverse=True):
+        day = days[d]
+        n = len(day["punches"])
+        day["count"] = n
+        day["odd"] = n % 2 == 1 and d < today
+        day.setdefault("request", None)
+        out_days.append(day)
+    total = sum(families.values())
+    name = _person_name(emp["first_name"], emp["last_name"]) or emp["employee_code"] or f"#{employee_id}"
+    return envelope(
+        {
+            "employee": {
+                "employeeId": emp["id"],
+                "name": name,
+                "code": emp["employee_code"] or "",
+                "type": emp["employment_type"] or "staff",
+                "department": emp["department__name"] or NO_DEPARTMENT,
+                "unit": emp["branch__name"] or None,
+            },
+            "totals": {
+                "punches": total,
+                "days": sum(1 for d in out_days if d["count"]),
+                "oddDays": sum(1 for d in out_days if d["odd"]),
+                "handEntered": sum(families[k] for k in HAND_ENTERED),
+                "handEnteredPct": pct(sum(families[k] for k in HAND_ENTERED), total),
+                "heldPending": held_counts["pending"],
+                "heldRejected": held_counts["rejected"],
+                "requests": len(requests),
+            },
+            "families": [
+                {"key": k, "label": FAMILY_LABEL[k], "punches": families[k], "sharePct": pct(families[k], total)}
+                for k in FAMILY_ORDER
+                if families[k]
+            ],
+            "days": out_days,
+        },
+        period=period,
+        provenance=_pick(_provenance(Scope(), period, rows={"punches": total}), "punches-sources"),
+        notes=[] if total else [_no_data_note(period)],
     )
 
 
@@ -1885,7 +2066,11 @@ def _exceptions(core: dict, scope: Scope, period: Period, *, limit: int, anomali
 
     hand_pct, prev_hand_pct = core["hand_pct"]
     if hand_pct is not None:
-        rose = prev_hand_pct is not None and hand_pct - prev_hand_pct >= MANUAL_RISE_POINTS and hand_pct >= MANUAL_RISE_POINTS
+        rose = (
+            prev_hand_pct is not None
+            and hand_pct - prev_hand_pct >= MANUAL_RISE_POINTS
+            and hand_pct >= MANUAL_RISE_POINTS
+        )
         if hand_pct >= MANUAL_SHARE_WARN_PCT or rose:
             sub = (
                 f", up from {_p(prev_hand_pct, 1)} in {prev_phrase}"
@@ -2004,12 +2189,21 @@ def _exceptions(core: dict, scope: Scope, period: Period, *, limit: int, anomali
                 )
             )
 
-    if (
-        not items
-        and total
-        and block["listed"]
-        and (hand_pct is None or hand_pct < MANUAL_SHARE_WARN_PCT)
-    ):
+    held = core.get("held") or {}
+    if held.get("pending", 0) >= HELD_ON_DUTY_WARN:
+        items.append(
+            _item(
+                "held-on-duty",
+                "warning",
+                f"{_num(held['pending'])} On-Duty punches are waiting for HR",
+                f"{_num(held['people'])} {_plural(held['people'], 'person', 'people')} punched on duty and HR has not "
+                "verified it yet: until then those punches are not attendance (Geo Attendance, Verifications).",
+                _num(held["pending"]),
+                f"Who has On-Duty punches waiting for HR, and since when ({period.label})?",
+            )
+        )
+
+    if not items and total and block["listed"] and (hand_pct is None or hand_pct < MANUAL_SHARE_WARN_PCT):
         items.append(
             _item(
                 "healthy",
@@ -2028,7 +2222,7 @@ def _exceptions(core: dict, scope: Scope, period: Period, *, limit: int, anomali
 
 @cached()
 def punch_attention(scope: Scope, period: Period) -> dict:
-    """"Needs your attention" for the selected period and selection (same shape as the Dashboard's insights)."""
+    """ "Needs your attention" for the selected period and selection (same shape as the Dashboard's insights)."""
     today = _today()
     core = _summary_core(scope, period, today)
     anomalies = punch_anomalies(scope, period)
@@ -2102,11 +2296,7 @@ def headline(*, today: date | None = None) -> dict:
         1
         for key, h in health.items()
         if _status_of(h, devices.rows.get(int(key.split(":")[1])) if key.startswith("device:") else None) == "silent"
-    ) + sum(
-        1
-        for row in devices.rows.values()
-        if row["is_active"] and f"device:{row['id']}" not in health
-    )
+    ) + sum(1 for row in devices.rows.values() if row["is_active"] and f"device:{row['id']}" not in health)
     hand_delta = change(hand_pct, prev_hand_pct)
     miss_delta = change(miss_cur["days"], miss_prev["days"])
     window = f"{current.start:%d %b} to {current.end:%d %b}"
@@ -2142,14 +2332,18 @@ def headline(*, today: date | None = None) -> dict:
             "label": "Silent devices",
             "value": silent,
             "format": "number",
-            "sub": f"of {_num(len(devices.rows))} devices listed in Settings" if devices.rows else "No device is listed in Settings",
+            "sub": f"of {_num(len(devices.rows))} devices listed in Settings"
+            if devices.rows
+            else "No device is listed in Settings",
             "delta": None,
             "spark": None,
             "page": PAGE,
         },
     ]
     entries = _provenance(
-        scope, current, rows={"handEntered": hand, "punches": total, "missingDays": miss_cur["days"], "devices": len(devices.rows)}
+        scope,
+        current,
+        rows={"handEntered": hand, "punches": total, "missingDays": miss_cur["days"], "devices": len(devices.rows)},
     )
     return {"kpis": kpis, "provenance": _pick(entries, "punches-hand-entered", "punches-missing", "punches-silent")}
 
@@ -2207,7 +2401,9 @@ TOOLS = [
         period="last_30_days",
         extra={
             "limit": _LIMIT,
-            "min_days": integer_param("Minimum days with a missing punch to count as a repeat case", minimum=1, maximum=100),
+            "min_days": integer_param(
+                "Minimum days with a missing punch to count as a repeat case", minimum=1, maximum=100
+            ),
         },
         defaults={"limit": LIST_DEFAULT, "min_days": MISSING_REPEAT_MIN_DAYS},
     ),

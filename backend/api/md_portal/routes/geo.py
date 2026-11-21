@@ -10,7 +10,11 @@ analytics/geo.py and returns its envelope.
   GET people        who goes out most and how often (?limit=&min=)
   GET reach         how far from their unit on-duty punches were taken
   GET unusual       sessions that look unusual with their reasons, and people with repeated rejections (?limit=)
-  GET live          who is on duty right now (no period)
+  GET live          who is on duty right now (no period), with each phone's tracking state
+  GET tracking      On-Duty journeys (km, stops, gaps) and the automatic On-Duty alerts (?limit=)
+  GET alerts        drill-down: the alert episodes behind a figure (?kind=&employee=&status=all|open|fixed|escalated
+                    &page=&pageSize=)
+  GET person        drill-down: one employee's sessions, journeys and alerts in the period (?employee=<id>)
   GET attention     "needs your attention" for the selected period and scope
 """
 
@@ -88,6 +92,36 @@ def live(request):
 
 
 @md_get
+def tracking(request):
+    params = request_params(request)
+    return geo.geo_tracking(
+        resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD), limit=params.get("limit")
+    )
+
+
+@md_get
+def alerts(request):
+    params = request_params(request)
+    return geo.geo_alerts(
+        resolve_scope(params),
+        resolve_period(params, default=DEFAULT_PERIOD),
+        kind=params.get("kind") or None,
+        employee=params.get("employee") or None,
+        status=params.get("status") or "all",
+        page=params.get("page"),
+        page_size=params.get("pageSize"),
+    )
+
+
+@md_get
+def person(request):
+    params = request_params(request)
+    return geo.geo_person(
+        resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD), employee=params.get("employee")
+    )
+
+
+@md_get
 def attention(request):
     params = request_params(request)
     return geo.geo_attention(resolve_scope(params), resolve_period(params, default=DEFAULT_PERIOD))
@@ -103,5 +137,8 @@ urlpatterns = [
     path("reach", reach),
     path("unusual", unusual),
     path("live", live),
+    path("tracking", tracking),
+    path("alerts", alerts),
+    path("person", person),
     path("attention", attention),
 ]

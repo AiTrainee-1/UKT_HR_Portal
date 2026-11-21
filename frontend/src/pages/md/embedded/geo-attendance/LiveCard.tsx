@@ -6,6 +6,7 @@ import { EmptyBlock } from "@/components/md/kit/states";
 import { clockText, num, pct } from "@/lib/md/format";
 import { cn } from "@/lib/utils";
 import { isSilent, liveChips, liveStatus, minutesOutText, signalText } from "./logic";
+import { trackLine, trackStateTone } from "./tracking-logic";
 import { QueryError } from "./parts";
 import type { GeoLive, LiveRow } from "./types";
 
@@ -32,9 +33,25 @@ const STATUS_ACCENT = {
   bad: "md-analytics-row-accent md-analytics-tone-bad",
 } as const;
 
-function PersonRow({ row, silentMinutes }: { row: LiveRow; silentMinutes: number }) {
+const TRACK_TONE = {
+  good: "text-md-success",
+  warn: "text-md-warning-600",
+  bad: "font-semibold text-md-danger",
+} as const;
+
+function PersonRow({
+  row,
+  silentMinutes,
+  onPerson,
+}: {
+  row: LiveRow;
+  silentMinutes: number;
+  onPerson?: (employeeId: number) => void;
+}) {
   const status = liveStatus(row);
-  const silent = isSilent(row, silentMinutes);
+  const silent = row.trackState ? trackStateTone(row.trackState) === "bad" : isSilent(row, silentMinutes);
+  const tracking = trackLine(row);
+  const trackTone = trackStateTone(row.trackState);
   return (
     <li
       className={cn("md-analytics-row", STATUS_ACCENT[status.tone])}
@@ -43,7 +60,18 @@ function PersonRow({ row, silentMinutes }: { row: LiveRow; silentMinutes: number
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="truncate text-sm font-bold text-md-ink">{row.employeeName}</p>
+          {onPerson && row.employeeId != null ? (
+            <button
+              type="button"
+              className="truncate text-left text-sm font-bold text-md-ink underline decoration-md-line underline-offset-2 hover:decoration-md-wine"
+              onClick={() => onPerson(row.employeeId as number)}
+              data-testid={`md-geo-live-open-${row.employeeCode}`}
+            >
+              {row.employeeName}
+            </button>
+          ) : (
+            <p className="truncate text-sm font-bold text-md-ink">{row.employeeName}</p>
+          )}
           <p className="text-xs text-md-ink-soft">
             {[row.employeeCode, row.department, row.unit].filter(Boolean).join(" · ")}
           </p>
@@ -72,13 +100,29 @@ function PersonRow({ row, silentMinutes }: { row: LiveRow; silentMinutes: number
         </span>
         {row.mockedPunches > 0 && <span className="font-semibold text-md-danger">Simulated GPS punch today</span>}
       </p>
+      {tracking && trackTone && (
+        <p
+          className={cn("mt-1.5 text-xs", TRACK_TONE[trackTone])}
+          data-testid={`md-geo-live-track-${row.employeeCode}`}
+        >
+          Tracking: {tracking}
+        </p>
+      )}
     </li>
   );
 }
 
 /** The live picture, with no map: who is out right now, how long, whether the request is approved yet, their punches so
  *  far today and when their phone last reported a location. Refreshes by itself every minute. */
-export default function LiveCard({ query, ask }: { query: UseQueryResult<GeoLive>; ask: string }) {
+export default function LiveCard({
+  query,
+  ask,
+  onPerson,
+}: {
+  query: UseQueryResult<GeoLive>;
+  ask: string;
+  onPerson?: (employeeId: number) => void;
+}) {
   const live = query.data;
   return (
     <SectionCard
@@ -105,6 +149,11 @@ export default function LiveCard({ query, ask }: { query: UseQueryResult<GeoLive
                 {c.label}: <b>{num(c.value)}</b>
               </span>
             ))}
+            {(live.openAlerts ?? 0) > 0 && (
+              <span className="md-chip md-analytics-tone-bad" data-testid="md-geo-live-chip-alerts">
+                Open alerts: <b>{num(live.openAlerts)}</b>
+              </span>
+            )}
             {live.outPct != null && (
               <span className="md-chip md-analytics-tone-neutral">
                 {pct(live.outPct, 0)} of {num(live.activeHeadcount)} employees out
@@ -113,7 +162,12 @@ export default function LiveCard({ query, ask }: { query: UseQueryResult<GeoLive
           </div>
           <ul className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">
             {live.rows.map((row) => (
-              <PersonRow key={`${row.employeeCode}-${row.since}`} row={row} silentMinutes={live.silentMinutes} />
+              <PersonRow
+                key={`${row.employeeCode}-${row.since}`}
+                row={row}
+                silentMinutes={live.silentMinutes}
+                onPerson={onPerson}
+              />
             ))}
           </ul>
           {live.truncated && (

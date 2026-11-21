@@ -1,15 +1,22 @@
 """MD portal, Requests: what is waiting for a decision, for whom, for how long, and how fast requests get decided.
 
-Which requests are counted
---------------------------
-The HR "Requests" page lists three kinds (leave, permission and employee-requested outpasses). This module covers every
-request that goes through an approval pipeline (``approval_workflow.py``), because the MD's question ("where do things
-get stuck?") does not stop at the three the HR page shows. ``kind=page`` narrows any figure to those three.
+Which requests are counted (updated 2026-11-21 to the Requests hub)
+------------------------------------------------------------------
+The HR "Requests" page (``hr_requests_views.py``) lists every kind of request in the HRMS as its own sub-tab; this module
+counts the same twelve kinds, so a number here matches a count on that page:
 
-  leave, permission, casual leave, outpass (employee-requested), missing punch, on-duty, resignation  raised by the employee
-  attendance correction, holiday / Sunday work compensation, advance                                raised by HR
+  leave, permission, casual leave, missing punch, on-duty, on-duty punch, outpass (employee-requested),
+  other requests (general employee requests), resignation                                        raised by the employee
+  attendance correction, compensation claims (every claim kind), advance                         raised by HR
 
-General "other requests" tickets (documents, letters, queries) are not approvals and are left out.
+(compensation claims can be raised by the employee too since 2026-11-19; they stay with the HR-raised kinds so a claim never
+counts towards "asks a lot".) ``kind=page`` is kept for older links and now means every kind.
+
+The MD only LOOKS at requests (permission_registry.MD_VIEW_ONLY, 2026-10-10): HR and the Department Heads decide. So "who it
+waits on" is said in their terms (``hrCanDecide``: waiting on HR's step right now); ``mdCanDecide`` is the same figure under
+its older name, kept for older readers. Since 2026-11-21 a rejection must carry a reason (approval_workflow.decide,
+``remark_required``): the reason is read from the last decision of the approval trail, else the request's own comment
+column, and shown with every rejected request.
 
 One definition of "waiting", "submitted" and "decided" (the same for every kind)
 -------------------------------------------------------------------------------
@@ -18,8 +25,8 @@ One definition of "waiting", "submitted" and "decided" (the same for every kind)
   `pending_hod`, `pending_hr`, `dept_approved`), not a guess.
 * **Who it waits on** comes from the same engine the HR pages use: the pipeline in force today and the approvals already
   recorded on the request (``approval_trail``), through ``approval_workflow.holding_roles``. HR, the Department Head, or
-  either of them. The MD decides as HR does (a super-admin acts with the HR role), so what waits on HR or on "either" is
-  what the MD can decide today; what waits only on a Department Head is not his to decide.
+  either of them. What waits on HR or on "either" is what HR can decide today; what waits only on a Department Head
+  needs the Department Head first.
 * **Submitted** = created in the period (Indian-time days). Volume, mix and "who asks a lot" use this.
 * **Decided** = approved or rejected, counted on the day the decision was made. Approval and rejection rates and the time
   to decide use this. The decision time is the last entry of the request's approval trail, or the model's own review
@@ -46,17 +53,19 @@ from django.db.models import (
     BooleanField,
     Case,
     CharField,
+    Count,
     DateTimeField,
     DecimalField,
     F,
     Func,
     Q,
     QuerySet,
+    Sum,
     TextField,
     Value,
     When,
 )
-from django.db.models.functions import Cast, Coalesce
+from django.db.models.functions import Cast, Coalesce, NullIf
 from django.utils import timezone
 
 from ... import approval_workflow as approval
@@ -66,15 +75,17 @@ from ...models import (
     AttendanceOverrideRequest,
     CasualLeaveRequest,
     EmployeePermission,
+    EmployeeRequest,
     HolidayWorkClaim,
     LeaveRequest,
     MissingPunchRequest,
+    OnDutyPunchVerification,
     OnDutySession,
     OutpassRequest,
     ResignationRequest,
 )
 from ..assistant.tools_base import integer_param, string_param, tool
-from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, period_for_preset, prov
+from ..common import MdParamError, Period, Scope, cached, change, envelope, money, pct, period_for_preset, prov
 
 PAGE = "requests"
 
@@ -288,6 +299,8 @@ class Kind:
     legacy_hod_done: tuple[str, ...] = ()
     amount_field: str | None = None
     decided_extra: Callable[[], Any] | None = None
+    #: The request's own comment columns (the decision's remark), in order of preference, for a request whose trail has none.
+    comment_columns: tuple[str, ...] = ()
 
     @property
     def decided_statuses(self) -> tuple[str, ...]:
@@ -326,6 +339,16 @@ class Kind:
         parts: list[Any] = [_trail("by")] if self.has_trail else []
         parts.extend(F(c) for c in self.approver_columns)
         return parts[0] if len(parts) == 1 else Coalesce(*parts, output_field=TextField())
+
+    def comment(self):
+        """The remark of the decision that settled the request (the rejection reason of a rejected one): the last trail
+        entry's comment, else the request's own comment column. NULL while it waits."""
+        parts: list[Any] = [NullIf(_trail("comment"), Value(""))] if self.has_trail else []
+        parts.extend(NullIf(F(c), Value("")) for c in self.comment_columns)
+        if not parts:
+            return _NO_TEXT
+        expr = parts[0] if len(parts) == 1 else Coalesce(*parts, output_field=TextField())
+        return Case(When(status__in=self.decided_statuses, then=expr), default=_NO_TEXT, output_field=TextField())
 
     def approver_role(self):
         parts: list[Any] = [_trail("role")] if self.has_trail else []
@@ -381,6 +404,8 @@ class Kind:
             f_code=F("employee__employee_code"),
             f_approver=self.approver(),
             f_arole=self.approver_role(),
+            f_comment=self.comment(),
+            f_unit_id=F("employee__branch_id"),
         )
 
 
@@ -395,10 +420,15 @@ def _resignation_time():
 
 
 def _advance_time():
-    """Advances have no trail: the approval stamp, and for a rejected one the last time the row was saved."""
-    return Case(
-        When(status__in=("approved", "closed"), then=F("approved_at")),
-        default=F("updated_at"),
+    """Advances have no trail: the decision stamp (``decided_at``, kept since the 2026-11-20 settlement rework), else the
+    approval stamp, and for an older rejected one the last time the row was saved."""
+    return Coalesce(
+        F("decided_at"),
+        Case(
+            When(status__in=("approved", "closed"), then=F("approved_at")),
+            default=F("updated_at"),
+            output_field=DateTimeField(),
+        ),
         output_field=DateTimeField(),
     )
 
@@ -415,6 +445,7 @@ KINDS: tuple[Kind, ...] = (
         on_page=True,
         approver_columns=("approved_by",),
         role_column="approver_role",
+        comment_columns=("hr_comment",),
     ),
     Kind(
         "permission",
@@ -427,6 +458,7 @@ KINDS: tuple[Kind, ...] = (
         on_page=True,
         approver_columns=("approved_by",),
         role_column="approver_role",
+        comment_columns=("hr_comment",),
     ),
     Kind(
         "casual_leave",
@@ -436,9 +468,54 @@ KINDS: tuple[Kind, ...] = (
         ("pending",),
         ("approved",),
         ("rejected",),
+        on_page=True,
         decided_columns=("reviewed_at",),
         approver_columns=("reviewed_by",),
         role_column="reviewer_role",
+        comment_columns=("review_comment",),
+    ),
+    Kind(
+        "missing_punch",
+        "Missing punch",
+        MissingPunchRequest,
+        "missing_punch",
+        ("pending_hod", "pending_hr"),
+        ("approved",),
+        ("rejected",),
+        on_page=True,
+        decided_columns=("hr_reviewed_at", "hod_reviewed_at"),
+        approver_columns=("hr_reviewed_by", "hod_reviewed_by"),
+        legacy_hod_done=("pending_hr",),
+        comment_columns=("hr_review_comment", "hod_review_comment"),
+    ),
+    Kind(
+        "on_duty",
+        "On-duty",
+        OnDutySession,
+        "on_duty",
+        ("pending_hod", "pending_hr"),
+        ("active", "completed"),  # approved sessions go on to be active, then completed
+        ("rejected",),
+        on_page=True,
+        decided_columns=("hr_reviewed_at", "hod_reviewed_at"),
+        approver_columns=("hr_reviewed_by", "hod_reviewed_by"),
+        legacy_hod_done=("pending_hr",),
+        comment_columns=("hr_review_comment", "hod_review_comment"),
+    ),
+    Kind(
+        # each on-duty punch is checked by HR (selfie + GPS) before it becomes a real punch: a fixed HR-only step, no trail
+        "on_duty_punch",
+        "On-duty punch",
+        OnDutyPunchVerification,
+        "on_duty_punch",
+        ("pending",),
+        ("approved",),
+        ("rejected",),
+        on_page=True,
+        has_trail=False,
+        decided_columns=("hr_reviewed_at",),
+        approver_columns=("hr_reviewed_by",),
+        comment_columns=("hr_review_comment",),
     ),
     Kind(
         "outpass",
@@ -453,30 +530,22 @@ KINDS: tuple[Kind, ...] = (
         decided_columns=("approved_at",),
         approver_columns=("approved_by",),
         role_column="approver_role",
+        comment_columns=("review_comment",),
     ),
     Kind(
-        "missing_punch",
-        "Missing punch",
-        MissingPunchRequest,
-        "missing_punch",
-        ("pending_hod", "pending_hr"),
+        # general employee requests (a letter, a salary query, a shift correction ...): HR handles them with notes
+        "request",
+        "Other requests",
+        EmployeeRequest,
+        "request",
+        ("pending", "in_review", "more_info"),
         ("approved",),
         ("rejected",),
-        decided_columns=("hr_reviewed_at", "hod_reviewed_at"),
-        approver_columns=("hr_reviewed_by", "hod_reviewed_by"),
-        legacy_hod_done=("pending_hr",),
-    ),
-    Kind(
-        "on_duty",
-        "On-duty",
-        OnDutySession,
-        "on_duty",
-        ("pending_hod", "pending_hr"),
-        ("active", "completed"),  # approved sessions go on to be active, then completed
-        ("rejected",),
-        decided_columns=("hr_reviewed_at", "hod_reviewed_at"),
-        approver_columns=("hr_reviewed_by", "hod_reviewed_by"),
-        legacy_hod_done=("pending_hr",),
+        on_page=True,
+        has_trail=False,
+        decided_columns=("handled_at",),
+        approver_columns=("handled_by",),
+        comment_columns=("hr_notes",),
     ),
     Kind(
         "resignation",
@@ -486,9 +555,11 @@ KINDS: tuple[Kind, ...] = (
         ("pending", "dept_approved"),
         ("approved",),
         ("rejected",),
+        on_page=True,
         approver_columns=("approved_by",),
         legacy_hod_done=("dept_approved",),
         decided_extra=_resignation_time,
+        comment_columns=("hr_comment", "dept_head_comment"),
     ),
     Kind(
         "attendance_correction",
@@ -499,22 +570,26 @@ KINDS: tuple[Kind, ...] = (
         ("approved",),
         ("rejected",),
         raised_by="hr",
+        on_page=True,
         decided_columns=("reviewed_at",),
         approver_columns=("reviewed_by",),
+        comment_columns=("review_comment",),
     ),
     Kind(
+        # every compensation claim since 2026-11-19 (Sunday / holiday work, OT allowance and shift credit, birthday credit,
+        # use of the balance): one claim table, decided by the Department Head; the HR page lists them all as one sub-tab
         "holiday_work",
-        "Holiday / Sunday work",
+        "Compensation claims",
         HolidayWorkClaim,
         "holiday_work",
         ("pending",),
         ("approved",),
         ("rejected",),
         raised_by="hr",
-        # the claim table holds every compensation claim kind since 2026-11-19: this row is Sunday / holiday work only
-        extra=(("kind", "holiday_work"),),
+        on_page=True,
         decided_columns=("reviewed_at",),
         approver_columns=("reviewed_by",),
+        comment_columns=("review_comment",),
     ),
     Kind(
         "advance",
@@ -525,10 +600,12 @@ KINDS: tuple[Kind, ...] = (
         ("approved", "closed"),  # a closed advance was approved and has been repaid in full
         ("rejected",),
         raised_by="hr",
+        on_page=True,
         has_trail=False,
         approver_columns=("approved_by",),
         amount_field="amount",
         decided_extra=_advance_time,
+        comment_columns=("decision_remark",),
     ),
 )
 KIND_BY_KEY = {k.key: k for k in KINDS}
@@ -592,6 +669,8 @@ COLUMNS = (
     "f_code",
     "f_approver",
     "f_arole",
+    "f_comment",
+    "f_unit_id",
 )
 _SELECT_COLUMNS = ", ".join(f'"{c}"' for c in COLUMNS)
 
@@ -641,7 +720,7 @@ def _approved_roles(kind: Kind, status: str, hod: bool, hr: bool, notrail: bool)
 
 
 def _holder(kind_key: str, status: str, hod: bool, hr: bool, notrail: bool) -> tuple[str, bool]:
-    """(who it waits on, whether the MD can decide it now) under the pipeline in force today."""
+    """(who it waits on, whether HR can decide it now) under the pipeline in force today."""
     kind = KIND_BY_KEY[kind_key]
     config = approval.get_config(kind.workflow)
     approved = _approved_roles(kind, status, hod, hr, notrail)
@@ -736,6 +815,7 @@ def _waiting_block(table: dict) -> dict:
         "withHr": by_holder[HOLDER_HR]["n"],
         "withDepartmentHead": by_holder[HOLDER_HOD]["n"],
         "withEither": by_holder[HOLDER_EITHER]["n"],
+        "hrCanDecide": sum(r["n"] for r in rows if r["mdCan"]),
         "mdCanDecide": sum(r["n"] for r in rows if r["mdCan"]),
         "advanceAmount": round(sum(r["amount"] for r in rows if r["kind"] == "advance"), 2),
         "buckets": _bucket_list(total["b"]),
@@ -843,10 +923,13 @@ def _provenance(
     rows = rows or {}
     where = [kind_text(keys), scope.describe()]
     when = [period.label] if period else []
-    datasets = "Leave, permission, casual leave, outpass, missing punch, on-duty, resignation, attendance correction and advance requests"
+    datasets = (
+        "Leave, permission, casual leave, missing punch, on-duty, on-duty punch, outpass, other (general) requests, "
+        "resignation, attendance correction, compensation claim and advance requests"
+    )
     mix = (
-        "Counted: " + ", ".join(KIND_BY_KEY[k].label.lower() for k in keys) + ". General 'other requests' tickets are not "
-        "approvals and are left out. The HR Requests page lists leave, permission and employee-requested outpasses."
+        "Counted: " + ", ".join(KIND_BY_KEY[k].label.lower() for k in keys) + ". The same kinds the HR Requests page "
+        "lists as its sub-tabs (since 2026-11-21 every kind of request in the HRMS)."
     )
 
     def entry(id_, title, definition, formula=None, *, filters=None, caveats=(), n=None):
@@ -893,9 +976,9 @@ def _provenance(
             "requests-holder",
             "Who they are waiting on",
             "Worked out with the approval engine the HR pages use: the pipeline in force today plus the approvals "
-            "already recorded on the request. HR, the Department Head, or either. The MD decides as HR does, so a "
-            "request waiting on HR or on 'either' is one the MD can decide now; one waiting only on a Department "
-            "Head is not.",
+            "already recorded on the request. HR, the Department Head, or either. A request waiting on HR or on "
+            "'either' is one HR can decide now; one waiting only on a Department Head needs the Department Head first. "
+            "The MD looks at requests and does not decide them (HR and the Department Heads do).",
             filters=where,
             caveats=[
                 "If HR changes a pipeline in Approval Workflow Control, requests already waiting follow the new one "
@@ -1025,7 +1108,7 @@ def _briefing(
         where = " and ".join([", ".join(parts[:-1]), parts[-1]] if len(parts) > 1 else parts)
         text = (
             f"{_num(total)} {_plural(total, 'request is', 'requests are')} waiting for a decision: {where}. "
-            f"You can decide {_num(waiting['mdCanDecide'])} of them now."
+            f"HR can act on {_num(waiting['hrCanDecide'])} of them now."
         )
         sentences.append({"id": "waiting", "tone": "neutral", "text": text})
         aged = waiting["threeDaysPlus"]
@@ -1176,6 +1259,7 @@ def requests_waiting(scope: Scope, kind: str = "all", limit: int = LIST_DEFAULT)
                 "buckets": _bucket_list(s["b"]),
                 "threeDaysPlus": s["aged"],
                 "oldestHours": _age_hours(now, s["oldest"]),
+                "hrCanDecide": sum(r["n"] for r in part if r["mdCan"]),
                 "mdCanDecide": sum(r["n"] for r in part if r["mdCan"]),
             }
         )
@@ -1207,6 +1291,7 @@ def requests_waiting(scope: Scope, kind: str = "all", limit: int = LIST_DEFAULT)
                 "band": AGE_BANDS[_band_index(age)][0],
                 "holder": holder,
                 "holderLabel": HOLDER_LABEL[holder],
+                "hrCanDecide": md_can,
                 "mdCanDecide": md_can,
                 "amount": None if r["amount"] is None else float(r["amount"]),
             }
@@ -1223,6 +1308,7 @@ def requests_waiting(scope: Scope, kind: str = "all", limit: int = LIST_DEFAULT)
             "oldestHours": _age_hours(now, total["oldest"]),
             "threeDaysPlus": total["aged"],
             "buckets": _bucket_list(total["b"]),
+            "hrCanDecide": sum(r["n"] for r in rows if r["mdCan"]),
             "mdCanDecide": sum(r["n"] for r in rows if r["mdCan"]),
             "byKind": by_kind,
             "byHolder": by_holder,
@@ -1509,7 +1595,7 @@ def requests_bottlenecks(scope: Scope, period: Period, kind: str = "all", limit:
                 "waiting": s["n"],
                 "threeDaysPlus": s["aged"],
                 "oldestHours": _age_hours(now, s["oldest"]),
-                "mdCanDecide": sum(r["n"] for r in part if r["mdCan"]),
+                "hrCanDecide": sum(r["n"] for r in part if r["mdCan"]),
             }
         )
 
@@ -1680,7 +1766,15 @@ def requests_unusual(
     rejected_total = int(raw[0]["people_total"]) if raw else 0
 
     # large advances: those made in the period, and those still waiting whatever the date
-    advance = {"threshold": min_amount, "rows": [], "total": 0, "amount": 0.0, "waiting": 0, "waitingAmount": 0.0}
+    advance = {
+        "threshold": min_amount,
+        "rows": [],
+        "total": 0,
+        "amount": 0.0,
+        "waiting": 0,
+        "waitingAmount": 0.0,
+        "partial": {"count": 0, "requested": 0.0, "granted": 0.0},
+    }
     if "advance" in keys:
         raw = _run(
             """SELECT f.f_id AS id, f.f_employee AS employee, f.f_first AS first, f.f_last AS last, f.f_code AS code,
@@ -1714,6 +1808,23 @@ def requests_unusual(
             tail_params=[min_amount],
         )[0]
         advance["waiting"], advance["waitingAmount"] = int(waiting["n"]), round(float(waiting["amount"]), 2)
+        # approved for less than was asked (settlement partial approval, 2026-11-20), decided in the period
+        partial = (
+            Advance.objects.filter(
+                scope.employee_q("employee__"),
+                status__in=KIND_BY_KEY["advance"].approved,
+                requested_amount__isnull=False,
+                amount__lt=F("requested_amount"),
+            )
+            .alias(r_when=KIND_BY_KEY["advance"].decided_time())
+            .filter(r_when__gte=lo, r_when__lt=hi)
+            .aggregate(n=Count("id"), asked=Sum("requested_amount"), granted=Sum("amount"))
+        )
+        advance["partial"] = {
+            "count": int(partial["n"] or 0),
+            "requested": money(partial["asked"]),
+            "granted": money(partial["granted"]),
+        }
 
     entries = _provenance(scope, period, keys, rows={"submitted": sum(r["requests"] for r in repeat)})
     notes = []
@@ -1736,6 +1847,518 @@ def requests_unusual(
         scope=scope,
         provenance=_pick(entries, "requests-unusual"),
         notes=notes,
+    )
+
+
+# ─── rejections and their reasons (a reason is required since 2026-11-21) ────────────────────────────────────────────
+
+#: The SQL that makes one reason out of the ways people write it: trimmed, lower case, inner spaces collapsed.
+REASON_KEY = r"LOWER(REGEXP_REPLACE(BTRIM(f.f_comment), '\s+', ' ', 'g'))"
+#: How many different reasons are listed (the rest are added up as "other reasons").
+TOP_REASONS = 8
+
+
+@cached()
+def requests_rejections(scope: Scope, period: Period, kind: str = "all", limit: int = TOP_REASONS) -> dict:
+    """The requests rejected in the period (counted on the day of the decision): how many, how many carry a reason, the
+    most common reasons (the same words in any case or spacing are one reason) and the rejections by kind, against the
+    previous period. Since 2026-11-21 every rejection must carry a reason (approval_workflow.decide refuses one without);
+    older rejections may have none and are counted as "no reason recorded"."""
+    keys = kind_keys(kind)
+    limit = _int_arg(limit, "limit", TOP_REASONS, 1, LIST_MAX)
+    previous = period.previous()
+    lo, hi = _bounds(period.start, period.end)
+    plo, phi = _bounds(previous.start, previous.end)
+    rejected_only = "WHERE f.f_outcome = 'rejected'"
+
+    totals = _run(
+        "SELECT COUNT(*) AS n, COUNT(*) FILTER (WHERE NULLIF(BTRIM(f.f_comment), '') IS NOT NULL) AS with_reason",
+        _source(keys, scope, "decided", lo, hi),
+        tail=rejected_only,
+    )[0]
+    prev = _run("SELECT COUNT(*) AS n", _source(keys, scope, "decided", plo, phi), tail=rejected_only)[0]
+    reasons = _run(
+        f"SELECT {REASON_KEY} AS reason, MIN(BTRIM(f.f_comment)) AS sample, COUNT(*) AS n, "
+        "ARRAY_AGG(DISTINCT f.f_kind) AS kinds",
+        _source(keys, scope, "decided", lo, hi),
+        tail=f"{rejected_only} AND NULLIF(BTRIM(f.f_comment), '') IS NOT NULL GROUP BY 1 ORDER BY n DESC, 1",
+    )
+    decided = _decided_stats(scope, keys, lo, hi, DIMS["kind"])
+    with_reason_by_kind = {
+        r["k"]: int(r["n"])
+        for r in _run(
+            "SELECT f.f_kind AS k, COUNT(*) AS n",
+            _source(keys, scope, "decided", lo, hi),
+            tail=f"{rejected_only} AND NULLIF(BTRIM(f.f_comment), '') IS NOT NULL GROUP BY 1",
+        )
+    }
+
+    n, with_reason = int(totals["n"] or 0), int(totals["with_reason"] or 0)
+    shown = reasons[:limit]
+    rest = reasons[limit:]
+    top = [
+        {
+            "key": r["reason"],
+            "reason": r["sample"],
+            "count": int(r["n"]),
+            "sharePct": pct(int(r["n"]), with_reason),
+            "kinds": [{"key": k, "label": KIND_BY_KEY[k].label} for k in sorted(r["kinds"] or []) if k in KIND_BY_KEY],
+        }
+        for r in shown
+    ]
+    by_kind = []
+    for key in keys:
+        fig = _fig(decided.get(key))
+        if not fig["rejected"]:
+            continue
+        by_kind.append(
+            {
+                "key": key,
+                "label": KIND_BY_KEY[key].label,
+                "rejected": fig["rejected"],
+                "decided": fig["decided"],
+                "rejectionPct": fig["rejectionPct"],
+                "withReason": with_reason_by_kind.get(key, 0),
+                "lowSample": fig["decided"] < MIN_GROUP_DECIDED,
+            }
+        )
+    by_kind.sort(key=lambda r: (-r["rejected"], r["label"]))
+    entry = prov(
+        "requests-rejections",
+        "Why requests are rejected",
+        dataset="Every kind of request on the HR Requests page",
+        definition=(
+            "Requests rejected in the period, counted on the day of the decision, with the reason the approver wrote. "
+            "The same words in a different case or spacing count as one reason. Since 21 Nov 2026 a rejection cannot be "
+            "saved without a reason of at least 3 characters, so a rejection with no reason is an older one."
+        ),
+        formula="reason share = rejections with that reason ÷ rejections with any reason",
+        rows=n,
+        filters=[period.label, scope.describe(), kind_text(keys)],
+        caveats=["The reason is the last decision's remark in the approval trail, else the request's own comment column."],
+    )
+    notes = []
+    if n and with_reason < n:
+        notes.append(
+            f"{_num(n - with_reason)} of the {_num(n)} {_plural(n, 'rejection')} in this period "
+            f"{_plural(n - with_reason, 'has', 'have')} no reason recorded (rejected before reasons were required)."
+        )
+    return envelope(
+        {
+            "kind": kind or "all",
+            "kindLabel": kind_text(keys),
+            "rejected": _metric(n, int(prev["n"] or 0)),
+            "withReason": with_reason,
+            "withoutReason": n - with_reason,
+            "reasons": top,
+            "otherReasons": {"distinct": len(rest), "count": sum(int(r["n"]) for r in rest)},
+            "byKind": by_kind,
+            "previousPeriod": previous.to_json(),
+        },
+        period=period,
+        scope=scope,
+        provenance=[entry],
+        notes=notes,
+    )
+
+
+# ─── the requests behind a figure (the drill-down list) ──────────────────────────────────────────────────────────────
+
+LIST_STATUSES = ("waiting", "submitted", "decided", "approved", "rejected")
+#: The list's band for "waited AGED_DAYS or more" (the 3-7 day and 7+ day bands together).
+AGED_BAND = "aged"
+PAGE_SIZE_DEFAULT = 25
+PAGE_SIZE_MAX = 100
+_PUNCH_SLOTS = dict(MissingPunchRequest.PUNCH_SLOT_CHOICES)
+_PERMISSION_TYPES = dict(EmployeePermission.TYPE_CHOICES)
+_LEAVE_REASONS = dict(LeaveRequest.REASON_CATEGORY_CHOICES)
+_PORTIONS = {"first_half": "half day (first half)", "second_half": "half day (second half)"}
+_CLAIM_LABELS = dict(HolidayWorkClaim.KIND_CHOICES)
+_REQUEST_TYPES = dict(EmployeeRequest.REQUEST_TYPES)
+
+
+def _hhmm(value) -> str | None:
+    return value.strftime("%H:%M") if value else None
+
+
+def _ist_day(value: datetime | None) -> str | None:
+    return value.astimezone(FACTORY_TZ).date().isoformat() if value else None
+
+
+def _asked(day, to=None, note: str | None = None, label: str = "Requested date", precision: str = "day") -> dict | None:
+    """The date (or dates) a request is FOR, the way the HR Requests page shows it beside when it was submitted."""
+    if not day:
+        return None
+    text = day if isinstance(day, str) else day.isoformat()
+    end = None if to in (None, "", day) else (to if isinstance(to, str) else to.isoformat())
+    return {"from": text, "to": end, "note": note, "label": label, "precision": precision}
+
+
+def _facts_leave(r: dict) -> dict:
+    days = float(r["total_days"] or 1)
+    note = (
+        f"half day ({'afternoon' if r['half_day_slot'] == 'afternoon' else 'morning'})"
+        if r["is_half_day"]
+        else f"{days:g} {_plural(int(days) if days == int(days) else 2, 'day')}"
+    )
+    category = _LEAVE_REASONS.get(r["reason_category"] or "")
+    leave_type = (r["type"] or "").replace("_", " ").strip().capitalize() or "Leave"
+    return {
+        "what": f"{leave_type}" + (f" · {category}" if category else ""),
+        "requested": _asked(
+            r["start_date"],
+            r["end_date"],
+            note,
+            "Requested dates" if r["end_date"] and r["end_date"] != r["start_date"] else "Requested date",
+        ),
+        "reason": r["reason"],
+    }
+
+
+def _facts_permission(r: dict) -> dict:
+    slug = EmployeePermission.normalize_type(r["type"])
+    label = _PERMISSION_TYPES.get(slug or "", "Type not set")
+    when = _hhmm(r["permission_time"])
+    return {
+        "what": f"Permission · {label}",
+        "requested": _asked(r["date"], note=f"at {when}" if when else None),
+        "reason": r["reason"],
+    }
+
+
+def _facts_casual(r: dict) -> dict:
+    part = _PORTIONS.get(r["portion"] or "")
+    return {
+        "what": f"Casual leave · {part}" if part else "Casual leave",
+        "requested": _asked(r["date"], note=part or "full day"),
+        "reason": r["reason"],
+    }
+
+
+def _facts_missing(r: dict) -> dict:
+    slot = _PUNCH_SLOTS.get(r["punch_slot"] or "") or ("Check-in" if r["punch_type"] == "IN" else "Check-out")
+    when = _hhmm(r["punch_time"])
+    return {
+        "what": f"Missing punch · {slot}",
+        "requested": _asked(r["date"], note=f"{slot.lower()} at {when}" if when else slot.lower()),
+        "reason": r["reason"],
+    }
+
+
+def _facts_on_duty(r: dict) -> dict:
+    day = _ist_day(r["started_at"] or r["created_at"])
+    return {
+        "what": "On-duty",
+        "requested": _asked(day, note=f"at {r['destination']}" if r["destination"] else None, label="On-duty day"),
+        "reason": r["destination"],
+        "reasonLabel": "Destination",
+    }
+
+
+def _facts_on_duty_punch(r: dict) -> dict:
+    when = _hhmm(r["punch_time"])
+    return {
+        "what": f"On-duty punch {r['punch_number']}",
+        "requested": _asked(r["punch_date"], note=f"punch at {when}" if when else None, label="Punch date"),
+        "reason": r["session__destination"],
+        "reasonLabel": "Destination",
+    }
+
+
+def _facts_outpass(r: dict) -> dict:
+    back = r["expected_return_at"]
+    pass_type = (r["pass_type"] or "").replace("_", " ").strip()
+    return {
+        "what": f"Outpass · {pass_type}" if pass_type else "Outpass",
+        "requested": _asked(
+            _ist_day(r["created_at"]),
+            note=f"back by {back.astimezone(FACTORY_TZ).strftime('%H:%M')}" if back else None,
+            label="Going out on",
+        ),
+        "reason": r["reason"] or r["destination"],
+    }
+
+
+def _facts_request(r: dict) -> dict:
+    kind = _REQUEST_TYPES.get(r["request_type"] or "", "Request")
+    return {
+        "what": f"{kind} · {r['subject']}" if r["subject"] else kind,
+        "requested": None,  # a general request is not for a date
+        "reason": r["description"],
+        "reasonLabel": "Description",
+    }
+
+
+def _facts_correction(r: dict) -> dict:
+    return {"what": "Attendance correction", "requested": _asked(r["date"], label="Attendance date"), "reason": r["reason"]}
+
+
+def _facts_claim(r: dict) -> dict:
+    label = _CLAIM_LABELS.get(r["kind"] or "holiday_work", "Compensation claim")
+    if r["kind"] == "ot_allowance":
+        note = f"{r['minutes'] or 0} min"
+    else:
+        note = f"{float(r['shifts'] or 0):g} shift"
+    return {
+        "what": label,
+        "requested": _asked(r["work_date"], note=note, label="Work date"),
+        "reason": r["reason"],
+    }
+
+
+def _facts_resignation(r: dict) -> dict:
+    return {
+        "what": "Resignation",
+        "requested": _asked(r["last_working_date"], label="Last working day"),
+        "reason": r["reason"],
+    }
+
+
+def _facts_advance(r: dict) -> dict:
+    start = (
+        date(r["repayment_start_year"], r["repayment_start_month"], 1)
+        if r["repayment_start_year"] and r["repayment_start_month"]
+        else None
+    )
+    kind = {"general": "General advance", "term": "Term advance (loan)"}.get(r["advance_type"] or "", "Advance")
+    asked, granted = r["requested_amount"], r["amount"]
+    partial = asked is not None and granted is not None and float(granted) < float(asked)
+    return {
+        "what": kind,
+        "requested": _asked(start, label="Deduct from", precision="month"),
+        "reason": r["purpose"],
+        "reasonLabel": "Purpose",
+        "requestedAmount": None if asked is None else float(asked),
+        "partial": partial,
+    }
+
+
+#: Per kind: the columns the list needs and how they read (one query per kind on the page, never one per row).
+_FACTS: dict[str, tuple[tuple[str, ...], Callable[[dict], dict]]] = {
+    "leave": (
+        ("start_date", "end_date", "total_days", "is_half_day", "half_day_slot", "type", "reason", "reason_category"),
+        _facts_leave,
+    ),
+    "permission": (("date", "permission_time", "type", "reason"), _facts_permission),
+    "casual_leave": (("date", "portion", "reason"), _facts_casual),
+    "missing_punch": (("date", "punch_time", "punch_type", "punch_slot", "reason"), _facts_missing),
+    "on_duty": (("started_at", "created_at", "destination"), _facts_on_duty),
+    "on_duty_punch": (("punch_date", "punch_time", "punch_number", "session__destination"), _facts_on_duty_punch),
+    "outpass": (("created_at", "expected_return_at", "pass_type", "destination", "reason"), _facts_outpass),
+    "request": (("request_type", "subject", "description"), _facts_request),
+    "attendance_correction": (("date", "reason"), _facts_correction),
+    "holiday_work": (("work_date", "kind", "shifts", "minutes", "reason"), _facts_claim),
+    "resignation": (("last_working_date", "reason"), _facts_resignation),
+    "advance": (
+        ("repayment_start_year", "repayment_start_month", "advance_type", "amount", "requested_amount", "purpose"),
+        _facts_advance,
+    ),
+}
+
+
+def _row_facts(rows: list[dict]) -> dict[tuple[str, int], dict]:
+    """{(kind, id): what was asked, the date(s) it is for and the reason} for the rows of one page of the list."""
+    wanted: dict[str, list[int]] = {}
+    for r in rows:
+        wanted.setdefault(r["kind"], []).append(r["id"])
+    out: dict[tuple[str, int], dict] = {}
+    for key, ids in wanted.items():
+        columns, read = _FACTS[key]
+        for raw in KIND_BY_KEY[key].model.objects.filter(pk__in=ids).values("id", *columns):
+            out[(key, raw["id"])] = read(raw)
+    return out
+
+
+def _holder_combos(keys: tuple[str, ...], scope: Scope, holder: str) -> list[tuple]:
+    """The (kind, status, hod, hr, notrail) combinations of waiting requests that wait on ``holder``: who a request waits
+    on is the approval engine's answer (Python), so the list filters on these combinations in SQL."""
+    combos = _run(
+        "SELECT DISTINCT f.f_kind AS kind, f.f_status AS status, f.f_hod AS hod, f.f_hr AS hr, f.f_notrail AS notrail",
+        _source(keys, scope, "waiting"),
+    )
+    return [
+        (c["kind"], c["status"], bool(c["hod"]), bool(c["hr"]), bool(c["notrail"]))
+        for c in combos
+        if _holder(c["kind"], c["status"], bool(c["hod"]), bool(c["hr"]), bool(c["notrail"]))[0] == holder
+    ]
+
+
+@cached()
+def requests_list(
+    scope: Scope,
+    period: Period,
+    kind: str = "all",
+    status: str = "waiting",
+    holder: str | None = None,
+    department: str | None = None,
+    employee: int | str | None = None,
+    approver: str | None = None,
+    band: str | None = None,
+    reason: str | None = None,
+    page: int = 1,
+    page_size: int = PAGE_SIZE_DEFAULT,
+) -> dict:
+    """The requests behind a figure, a page at a time: what was asked, the date(s) it is for, when it was submitted, who it
+    waits on (or who decided it, when, and the reason given), for the MD's drill-down. ``status``: waiting (now, any
+    date), submitted (made in the period), decided / approved / rejected (decided in the period). Filters: who it waits
+    on, department (name; ``__none__`` for none), employee id, approver name, age band of a waiting request, the reason of
+    a rejection (as grouped by requests_rejections)."""
+    keys = kind_keys(kind)
+    status = (status or "waiting").strip().lower()
+    if status not in LIST_STATUSES:
+        raise MdParamError(f"'status' must be one of: {', '.join(LIST_STATUSES)}.")
+    page = _int_arg(page, "page", 1, 1, 100_000)
+    page_size = _int_arg(page_size, "pageSize", PAGE_SIZE_DEFAULT, 1, PAGE_SIZE_MAX)
+    now = now_utc()
+    lo, hi = _bounds(period.start, period.end)
+    mode = {"waiting": "waiting", "submitted": "submitted"}.get(status, "decided")
+    source = _source(keys, scope, mode, lo, hi) if mode != "waiting" else _source(keys, scope, "waiting")
+
+    where: list[str] = []
+    params: list[Any] = []
+    if status in ("approved", "rejected"):
+        where.append("f.f_outcome = %s")
+        params.append(status)
+    if holder:
+        if holder not in HOLDERS:
+            raise MdParamError(f"'holder' must be one of: {', '.join(HOLDERS)}.")
+        if status != "waiting":
+            raise MdParamError("'holder' only applies to waiting requests.")
+        combos = _holder_combos(keys, scope, holder)
+        if not combos:
+            where.append("FALSE")
+        else:
+            parts = []
+            for combo in combos:
+                parts.append("(f.f_kind = %s AND f.f_status = %s AND f.f_hod = %s AND f.f_hr = %s AND f.f_notrail = %s)")
+                params.extend(combo)
+            where.append("(" + " OR ".join(parts) + ")")
+    if department:
+        where.append("COALESCE(f.f_dept, '') = %s")
+        params.append("" if department == "__none__" else department)
+    if employee not in (None, ""):
+        try:
+            where.append("f.f_employee = %s")
+            params.append(int(employee))
+        except (TypeError, ValueError):
+            raise MdParamError("'employee' must be an employee id.") from None
+    if approver:
+        where.append("BTRIM(COALESCE(f.f_approver, '')) = %s")
+        params.append(approver.strip())
+    if band == AGED_BAND:  # every request that has waited AGED_DAYS or more (the "3 days or more" figure)
+        where.append("f.f_created <= %s")
+        params.append(now - timedelta(hours=AGE_EDGES_HOURS[1]))
+    elif band:
+        keys_of_bands = [b[0] for b in AGE_BANDS]
+        if band not in keys_of_bands:
+            raise MdParamError(f"'band' must be one of: {', '.join([*keys_of_bands, AGED_BAND])}.")
+        i = keys_of_bands.index(band)
+        edges = [now - timedelta(hours=h) for h in AGE_EDGES_HOURS]
+        if i == 0:
+            where.append("f.f_created > %s")
+            params.append(edges[0])
+        elif i == len(AGE_BANDS) - 1:
+            where.append("f.f_created <= %s")
+            params.append(edges[-1])
+        else:
+            where.append("f.f_created <= %s AND f.f_created > %s")
+            params.extend([edges[i - 1], edges[i]])
+    if reason:
+        where.append(f"{REASON_KEY} = %s")
+        params.append(reason.strip().lower())
+    order = {
+        "waiting": "f.f_created ASC, f.f_kind, f.f_id",
+        "submitted": "f.f_created DESC, f.f_kind, f.f_id",
+    }.get(status, "f.f_decided DESC NULLS LAST, f.f_kind, f.f_id")
+    tail = (f"WHERE {' AND '.join(where)} " if where else "") + f"ORDER BY {order} LIMIT %s OFFSET %s"
+    rows = _run(
+        """SELECT f.f_kind AS kind, f.f_id AS id, f.f_employee AS employee, f.f_first AS first, f.f_last AS last,
+            f.f_code AS code, COALESCE(f.f_dept, '') AS dept, f.f_unit AS unit, f.f_type AS etype,
+            f.f_created AS created, f.f_decided AS decided, f.f_outcome AS outcome, f.f_status AS status,
+            f.f_hod AS hod, f.f_hr AS hr, f.f_notrail AS notrail, f.f_amount AS amount, f.f_approver AS approver,
+            f.f_arole AS arole, f.f_comment AS comment, COUNT(*) OVER () AS total""",
+        source,
+        tail=tail,
+        tail_params=[*params, page_size, (page - 1) * page_size],
+    )
+    facts = _row_facts(rows)
+    items = []
+    for r in rows:
+        waiting = r["outcome"] == "waiting"
+        holder_key, hr_can = (
+            _holder(r["kind"], r["status"], bool(r["hod"]), bool(r["hr"]), bool(r["notrail"])) if waiting else (None, False)
+        )
+        fact = facts.get((r["kind"], r["id"]), {})
+        age = _age_hours(now, r["created"]) if waiting else None
+        decided_hours = (
+            _hours(max(0.0, (r["decided"] - r["created"]).total_seconds()))
+            if r["decided"] is not None and r["created"] is not None
+            else None
+        )
+        items.append(
+            {
+                "key": f"{r['kind']}-{r['id']}",
+                "kind": r["kind"],
+                "kindLabel": KIND_BY_KEY[r["kind"]].label,
+                "id": r["id"],
+                "employee": {
+                    "id": r["employee"],
+                    "name": _person(r["first"], r["last"]),
+                    "code": r["code"],
+                    "department": r["dept"] or None,
+                    "unit": r["unit"],
+                    "type": r["etype"],
+                },
+                "what": fact.get("what") or KIND_BY_KEY[r["kind"]].label,
+                "requested": fact.get("requested"),
+                "reason": fact.get("reason"),
+                "reasonLabel": fact.get("reasonLabel") or "Reason",
+                "submittedAt": _stamp(r["created"]),
+                "outcome": r["outcome"],
+                "ageHours": age,
+                "band": AGE_BANDS[_band_index(age)][0] if waiting else None,
+                "holder": holder_key,
+                "holderLabel": HOLDER_LABEL.get(holder_key) if holder_key else None,
+                "hrCanDecide": hr_can,
+                "decidedAt": _stamp(r["decided"]),
+                "decisionHours": decided_hours,
+                "decidedBy": (r["approver"] or "").strip() or None,
+                "decidedByRole": approval.ROLE_LONG.get(r["arole"]) if r["arole"] else None,
+                "decisionRemark": (r["comment"] or "").strip() or None if not waiting else None,
+                "amount": None if r["amount"] is None else float(r["amount"]),
+                "requestedAmount": fact.get("requestedAmount"),
+                "partial": bool(fact.get("partial")),
+            }
+        )
+    total = int(rows[0]["total"]) if rows else 0
+    if not rows and page > 1:
+        # a page past the end: say how many there are without returning rows
+        total = int(
+            _run("SELECT COUNT(*) AS n", source, tail=(f"WHERE {' AND '.join(where)}" if where else ""), tail_params=params)[
+                0
+            ]["n"]
+        )
+    entries = _provenance(scope, period if status != "waiting" else None, keys)
+    return envelope(
+        {
+            "kind": kind or "all",
+            "kindLabel": kind_text(keys),
+            "status": status,
+            "asOf": _stamp(now),
+            "items": items,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "pages": max(1, -(-total // page_size)),
+        },
+        period=period if status != "waiting" else None,
+        scope=scope,
+        provenance=_pick(
+            entries,
+            "requests-waiting" if status == "waiting" else "requests-submitted" if status == "submitted" else "requests-decided",
+            "requests-holder",
+            "requests-kinds",
+        ),
     )
 
 
@@ -1784,7 +2407,7 @@ def _exceptions(scope: Scope, period: Period, kind: str = "all", *, limit: int) 
         top_dept = _top_label(by_dept)
         bits = [f"The oldest has waited {_dur(waiting['oldestHours'])}."]
         bits.append(
-            f"{_num(hr_aged)} {_plural(hr_aged, 'is', 'are')} with HR or either approver (you can decide "
+            f"{_num(hr_aged)} {_plural(hr_aged, 'is', 'are')} with HR or either approver (HR can decide "
             f"{_plural(hr_aged, 'it', 'them')} now)"
             + (f" and {_num(hod_aged)} only with a Department Head." if hod_aged else ".")
         )
@@ -1897,12 +2520,14 @@ def _exceptions(scope: Scope, period: Period, kind: str = "all", *, limit: int) 
     if worst_rejecting:
         by, r = worst_rejecting
         what = f"{r['label']} requests" if by == "kind" else f"Requests from {r['label']}"
+        reasons = requests_rejections(scope, period, kind=kind if by == "department" else r["key"], limit=1)["reasons"]
+        why = f" The reason given most often: \"{reasons[0]['reason']}\" ({_num(reasons[0]['count'])})." if reasons else ""
         items.append(
             _item(
                 "rejections",
                 "info",
                 f"{what} are rejected {_p(r['rejectionPct'])} of the time",
-                f"{period.label}: {_num(r['rejected'])} of {_num(r['decided'])} decided were rejected.",
+                f"{period.label}: {_num(r['rejected'])} of {_num(r['decided'])} decided were rejected.{why}",
                 _p(r["rejectionPct"]),
                 f"Why are {r['label']} requests rejected so often ({period.label}), and for whom?",
             )
@@ -1915,7 +2540,7 @@ def _exceptions(scope: Scope, period: Period, kind: str = "all", *, limit: int) 
             _item(
                 "repeat",
                 "info",
-                f"{_num(repeat)} {_plural(repeat, 'person')} made {REPEAT_MIN_REQUESTS} or more requests",
+                f"{_num(repeat)} {_plural(repeat, 'person', 'people')} made {REPEAT_MIN_REQUESTS} or more requests",
                 f"{period.label}: the most any one person made is "
                 f"{_num(unusual['repeatRequesters']['rows'][0]['requests'])}. The names are on the Requests page.",
                 _num(repeat),
@@ -1961,7 +2586,7 @@ def requests_attention(scope: Scope, period: Period, kind: str = "all") -> dict:
     thresholds = prov(
         "requests-attention",
         "Needs your attention",
-        dataset="Leave, permission, outpass, missing punch, on-duty, resignation, correction and advance requests",
+        dataset="Every kind of request on the HR Requests page",
         definition=(
             f"Requests waiting {AGED_DAYS} days or more are flagged (critical from {STALE_DAYS} days). A department is "
             f"named when {BOTTLENECK_MIN_AGED}+ of its requests have waited that long with the Department Head. A median "
@@ -2000,7 +2625,7 @@ def headline(*, today: date | None = None) -> dict:
     med_min, prev_min = (None if v is None else round(v * 60) for v in (med, prev))
     delta = change(med_min, prev_min)
     if waiting["total"]:
-        sub = f"{_num(waiting['mdCanDecide'])} you can decide now"
+        sub = f"{_num(waiting['withHr'] + waiting['withEither'])} with HR · {_num(waiting['withDepartmentHead'])} with Department Heads"
         if waiting["threeDaysPlus"]:
             sub += f" · {_num(waiting['threeDaysPlus'])} waiting {AGED_DAYS}+ days · oldest {_dur(waiting['oldestHours'])}"
     else:
@@ -2047,10 +2672,11 @@ TOOLS = [
     tool(
         "requests_summary",
         "The requests picture in ONE lookup: how many requests are waiting for a decision now (by how long they have "
-        "waited and by who they wait on: HR, the Department Head or either; how many the MD can decide himself), and for "
+        "waited and by who they wait on: HR, the Department Head or either; how many HR can decide now), and for "
         "the period how many were submitted and decided, the approval and rejection rates and the typical (median) and "
         "90th-percentile time to decide in hours, each against the previous period, plus a plain-English briefing. Kinds: "
-        "leave, permission, casual leave, outpass, missing punch, on-duty, resignation, attendance correction, advance. "
+        "leave, permission, casual leave, missing punch, on-duty, on-duty punch, outpass, other requests, resignation, "
+        "attendance correction, compensation claims, advance (the kinds on the HR Requests page). "
         "Use for 'how are requests going', 'what is waiting', 'how fast do we decide requests'. Percentages are 0-100.",
         requests_summary,
         page=PAGE,
@@ -2061,7 +2687,7 @@ TOOLS = [
     tool(
         "requests_waiting",
         "Requests waiting for a decision right now (a snapshot, all dates): totals by kind and by who they wait on, each in "
-        "the age bands under 1 day / 1-3 days / 3-7 days / 7+ days, how many the MD can decide, and the oldest waiting "
+        "the age bands under 1 day / 1-3 days / 3-7 days / 7+ days, how many HR can decide now, and the oldest waiting "
         "requests with who is waiting on them (name, department, age in hours). Use for 'what is stuck', 'which requests "
         "have waited longest', 'who is holding things up' (HR or the Department Head).",
         requests_waiting,
@@ -2145,6 +2771,18 @@ TOOLS = [
             "min_rejections": REPEAT_MIN_REJECTIONS,
             "min_amount": LARGE_ADVANCE_AMOUNT,
         },
+    ),
+    tool(
+        "requests_rejections",
+        "Why requests are rejected: the requests rejected in the period (on the day of the decision) against the previous "
+        "period, how many carry the approver's reason (required since 21 Nov 2026), the most common reasons with how "
+        "often each was given and for which kinds, and the rejections by kind with the rejection rate. Use for 'why are "
+        "leave requests being rejected', 'what reasons do approvers give', 'how many rejections this month'.",
+        requests_rejections,
+        page=PAGE,
+        period="last_30_days",
+        extra={"kind": _KIND, "limit": _LIMIT},
+        defaults={"kind": "all", "limit": TOP_REASONS},
     ),
     tool(
         "requests_attention",

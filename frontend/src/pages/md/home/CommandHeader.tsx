@@ -6,12 +6,13 @@ import { cn } from "@/lib/utils";
 import { greetingLine, longDate } from "../dashboard/logic";
 
 /** How the header sums the day up: the requests waiting (for HR or a Department Head; the MD looks at them) and the things
- *  that want a look. */
-export function pulseSentence(attention: number, waiting: number): { text: string; calm: boolean } {
-  if (attention === 0 && waiting === 0) return { text: "All quiet: nothing needs you right now.", calm: true };
+ *  that want a look (null while the company-wide check is still on its way: it is fetched after the figures). */
+export function pulseSentence(attention: number | null, waiting: number): { text: string; calm: boolean } {
+  if (attention === null && waiting === 0) return { text: "Checking what needs you today…", calm: true };
+  if (!attention && waiting === 0) return { text: "All quiet: nothing needs you right now.", calm: true };
   const parts: string[] = [];
   if (waiting > 0) parts.push(`${waiting} request${waiting === 1 ? "" : "s"} waiting`);
-  if (attention > 0) parts.push(`${attention} thing${attention === 1 ? "" : "s"} to look at`);
+  if (attention) parts.push(`${attention} thing${attention === 1 ? "" : "s"} to look at`);
   return { text: parts.join(" · "), calm: false };
 }
 
@@ -30,8 +31,8 @@ export default function CommandHeader({
 }: {
   name: string | undefined;
   serverTime: string | undefined;
-  /** Exceptions across the company (the dashboard's total). */
-  attention: number;
+  /** Exceptions across the company (the dashboard's total); null until known. */
+  attention: number | null;
   /** Leave, permission and outpass requests still pending. */
   waiting: number;
 }) {

@@ -9,7 +9,8 @@
 //   GET  /api/gate-monitor/me       -> GateMonitorMe (`token` = a fresh one when fewer than 15 days are left)
 //   POST /api/gate-monitor/logout   204 (ends this session only)
 //   POST /api/gate-monitor/scan     {qrToken} -> GateScanResult (the same body as /api/gate-devices/scan);
-//                                   403 not_allowed_here when the gate does not take that kind of code
+//                                   403 not_allowed_here when the gate does not take that kind of code;
+//                                   409 cooldown for a repeat tea-break scan inside the cooldown (nothing recorded)
 //   GET  /api/gate-monitor/summary  -> GateMonitorSummary (today, this gate)
 //   GET  /api/gate-monitor/records?from&to&type&result&q&page&pageSize -> GateRecordsPage (this gate only)
 //   GET  /api/gate-monitor/records/export?fmt=xlsx|pdf&<filters>  (kit/download.ts with `token` = the gate token)
@@ -67,9 +68,20 @@ export type GateMonitorSummary = {
 /** `GET /api/gate-devices/login-info/<token>` (public): an old per-gate link names its gate as a hint. */
 export type GateLoginInfo = { gateName: string; branchName: string; isActive: boolean };
 
-/** What a scan can answer. The console treats any other value as "check with HR" (it never crashes on a new one). */
+/**
+ * What a scan can answer. The console treats any other value as "check with HR" (it never crashes on a new one).
+ * `cooldown` (409, added 2026-11-21): the same employee's tea-break QR again within the cooldown after their last successful
+ * tea-break scan (default 5 minutes); nothing is recorded.
+ */
 export type GateScanResultCode =
-  "success" | "already_scanned" | "expired" | "not_approved" | "invalid_qr" | "not_exited" | "not_allowed_here";
+  | "success"
+  | "already_scanned"
+  | "expired"
+  | "not_approved"
+  | "invalid_qr"
+  | "not_exited"
+  | "not_allowed_here"
+  | "cooldown";
 
 export type GateScanPerson = {
   id?: number;
@@ -87,9 +99,22 @@ export type GateScanResult = {
   scanType?: "exit" | "entry";
   /** A tea break: started ("out") or ended ("in"). */
   action?: "out" | "in";
+  /** A tea break that ended ("in"): how long it took, in whole minutes. */
   takenMinutes?: number;
-  /** not_allowed_here: which kind the gate refused. */
+  /** A tea break that ended: the minutes a break may take (the console warns when takenMinutes is over it). */
+  allowedMinutes?: number;
+  /** not_allowed_here: which kind the gate refused; cooldown: always "tea_break". */
   kind?: "outpass" | "tea_break";
+  /** cooldown: what the last successful scan did (the break started = "out", ended = "in"). */
+  lastAction?: "out" | "in";
+  /** cooldown: when that last successful scan was (ISO). */
+  lastScanAt?: string;
+  /** cooldown: when the employee may scan again (ISO). */
+  retryAt?: string;
+  /** cooldown: seconds from the answer to retryAt (the console counts down from this, so a wrong kiosk clock does not matter). */
+  waitSeconds?: number;
+  /** cooldown: the cooldown's length in minutes. */
+  cooldownMinutes?: number;
   employee?: GateScanPerson;
   destination?: string | null;
   reason?: string | null;

@@ -1,38 +1,38 @@
 import { useState } from "react";
 import { Radio } from "lucide-react";
 import { useBrief, pageQuestion } from "@/components/md/embedded/brief";
-import { FilterBar, PeriodBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import { ErrorBanner, NoteBanner } from "@/components/md/kit/states";
 import { kpiValueText, sortInsights } from "@/components/md/kit/dto";
 import { describeMdError, useMdOrg, useMdQuery } from "@/lib/api-client/custom-hooks/md";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
-import {
-  EVERYONE,
-  periodParams,
-  scopeIsEveryone,
-  scopeParams,
-  type PeriodChoice,
-  type ScopeChoice,
-} from "@/lib/md/period";
+import { scopeIsEveryone, scopeParams } from "@/lib/md/period";
 import { cn } from "@/lib/utils";
 import { StripFigure, StripInsights, StripNote, StripShell } from "../shared/InsightStrip";
+import InsightsFilterBar from "../shared/InsightsFilterBar";
 import SegTabs from "../shared/SegTabs";
+import type { InsightsDefaults } from "../shared/filters";
+import { useInsightsFilters } from "../shared/useInsightsFilters";
 import AttentionCard from "./AttentionCard";
 import BriefingCard from "./BriefingCard";
 import CompareCard from "./CompareCard";
+import { AlertsSheet, PersonSheet, type AlertFilter } from "./DrillSheets";
 import GroupsCard from "./GroupsCard";
 import KpiStrip from "./KpiStrip";
 import LiveCard from "./LiveCard";
 import PeopleCard from "./PeopleCard";
 import ReachCard from "./ReachCard";
+import TrackingCard from "./TrackingCard";
 import TrendCard from "./TrendCard";
 import UnusualCard from "./UnusualCard";
 import VerificationCard from "./VerificationCard";
 import { LIVE_REFRESH_MS, useGeoData } from "./hooks";
-import { GROUP_TABS, askQuestions, assistantSummary, focusScope, periodText, scopeText } from "./logic";
+import { GROUP_TABS, askQuestions, assistantSummary, focusScope, scopeText } from "./logic";
 import type { GeoLive, GroupBy, GeoGroupRow } from "./types";
 
 const PAGE = "geo-attendance";
+
+/** Opens on the month that is running; Range offers the presets and a custom range. */
+const DEFAULTS: InsightsDefaults = {};
 
 /**
  * Geo Attendance, Insights & AI: who works away from the premises, how often, whether HR is verifying it, what looks
@@ -40,35 +40,45 @@ const PAGE = "geo-attendance";
  * settings) is the Operations tab next to this one.
  */
 export default function GeoInsights() {
-  const [period, setPeriod] = useState<PeriodChoice>({ preset: "last_30_days" });
-  const [scope, setScope] = useState<ScopeChoice>(EVERYONE);
+  const { filters, params, label, setWhen, setScope } = useInsightsFilters(DEFAULTS);
+  const scope = filters.scope;
   const [by, setBy] = useState<GroupBy>("department");
+  const [alertFilter, setAlertFilter] = useState<AlertFilter | null>(null);
+  const [person, setPerson] = useState<number | null>(null);
   const org = useMdOrg();
-  const data = useGeoData({ ...periodParams(period), ...scopeParams(scope) }, scopeParams(scope), by);
+  const data = useGeoData(params, scopeParams(scope), by);
   const { summary } = data;
 
-  const periodLabel = summary.data?.period?.label ?? periodText(period);
+  const periodLabel = summary.data?.period?.label ?? label;
   const selection = scopeText(scope, summary.data?.scope?.description);
   const ask = askQuestions(periodLabel, scopeIsEveryone(scope) ? null : selection);
+  const tracking = data.tracking.data;
 
   usePublishAssistantContext({
     page: PAGE,
     title: "Geo Attendance",
     filters: { Period: periodLabel, Scope: selection },
-    summary: assistantSummary(summary.data, data.verification.data),
+    summary: {
+      ...assistantSummary(summary.data, data.verification.data),
+      "On-Duty journeys tracked": tracking?.journeys.count ?? null,
+      "Km travelled on duty": tracking?.journeys.km ?? null,
+      "Automatic alerts": tracking?.alerts.count ?? null,
+      "Alerts open now": tracking?.alerts.openNow ?? null,
+    },
   });
 
   const focus = (row: GeoGroupRow) => {
     const next = focusScope(scope, by, row, org.data);
     if (next) setScope(next);
   };
+  const openPerson = (id: number) => {
+    setAlertFilter(null);
+    setPerson(id);
+  };
 
   return (
     <div className="space-y-5" data-testid="md-geo-insights">
-      <FilterBar>
-        <PeriodBar value={period} onChange={setPeriod} />
-        <ScopeBar value={scope} onChange={setScope} org={org.data} />
-      </FilterBar>
+      <InsightsFilterBar filters={filters} onWhen={setWhen} onScope={setScope} org={org.data} />
 
       {summary.isError && (
         <ErrorBanner message={describeMdError(summary.error)} onRetry={() => void summary.refetch()} />
@@ -82,7 +92,9 @@ export default function GeoInsights() {
 
       <TrendCard query={data.trend} ask={ask.trend} />
 
-      <LiveCard query={data.live} ask={ask.live} />
+      <LiveCard query={data.live} ask={ask.live} onPerson={openPerson} />
+
+      <TrackingCard query={data.tracking} ask={ask.tracking} onAlerts={setAlertFilter} onPerson={openPerson} />
 
       <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-2">
         <VerificationCard query={data.verification} ask={ask.verification} />
@@ -106,9 +118,12 @@ export default function GeoInsights() {
 
       <UnusualCard query={data.unusual} ask={ask.unusual} />
 
-      <PeopleCard query={data.people} ask={ask.people} />
+      <PeopleCard query={data.people} ask={ask.people} onPerson={openPerson} />
 
       <CompareCard query={summary} ask={ask.compare} />
+
+      <AlertsSheet filter={alertFilter} params={params} onClose={() => setAlertFilter(null)} onPerson={openPerson} />
+      <PersonSheet employeeId={person} params={params} onClose={() => setPerson(null)} />
 
       {summary.data && summary.data.notes.length > 0 && (
         <NoteBanner>
@@ -164,6 +179,7 @@ export function Strip() {
         >
           {now.awaitingApproval > 0 && <StripNote tone="watch">{now.awaitingApproval} awaiting approval</StripNote>}
           {now.leftOpen > 0 && <StripNote tone="bad">{now.leftOpen} left open</StripNote>}
+          {(now.openAlerts ?? 0) > 0 && <StripNote tone="bad">{now.openAlerts} open alerts</StripNote>}
         </StripFigure>
       )}
       {kpis.map((kpi) => (

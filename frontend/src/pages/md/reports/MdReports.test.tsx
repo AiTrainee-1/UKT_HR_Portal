@@ -1,5 +1,6 @@
 import { act } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { preloadMdShell } from "@/components/md/shell/loader";
 import { closeAssistant, getAssistantState, setAssistantContext } from "@/lib/md/assistant-store";
 import { _resetPrefsCache } from "@/lib/report-prefs";
 import { renderMdPage, type Fixtures, type RenderedPage } from "@/pages/md/testing/renderMdPage";
@@ -7,6 +8,9 @@ import MdReports from "../MdReports";
 import { REPORTS, catalogFixture, emptyRun, employeeMasterRun, meta, simpleRun } from "./test-fixtures";
 
 let page: RenderedPage | undefined;
+
+// the MD shell is a lazy chunk (components/md/shell/loader.ts): have it in before the first page renders
+beforeAll(() => preloadMdShell(), 60_000);
 
 beforeEach(() => {
   localStorage.clear();
@@ -161,7 +165,7 @@ describe("the assistant", () => {
     await page.click('[data-testid="md-reports-ask-ai"] [data-testid="ask-ai"]');
     const { open: isOpen, prompt } = getAssistantState();
     expect(isOpen).toBe(true);
-    expect(prompt?.text).toBe("Which report shows overtime by department?");
+    expect(prompt?.text).toBe("Which report shows salary cost by department?");
   });
 
   it("is told what the library holds", async () => {
@@ -390,5 +394,32 @@ describe("when the catalog does not load", () => {
     await page.click('[data-testid="md-error"] button');
     expect(q('[data-testid="md-error"]')).toBeNull();
     expect(page.text()).toContain("Salary Register");
+  });
+});
+
+describe("the overview, the executive month and the library in the address (2026-11-21)", () => {
+  it("leads with the library at a glance; a group opens the library at that group", async () => {
+    page = await open("/md/reports");
+    expect(text('[data-testid="md-reports-overview-text"]')).toContain("1 executive report prepared for you");
+    expect(text('[data-testid="md-reports-kpi-executive-value"]')).toBe("1");
+    await page.click('[data-testid="md-reports-by-group"] [data-testid="bar-attendance"] button');
+    expect(q('[data-testid="md-chip-attendance"]')?.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("opens the executive reports for the chosen month", async () => {
+    page = await open("/md/reports?month=2026-09");
+    expect(text('[data-testid="md-executive-shelf"]')).toContain("opened for Sep 2026");
+    // the daily brief takes no month: it keeps its own defaults
+    expect(q('[data-testid="executive-card-md-daily-brief"]')?.getAttribute("href")).toBe(
+      "/md/reports?report=md-daily-brief",
+    );
+    await page.click('[data-testid="md-executive-defaults"]');
+    expect(text('[data-testid="md-executive-shelf"]')).not.toContain("opened for");
+  });
+
+  it("keeps the search and the group in the address", async () => {
+    page = await open("/md/reports?q=salary");
+    expect((q('[data-testid="md-report-search"]') as HTMLInputElement).value).toBe("salary");
+    expect(text('[data-testid="md-report-count"]')).toContain("salary");
   });
 });

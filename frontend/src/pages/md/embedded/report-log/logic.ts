@@ -429,6 +429,7 @@ export function askQuestions(periodLabel: string, scopeText: string | null) {
     gaps: `On which days did nobody make the Informed / Not informed call${when}, and what were the absences?`,
     groups: `Which departments, units or staff groups do not mark absences${when}, and where are the unauthorised absences?`,
     exports: `Who exports attendance reports and how often${when}? Which reports?`,
+    scheduled: `Did the scheduled attendance reports (Attendance Notify) go out and reach everyone${when}? Which ones failed, and why?`,
     compare: `How does absence follow-up compare with the previous period${when}? Which figures moved most?`,
     limits: "What can and what can't the Report Log tell me about attendance reports being produced or sent?",
   };

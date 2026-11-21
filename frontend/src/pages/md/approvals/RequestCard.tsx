@@ -1,11 +1,21 @@
 import { useId, useState } from "react";
-import { AlertTriangle, Check, ChevronRight, Lock, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, FileText, Lock, X } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import { cleanRejectRemark, rejectRemarkProblem } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
 import { useDecide } from "./api";
-import { agoText, approvalWarning, stateTone, stepName, submittedText, whenText } from "./logic";
+import {
+  agoText,
+  approvalWarning,
+  decisionOf,
+  requestDayText,
+  requestedLabel,
+  requestedText,
+  stateTone,
+  stepName,
+  submittedText,
+} from "./logic";
 import type { ApprovalItem, Decision, Hod } from "./types";
 
 const GROUP_CHIP: Record<ApprovalItem["group"], string> = {
@@ -59,10 +69,46 @@ function Steps({ steps }: { steps: ApprovalItem["steps"] }) {
   );
 }
 
+/** The decision line of a decided request: who approved or rejected it and what they wrote (a rejection's reason). */
+export function DecisionLine({ item }: { item: ApprovalItem }) {
+  const decision = decisionOf(item);
+  if (!decision) return null;
+  const rejected = decision.state === "rejected";
+  return (
+    <p
+      className={cn(
+        "mt-1.5 rounded-lg px-2.5 py-1.5 text-xs leading-relaxed",
+        rejected ? "bg-md-danger-600/[0.06] text-md-danger-800" : "bg-md-success-600/[0.06] text-md-success-800",
+      )}
+      data-testid="md-approval-decision"
+    >
+      <b className="font-bold">
+        {rejected ? "Rejected" : "Approved"}
+        {decision.by ? ` by ${decision.by}` : ""}
+      </b>
+      {decision.comment ? (
+        <>
+          {rejected ? " · reason: " : " · "}“{decision.comment}”
+        </>
+      ) : rejected ? (
+        " · no reason was recorded (decided before reasons were required)"
+      ) : null}
+    </p>
+  );
+}
+
 /** One request submitted to the Department Head: who, what, when, why, where it stands, and (when it is the head's turn)
  *  Approve / Reject with a confirm step. The comment is optional on an approval; a rejection needs the reason (owner brief
- *  2026-11-21, lib/reject-remark): nothing is sent until it is written. */
-export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Hod }) {
+ *  2026-11-21, lib/reject-remark): nothing is sent until it is written. `onDetails` opens the request's full details. */
+export default function RequestCard({
+  item,
+  hod,
+  onDetails,
+}: {
+  item: ApprovalItem;
+  hod: Hod;
+  onDetails?: (item: ApprovalItem) => void;
+}) {
   const [asking, setAsking] = useState<Decision | null>(null);
   const [comment, setComment] = useState("");
   const [tried, setTried] = useState(false);
@@ -70,7 +116,8 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
   const commentId = useId();
   const who = item.employee.name || item.employee.code || "the employee";
   const warning = asking === "approved" ? approvalWarning(item) : null;
-  const when = whenText(item);
+  const requested = requestedText(item);
+  const requestDay = requestDayText(item.submittedAt);
   const ago = agoText(item.submittedAt);
   const submitted = submittedText(item.submittedAt);
   const rejecting = asking === "rejected";
@@ -127,14 +174,31 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
           </div>
           <p className="mt-1.5 text-[13px] font-semibold text-md-ink">
             {item.title}
-            {when && <span className="font-medium text-md-ink-soft"> · {when}</span>}
             {item.detail && <span className="font-medium text-md-ink-soft"> · {item.detail}</span>}
           </p>
+          <dl
+            className="mt-1.5 grid grid-cols-1 gap-x-4 gap-y-0.5 text-xs text-md-ink-soft @md:grid-cols-2"
+            data-testid="md-approval-facts"
+          >
+            {requestDay && (
+              <div className="flex gap-1.5">
+                <dt>Request date</dt>
+                <dd className="font-semibold tabular-nums text-md-ink">{requestDay}</dd>
+              </div>
+            )}
+            <div className="flex min-w-0 gap-1.5">
+              <dt className="shrink-0">{requestedLabel(item)}</dt>
+              <dd className="min-w-0 font-semibold tabular-nums text-md-ink" data-testid="md-approval-requested">
+                {requested ?? "Not tied to a date"}
+              </dd>
+            </div>
+          </dl>
           {item.reason && (
             <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-md-ink-soft" title={item.reason}>
-              “{item.reason.trim()}”
+              <span className="font-semibold">{item.reasonLabel || "Reason"}:</span> “{item.reason.trim()}”
             </p>
           )}
+          <DecisionLine item={item} />
         </div>
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 @xl:shrink-0 @xl:flex-col @xl:items-end @xl:text-right">
           <span className={STATE_CHIP[stateTone(item.state)]} data-testid="md-approval-state">
@@ -151,30 +215,42 @@ export default function RequestCard({ item, hod }: { item: ApprovalItem; hod: Ho
 
       <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <Steps steps={item.steps} />
-        {!asking && (item.canApprove || item.canReject) && (
-          <div className="ml-auto flex items-center gap-2">
-            {item.canReject && (
-              <button
-                type="button"
-                className="md-btn md-btn-danger md-btn-sm"
-                onClick={() => ask("rejected")}
-                data-testid="md-approval-reject"
-              >
-                <X size={14} aria-hidden="true" /> Reject
-              </button>
-            )}
-            {item.canApprove && (
-              <button
-                type="button"
-                className="md-btn md-btn-primary md-btn-sm"
-                onClick={() => ask("approved")}
-                data-testid="md-approval-approve"
-              >
-                <Check size={14} aria-hidden="true" /> Approve
-              </button>
-            )}
-          </div>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {onDetails && (
+            <button
+              type="button"
+              className="md-btn md-btn-ghost md-btn-sm"
+              onClick={() => onDetails(item)}
+              data-testid="md-approval-details"
+            >
+              <FileText size={14} aria-hidden="true" /> Details
+            </button>
+          )}
+          {!asking && (item.canApprove || item.canReject) && (
+            <>
+              {item.canReject && (
+                <button
+                  type="button"
+                  className="md-btn md-btn-danger md-btn-sm"
+                  onClick={() => ask("rejected")}
+                  data-testid="md-approval-reject"
+                >
+                  <X size={14} aria-hidden="true" /> Reject
+                </button>
+              )}
+              {item.canApprove && (
+                <button
+                  type="button"
+                  className="md-btn md-btn-primary md-btn-sm"
+                  onClick={() => ask("approved")}
+                  data-testid="md-approval-approve"
+                >
+                  <Check size={14} aria-hidden="true" /> Approve
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
       {item.blockedReason && (

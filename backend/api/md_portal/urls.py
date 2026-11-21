@@ -25,5 +25,6 @@ urlpatterns = [
     path("leave/", include("api.md_portal.routes.leave")),
     path("requests/", include("api.md_portal.routes.requests")),
     path("approvals/", include("api.md_portal.routes.approvals")),
+    path("comms/", include("api.md_portal.routes.comms")),
     path("assistant/", include("api.md_portal.assistant.urls")),
 ]

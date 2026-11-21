@@ -60,6 +60,7 @@ api/md_portal/analytics/dashboard.py
 api/md_portal/analytics/employees.py
 api/md_portal/analytics/payroll.py
 api/md_portal/analytics/payroll_people.py
+api/md_portal/analytics/payroll_production.py
 api/md_portal/analytics/recruitment.py
 api/md_portal/analytics/tea_break.py
 api/md_portal/analytics/visitors.py
@@ -221,6 +222,7 @@ api/tests_md_identity.py
 api/tests_md_org.py
 api/tests_md_payroll.py
 api/tests_md_payroll_people.py
+api/tests_md_payroll_production.py
 api/tests_md_query_dsl.py
 api/tests_md_recruitment.py
 api/tests_md_reports.py
@@ -617,3 +619,17 @@ api/hr_analytics/collect.py
 api/hr_analytics/views.py
 api/urls_hr_analytics.py
 api/tests_hr_analytics.py
+api/md_portal/analytics/comms.py
+api/md_portal/routes/comms.py
+api/tests_md_comms.py
+api/md_portal/routes/leave.py
+api/md_portal/routes/requests.py
+api/tests_md_leave.py
+api/tests_md_requests.py
+api/md_portal/routes/geo.py
+api/md_portal/routes/reportlog.py
+api/tests_md_geo.py
+api/tests_md_reportlog.py
+api/md_portal/analytics/punches.py
+api/md_portal/routes/punches.py
+api/tests_md_punches.py

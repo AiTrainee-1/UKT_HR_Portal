@@ -7,8 +7,10 @@ import type {
   ActivityAfterHours,
   ActivityAreas,
   ActivityAttention,
+  ActivityEntry,
   ActivityFeed,
   ActivityHeatmap,
+  ActivityOptions,
   ActivitySensitive,
   ActivitySignIns,
   ActivitySummary,
@@ -31,7 +33,7 @@ const prov = (id: string, title: string, extra: Partial<Provenance> = {}): Prove
   ...extra,
 });
 
-const COVERAGE = "The audit trail does not record looking at screens, salary-record edits or payroll approvals.";
+const COVERAGE = "The audit trail does not record looking at screens, and some Admin changes are not written.";
 
 const period = {
   start: "2026-09-28",
@@ -307,6 +309,7 @@ const item = (over: Partial<FeedItem> & Pick<FeedItem, "id" | "at" | "userName" 
   title: null,
   action: "update",
   description: null,
+  entryId: Number(over.id.replace(/^b/, "")) || null,
   ...over,
 });
 
@@ -511,7 +514,7 @@ export const rules: RuleRow[] = [
 export function sensitivePage(params: URLSearchParams): ActivitySensitive {
   const category = params.get("category");
   const q = (params.get("q") ?? "").toLowerCase();
-  const user = params.get("user");
+  const user = params.get("actor") ?? params.get("user");
   const pageSize = Number(params.get("pageSize") ?? 25);
   const matches = sensitiveItems.filter(
     (i) =>
@@ -541,7 +544,7 @@ export function feedPage(params: URLSearchParams): ActivityFeed {
   const pageSize = Number(params.get("pageSize") ?? 25);
   const all = [routineItem, ...sensitiveItems];
   const q = (params.get("q") ?? "").toLowerCase();
-  const user = params.get("user");
+  const user = params.get("actor") ?? params.get("user");
   const matches = all.filter(
     (i) =>
       (!user || i.userName.toLowerCase() === user.toLowerCase()) &&
@@ -674,6 +677,50 @@ export const signIns: ActivitySignIns = {
   ],
 };
 
+/** The Area and Person filters (GET /activity/options). */
+export const options: ActivityOptions = {
+  ...base,
+  provenance: [prov("filters", "Area and person filters")],
+  areas: [
+    { area: "employees", label: "Employees", actions: 9 },
+    { area: "access", label: "Accounts & access", actions: 2 },
+    { area: "payroll", label: "Payroll & pay", actions: 1 },
+  ],
+  people: [
+    { userName: "Anita Rao", actions: 7, role: "Payroll Officer", kind: "Admin" },
+    { userName: "Babu K", actions: 3, role: "HR Executive", kind: "HR Assistant" },
+    { userName: "Chandra S", actions: 3, role: "Super admin", kind: "Super Admin" },
+  ],
+};
+
+/** One audit entry in full (GET /activity/entries/<id>). */
+export function entry(id: number): ActivityEntry {
+  return {
+    ...base,
+    provenance: [prov("actions", "Actions")],
+    entry: {
+      id,
+      at: "2026-10-01T14:00:00",
+      userName: "Chandra S",
+      role: "Super admin",
+      kind: "Super Admin",
+      area: "Accounts & access",
+      areaKey: "access",
+      module: "user_management",
+      action: "update",
+      recordId: 7,
+      description: "Assigned MD: md_test",
+      ipAddress: "10.0.0.5",
+      afterHours: null,
+      category: "access",
+      categoryLabel: "Accounts & access",
+      severity: "critical",
+      title: "Managing Director access assigned",
+      burst: false,
+    },
+  };
+}
+
 /** Every endpoint the page calls. */
 export const FIXTURES: Fixtures = {
   "/api/md/activity/summary": summary,
@@ -686,6 +733,8 @@ export const FIXTURES: Fixtures = {
   "/api/md/activity/sensitive": (params: URLSearchParams) => sensitivePage(params),
   "/api/md/activity/feed": (params: URLSearchParams) => feedPage(params),
   "/api/md/activity/sign-ins": signIns,
+  "/api/md/activity/options": () => options,
+  "/api/md/activity/entries/9001": entry(9001),
 };
 
 // ─── an empty database ────────────────────────────────────────────────────────────────────────────────────────
@@ -765,6 +814,7 @@ export const EMPTY_FIXTURES: Fixtures = {
     }) satisfies ActivitySensitive,
   "/api/md/activity/feed": (params: URLSearchParams) =>
     ({ ...feedPage(params), total: 0, pages: 1, items: [] }) satisfies ActivityFeed,
+  "/api/md/activity/options": { ...base, provenance: [], areas: [], people: [] } satisfies ActivityOptions,
   "/api/md/activity/sign-ins": {
     ...signIns,
     signIns: { ...zero, people: 0 },

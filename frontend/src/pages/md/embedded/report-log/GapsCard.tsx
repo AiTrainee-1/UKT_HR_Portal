@@ -10,7 +10,16 @@ import type { RlGaps } from "./types";
 
 /** The gap calendar: one cell per day, darker where more absences have no Informed / Not informed call, a dot where there
  *  was nothing to follow up, and the days nobody made the call named underneath. */
-export default function GapsCard({ query, ask }: { query: UseQueryResult<RlGaps>; ask: string }) {
+export default function GapsCard({
+  query,
+  ask,
+  onDay,
+}: {
+  query: UseQueryResult<RlGaps>;
+  ask: string;
+  /** Opens the absences of one day. */
+  onDay?: (date: string) => void;
+}) {
   const gaps = query.data;
   const matrix = gaps ? calendarMatrix(gaps.days) : null;
   const peak = matrix ? Math.max(1, ...matrix.values.flat().map((v) => v ?? 0)) : 1;
@@ -42,8 +51,16 @@ export default function GapsCard({ query, ask }: { query: UseQueryResult<RlGaps>
           {gaps.gapDays.length > 0 && (
             <ul className="mt-3 flex flex-wrap gap-2" data-testid="md-reportlog-gap-days">
               {gaps.gapDays.slice(-12).map((d) => (
-                <li key={d.date} className="md-chip md-chip-warning" data-testid={`md-reportlog-gap-${d.date}`}>
-                  {d.weekday} {dayLong(d.date)}: {num(d.absences)} absences, none marked
+                <li key={d.date} data-testid={`md-reportlog-gap-${d.date}`}>
+                  {onDay ? (
+                    <button type="button" className="md-chip md-chip-warning" onClick={() => onDay(d.date)}>
+                      {d.weekday} {dayLong(d.date)}: {num(d.absences)} absences, none marked
+                    </button>
+                  ) : (
+                    <span className="md-chip md-chip-warning">
+                      {d.weekday} {dayLong(d.date)}: {num(d.absences)} absences, none marked
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -35,6 +35,7 @@ const OutpassVisitors = lazy(() => import("@/pages/hr/OutpassVisitors"));
 const ManageShift = lazy(() => import("@/pages/hr/ManageShift"));
 const LeaveHoliday = lazy(() => import("@/pages/hr/LeaveHoliday"));
 const ApprovedRequests = lazy(() => import("@/pages/hr/ApprovedRequests"));
+const Analytics = lazy(() => import("@/pages/hr/Analytics"));
 
 /** A page the MD may open: the same reachability rule the HR portal applies (the MD's effective permissions), and back to
  *  the MD dashboard when it does not hold (a role-less MD whose grants were trimmed, say). */
@@ -94,6 +95,7 @@ export default function MdHrApp() {
             <Route path="/hr/shifts">{page(ManageShift)}</Route>
             <Route path="/hr/leave">{page(LeaveHoliday)}</Route>
             <Route path="/hr/requests">{page(ApprovedRequests)}</Route>
+            <Route path="/hr/analytics">{page(Analytics)}</Route>
 
             <Route component={NotFound} />
           </Switch>

@@ -58,7 +58,7 @@ export function Pills<T extends string>({
     <div
       role="radiogroup"
       aria-label={label}
-      className="inline-flex rounded-full border border-md-ink/10 bg-white/60 p-1 shadow-sm backdrop-blur"
+      className="inline-flex rounded-full border border-md-ink/10 bg-white/70 p-1 shadow-sm"
       data-testid={testId}
     >
       {options.map((o) => {
@@ -94,25 +94,67 @@ export function LegendDot({ color, children }: { color: string; children: ReactN
   );
 }
 
-/** What a card says while its data is on the way, or when it could not be read. */
+/** The shape a card's content will have, so its placeholder takes the same room and nothing jumps when it arrives. */
+export type SkeletonShape = "employees" | "attendance" | "payroll";
+
+const block = "md-dashboard-skeleton rounded-2xl motion-safe:animate-pulse";
+
+function Skeleton({ shape }: { shape: SkeletonShape }) {
+  if (shape === "employees") {
+    return (
+      <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]" aria-busy="true">
+        <div className="space-y-3">
+          <div className={cn(block, "h-[76px] @lg:h-[92px]")} />
+          <div className="grid grid-cols-2 gap-3">
+            <div className={cn(block, "h-[92px] @lg:h-[108px]")} />
+            <div className={cn(block, "h-[92px] @lg:h-[108px]")} />
+          </div>
+          <div className={cn(block, "h-[136px] @lg:h-[164px]")} />
+        </div>
+        <div className={cn(block, "h-[300px]")} />
+      </div>
+    );
+  }
+  if (shape === "attendance") {
+    return (
+      <div className="space-y-6" aria-busy="true">
+        <div className="grid grid-cols-3 gap-2 @[28rem]:gap-3">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className={cn(block, "h-[116px] @2xl:h-[150px]")} />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]">
+          <div className={cn(block, "h-[236px] @lg:h-[290px]")} />
+          <div className={cn(block, "h-[268px] @lg:h-[316px]")} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-6" aria-busy="true">
+      <div className="grid grid-cols-2 gap-2 @[28rem]:gap-3 @3xl:gap-4">
+        <div className={cn(block, "h-[150px] @3xl:h-[210px]")} />
+        <div className={cn(block, "h-[150px] @3xl:h-[210px]")} />
+      </div>
+      <div className={cn(block, "h-[290px] @lg:h-[350px]")} />
+    </div>
+  );
+}
+
+/** What a card says while its data is on the way (a placeholder the size of what is coming), or when it could not be
+ *  read. */
 export function CardState({
   loading,
   error,
   onRetry,
+  shape = "payroll",
 }: {
   loading?: boolean;
   error?: string | null;
   onRetry?: () => void;
+  shape?: SkeletonShape;
 }) {
-  if (loading) {
-    return (
-      <div className="grid gap-3 @3xl:grid-cols-3" aria-busy="true">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="md-dashboard-skeleton h-28 rounded-2xl motion-safe:animate-pulse" />
-        ))}
-      </div>
-    );
-  }
+  if (loading) return <Skeleton shape={shape} />;
   if (error) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl bg-md-danger-50 px-4 py-3 text-sm text-md-danger-700">

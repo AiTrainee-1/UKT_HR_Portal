@@ -170,6 +170,53 @@ export function payrollRows(months: PayrollMonth[], measure: PayMeasure): PayRow
   });
 }
 
+// ─── the month the Dashboard shows (?month=YYYY-MM; the running month when absent) ─────────────────────────────────
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** How far back the month can go: the server's limit (home.py MONTHS_BACK = 18, so 17 months before the running one). */
+export const MONTHS_BACK = 17;
+
+/** "2026-11" from a date or date-time ("2026-11-13", "2026-11-13T17:26"); null for anything else. */
+export function monthOf(iso: string | null | undefined): string | null {
+  const m = /^(\d{4})-(\d{2})/.exec(iso ?? "");
+  return m ? `${m[1]}-${m[2]}` : null;
+}
+
+/** The month `delta` months from "YYYY-MM". */
+export function addMonths(month: string, delta: number): string {
+  const [y, m] = month.split("-").map(Number);
+  const index = y * 12 + (m - 1) + delta;
+  return `${Math.floor(index / 12)}-${String((index % 12) + 1).padStart(2, "0")}`;
+}
+
+/** "November 2026"; `short` gives "Nov 2026". */
+export function monthName(month: string, short = false): string {
+  const [y, m] = month.split("-").map(Number);
+  const name = MONTH_NAMES[m - 1] ?? month;
+  return `${short ? name.slice(0, 3) : name} ${y}`;
+}
+
+/** A valid ?month= value: "YYYY-MM" within the allowed window (not after `running`, at most MONTHS_BACK before it). */
+export function validMonth(value: string | null | undefined, running: string): string | null {
+  if (!value || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) return null;
+  if (value > running || value < addMonths(running, -MONTHS_BACK)) return null;
+  return value;
+}
+
 /** The share of a month's pay that went to staff (0-100), null without pay. */
 export function staffShare(month: PayrollMonth | null, measure: PayMeasure): number | null {
   if (!month?.figures) return null;

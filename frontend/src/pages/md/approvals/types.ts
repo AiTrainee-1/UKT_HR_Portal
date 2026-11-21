@@ -49,6 +49,8 @@ export type ApprovalStep = {
   comment: string | null;
 };
 
+export type RequestedDate = { from: string; to: string | null; note: string | null; label: string };
+
 export type ApprovalItem = {
   key: string;
   kind: ApprovalKind;
@@ -66,7 +68,11 @@ export type ApprovalItem = {
   from: string | null;
   to: string | null;
   detail: string | null;
+  /** The date (or range) the request is FOR and what that date is called (as on the HR Requests page, 2026-11-21). */
+  requested?: RequestedDate | null;
   reason: string | null;
+  /** What the reason is called ("Reason"). */
+  reasonLabel?: string;
   status: string;
   state: "pending" | "approved" | "rejected" | "cancelled";
   statusLabel: string;

@@ -253,6 +253,8 @@ class SummaryTests(World):
                 "scheduledWithRecord": 29,
                 "workedOnDaysOff": 0,
                 "informedAbsences": 0,
+                "quarterDays": 0,
+                "penaltyEarlyOuts": 0,
                 "overtimeDays": 0,
             },
         )
@@ -334,6 +336,8 @@ class SummaryTests(World):
                 "leave-days",
                 "scheduled-days",
                 "coverage",
+                "shifts-earned",
+                "shift-deductions",
             },
         )
         by_id = {p["id"]: p for p in s["provenance"]}
@@ -412,6 +416,9 @@ def point(day, att, absent, late, present, half, gone, leave, late_n, expected):
         "absent": gone,
         "leave": leave,
         "late": late_n,
+        "quarter": 0,
+        "penalty": 0,
+        "shiftsEarned": 0.0,  # the fixture's day records leave shifts_earned at 0
         "expected": expected,
         "rostered": expected,
         "coveragePct": 100.0,
@@ -1220,6 +1227,14 @@ class LeaveTests(World):
         self.assertEqual(body["totalDays"], 3.5)
         self.assertEqual((body["previousDays"], body["delta"]), (1.0, {"abs": 2.5, "pct": 250.0}))
         self.assertEqual((body["employeesOnLeave"], body["casualLeaveDays"]), (3, 1))  # E1, E2, E3
+
+    def test_a_half_day_casual_leave_is_half_a_day(self):
+        CasualLeaveRequest.objects.create(employee=self.e1, date=d(7), status="approved")
+        CasualLeaveRequest.objects.create(employee=self.e3, date=d(8), status="approved", portion="first_half")
+        body = self.leave()
+        casual = next(r for r in body["byType"] if r["key"] == "casual-paid")
+        self.assertEqual((casual["days"], casual["requests"]), (1.5, 2))
+        self.assertEqual(body["casualLeaveDays"], 1.5)
 
     def test_permissions_taken_and_waiting(self):
         for emp, day, kind, status in (
@@ -2245,6 +2260,233 @@ class PerformanceTests(MdApiTestCase):
             A.headline(today=TODAY)
         self.assertLess(insights_seconds, self.CEILING_SECONDS)
         self.assertLess(timer.perf_counter() - started, 2 * self.CEILING_SECONDS)
+
+
+# ─── the rules of the day as payroll sees them (2026-11-21): quarter shifts, Penalty Early Out, shifts earned ──────
+
+
+class DayRulesTests(World):
+    """In week W: E1's Monday earned 1 shift; E1's late Tuesday arrived after the Late window (0.75); E5 left early on
+    Wednesday (Penalty Early Out, 0.25 off, 0.75) and on Thursday was both after the window and early (0.5). Every other
+    day record keeps shifts_earned 0 (the fixture's default).
+        quarter days 2, penalty early outs 2, deducted (2 + 1 + 1) / 4 = 1.0 shift, earned 1 + 0.75 + 0.75 + 0.5 = 3.0"""
+
+    def setUp(self):
+        super().setUp()
+        AttendanceDayRecord.objects.filter(employee=self.e1, date=d(7)).update(shifts_earned=1)
+        AttendanceDayRecord.objects.filter(employee=self.e1, date=d(8)).update(
+            arrival_zone="quarter", shifts_earned=0.75
+        )
+        AttendanceDayRecord.objects.filter(employee=self.e5, date=d(9)).update(
+            penalty_early_out=True, penalty_deduction=0.25, shifts_earned=0.75
+        )
+        AttendanceDayRecord.objects.filter(employee=self.e5, date=d(10)).update(
+            arrival_zone="quarter", penalty_early_out=True, penalty_deduction=0.25, shifts_earned=0.5
+        )
+
+    def test_the_shifts_as_payroll_pays_them(self):
+        s = self.summary()
+        m = s["metrics"]
+        self.assertEqual(m["shiftsEarned"]["value"], 3.0)
+        self.assertEqual(m["shiftsDeducted"]["value"], 1.0)
+        self.assertEqual(m["quarterDays"]["value"], 2)
+        self.assertEqual(m["penaltyEarlyOuts"]["value"], 2)
+        self.assertEqual((m["quarterDays"]["previous"], m["shiftsDeducted"]["good"]), (0, "down"))
+        self.assertEqual((s["counts"]["quarterDays"], s["counts"]["penaltyEarlyOuts"]), (2, 2))
+        # the other figures do not move: a quarter off is still a present day
+        self.assertEqual(m["attendancePct"]["value"], 75.9)
+
+    def test_the_briefing_says_it_in_words(self):
+        lines = {b["id"]: b for b in self.summary()["briefing"]}
+        self.assertEqual(
+            lines["attendance"]["text"],
+            "Attendance was 75.9% of scheduled days (down 13.7 points on the previous period).",
+        )
+        self.assertEqual(lines["attendance"]["tone"], "bad")
+        self.assertEqual(
+            lines["absence"]["text"], "5 unplanned absence days (17.2%) and 4 late arrivals (17.4% of days worked)."
+        )
+        self.assertEqual(
+            lines["deductions"]["text"],
+            "2 days lost a quarter shift for arriving after the Late window; 2 Penalty Early Outs: 1 shift deducted in all.",
+        )
+        self.assertEqual(lines["shifts"]["text"], "The days worked earned 3.00 shifts for payroll.")
+
+    def test_the_people_behind_the_deductions(self):
+        with at():
+            quarter = self.get(f"{BASE}/people", metric="quarter", **W).json()
+            penalty = self.get(f"{BASE}/people", metric="penalty", **W).json()
+        self.assertEqual([(r["name"], r["days"]) for r in quarter["rows"]], [("Asha Kumar", 1), ("Esha Mani", 1)])
+        self.assertEqual(
+            [(r["name"], r["days"], r["dates"]) for r in penalty["rows"]],
+            [("Esha Mani", 2, ["2026-09-10", "2026-09-09"])],
+        )
+        self.assertEqual(penalty["rows"][0]["shiftsEarned"], 1.25)  # 0.75 + 0.5 over her week
+
+    def test_one_persons_days(self):
+        with at():
+            body = self.get(f"{BASE}/employee/{self.e5.id}", **W).json()
+        days = {x["date"]: x for x in body["days"]}
+        self.assertEqual(
+            (
+                days["2026-09-10"]["quarterOff"],
+                days["2026-09-10"]["penaltyEarlyOut"],
+                days["2026-09-10"]["shiftsEarned"],
+            ),
+            (True, True, 0.5),
+        )
+        self.assertEqual(body["totals"]["shiftsDeducted"], 0.75)  # Wed 0.25 + Thu 0.25 + 0.25
+
+
+class DataGapTests(MdApiTestCase):
+    """Twelve production workers. Mon 7 Sep everyone worked; on Tue 8 nobody did (the device's punches never arrived);
+    on Wed 9 six of twelve did. Tuesday is a data gap: 0 x 10 < 12 records. Measured Mon-Wed:
+        scheduled 12 + 12 = 24 (Tuesday left out), absent 6, attendance 18 / 24 = 75.0 %"""
+
+    @classmethod
+    def setUpTestData(cls):
+        unit = Branch.objects.create(name="Unit G", code="UG")
+        sewing = Department.objects.create(name="Sewing", branch=unit)
+        cls.workers = [make_employee(f"G{i:03d}", "Worker", f"No{i}", sewing, unit, "production") for i in range(12)]
+        for i, emp in enumerate(cls.workers):
+            mark(emp, d(7), "PA" + ("P" if i < 6 else "A"))
+
+    def summary(self, **params):
+        with at():
+            r = self.get(f"{BASE}/summary", **{"from": "2026-09-07", "to": "2026-09-09"}, **params)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_a_day_with_no_punches_is_left_out_not_counted_absent(self):
+        s = self.summary(type="production")
+        self.assertEqual(s["metrics"]["scheduledDays"]["value"], 24)
+        self.assertEqual(s["counts"]["absent"], 6)
+        self.assertEqual(s["metrics"]["attendancePct"]["value"], 75.0)
+        self.assertEqual(s["dataGaps"], [{"date": "2026-09-08", "type": "production"}])
+        self.assertTrue(
+            any(
+                n.startswith("Left out because no punches arrived") and "1 day for production (2026-09-08)" in n
+                for n in s["notes"]
+            )
+        )
+        self.assertIn("data-gaps", {p["id"] for p in s["provenance"]})
+        self.assertEqual(s["briefing"][-1]["text"], "1 day left out because no punches arrived for them.")
+
+    def test_a_small_company_is_never_called_a_gap(self):
+        Employee.objects.filter(pk__in=[w.pk for w in self.workers[:3]]).update(status="inactive")
+        s = self.summary(type="production")
+        self.assertEqual(s["dataGaps"], [])  # nine records on Tuesday: too few to tell a gap from a bad day
+
+    def test_the_trend_has_no_point_on_the_gap(self):
+        with at():
+            t = self.get(f"{BASE}/trend", **{"from": "2026-09-07", "to": "2026-09-09"}).json()
+        self.assertEqual(
+            [p["date"] for p in t["points"]], ["2026-09-07", "2026-09-09"]
+        )  # nobody is expected on the gap
+
+
+class PeopleDrillTests(World):
+    def people(self, **params):
+        with at():
+            r = self.get(f"{BASE}/people", **{**W, **params})
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def test_who_was_absent_most_days_first(self):
+        body = self.people(metric="absent")
+        self.assertEqual((body["total"], body["totalDays"], body["label"]), (3, 5, "Unplanned absence days"))
+        self.assertEqual(
+            [(r["name"], r["days"]) for r in body["rows"]], [("Bala Raj", 3), ("Asha Kumar", 1), ("Dev Prakash", 1)]
+        )
+        bala = body["rows"][0]
+        self.assertEqual(bala["dates"], ["2026-09-10", "2026-09-09", "2026-09-08"])
+        self.assertEqual((bala["scheduled"], bala["attendancePct"], bala["informed"]), (6, 33.3, 0))
+        self.assertEqual((bala["department"], bala["unit"], bala["type"]), ("Stitching", "Unit A", "staff"))
+
+    def test_late_comers_with_their_minutes(self):
+        rows = self.people(metric="late")["rows"]
+        self.assertEqual([(r["name"], r["days"]) for r in rows], [("Chitra Devi", 3), ("Asha Kumar", 1)])
+        self.assertEqual(rows[0]["avgLateMinutes"], 33.3)  # (20 + 30 + 50) / 3
+        self.assertEqual(rows[1]["avgLateMinutes"], 40.0)
+
+    def test_one_day_one_department_and_paging(self):
+        self.assertEqual(
+            [r["name"] for r in self.people(metric="absent", day="2026-09-09")["rows"]], ["Asha Kumar", "Bala Raj"]
+        )
+        self.assertEqual([r["name"] for r in self.people(metric="late", department="Cutting")["rows"]], ["Chitra Devi"])
+        page = self.people(metric="absent", pageSize=1, page=2)
+        self.assertEqual((page["total"], [r["name"] for r in page["rows"]]), (3, ["Asha Kumar"]))
+
+    def test_a_bad_metric_or_day_is_a_400(self):
+        with at():
+            self.assertEqual(self.get(f"{BASE}/people", metric="sleepy", **W).status_code, 400)
+            self.assertIn("not a complete day", self.get(f"{BASE}/people", day="2026-09-20", **W).json()["error"])
+
+    def test_a_month_works_like_any_period(self):
+        with at():
+            r = self.get(f"{BASE}/people", metric="absent", month="2026-09")
+        self.assertEqual(r.status_code, 200)
+        # September up to yesterday (20 Sep): week W's 5 + no other absences on record in September but E2 and E3 in
+        # the previous week's tail (Tue 1, Wed 2 for E2; Sat 5 is E3's Saturday off)
+        self.assertEqual(r.json()["totalDays"], 7)
+
+
+class EmployeeDrillTests(World):
+    def test_one_persons_week(self):
+        with at():
+            body = self.get(f"{BASE}/employee/{self.e1.id}", **W).json()
+        self.assertEqual(body["employee"]["name"], "Asha Kumar")
+        self.assertEqual(
+            [x["label"] for x in body["days"]],
+            ["Present", "Present", "Absent", "Present", "Half day", "Present", "Day off"],
+        )
+        tuesday = body["days"][1]
+        self.assertEqual((tuesday["late"], tuesday["lateMinutes"], tuesday["firstPunch"]), (True, 40, "09:40"))
+        t = body["totals"]
+        self.assertEqual(
+            (t["scheduled"], t["present"], t["half"], t["absent"], t["late"], t["attendancePct"]), (6, 4, 1, 1, 1, 75.0)
+        )
+        self.assertFalse(body["days"][-1]["scheduled"])
+
+    def test_an_unknown_employee_is_a_400(self):
+        with at():
+            self.assertEqual(self.get(f"{BASE}/employee/999999", **W).status_code, 400)
+
+
+class TodayBoardTests(World):
+    """Today is Monday 21 Sep. E5 punched; E1 has approved Casual Leave; E2 asked for leave (waiting); E3 is on approved
+    leave; E4 (production) has nothing: the six cards of HR's Attendance page read 1 / 0 / 1 / 1 / 1 / 1."""
+
+    def setUp(self):
+        super().setUp()
+        AttendanceLog.objects.create(
+            employee=self.e5, date=TODAY, punch_time=time(9, 5), punch_type="IN", source="biometric"
+        )
+        CasualLeaveRequest.objects.create(employee=self.e1, date=TODAY, status="approved")
+        for emp, status in ((self.e2, "pending"), (self.e3, "approved")):
+            LeaveRequest.objects.create(
+                employee=emp, type="casual", start_date="2026-09-21", end_date="2026-09-21", total_days=1, status=status
+            )
+
+    def test_the_six_cards(self):
+        with at():
+            live = self.get(f"{BASE}/summary", period="last_7_days").json()["live"]
+        self.assertEqual(
+            live["board"], {"present": 1, "onDuty": 0, "onLeave": 1, "cl": 1, "leaveApplied": 1, "absent": 1}
+        )
+        self.assertEqual(sum(live["board"].values()), live["expected"])
+
+    def test_who_is_on_a_card(self):
+        with at():
+            absent = self.get(f"{BASE}/today-people", state="absent").json()
+            cl = self.get(f"{BASE}/today-people", state="cl").json()
+            present = self.get(f"{BASE}/today-people", state="present").json()
+            bad = self.get(f"{BASE}/today-people", state="asleep")
+        self.assertEqual([r["name"] for r in absent["rows"]], ["Dev Prakash"])
+        self.assertEqual((absent["label"], absent["total"]), ("Not in yet", 1))
+        self.assertEqual([r["name"] for r in cl["rows"]], ["Asha Kumar"])
+        self.assertEqual((present["rows"][0]["name"], present["rows"][0]["firstPunch"]), ("Esha Mani", "09:05"))
+        self.assertEqual(bad.status_code, 400)
 
 
 # ─── END OF TESTS (batches are added above this line) ────────────────────────────────────────────────────────────

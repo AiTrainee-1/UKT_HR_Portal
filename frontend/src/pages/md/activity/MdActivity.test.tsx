@@ -1,11 +1,14 @@
 import { act } from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { preloadMdShell } from "@/components/md/shell/loader";
 import { getAssistantState } from "@/lib/md/assistant-store";
 import MdActivity from "../MdActivity";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../testing/renderMdPage";
 import { EMPTY_FIXTURES, FIXTURES, sensitiveItems, sensitivePage } from "./fixtures";
 
 let page: RenderedPage | undefined;
+// the MD shell is a lazy chunk (components/md/shell/loader.ts): have it in before the first page renders
+beforeAll(() => preloadMdShell(), 60_000);
 afterEach(() => {
   page?.unmount();
   page = undefined;
@@ -57,11 +60,12 @@ describe("Activity Logs: the page", () => {
     }
     const paths = requested(page).map((r) => r.split("?")[0]);
     for (const path of Object.keys(FIXTURES)) {
-      if (path !== "/api/md/activity/feed") expect(paths, path).toContain(path); // the full feed is only fetched on request
+      // the full feed and an entry's details are only fetched on request
+      if (path !== "/api/md/activity/feed" && !path.includes("/entries/")) expect(paths, path).toContain(path);
     }
   });
 
-  it("puts the exceptions first, the worst first, and offers only the period (no scope)", async () => {
+  it("puts the exceptions first, the worst first, and offers the period, a month, an area and a person (no scope)", async () => {
     page = await render();
     const attention = byId(page, "md-activity-attention")!;
     expect(attention.textContent).toContain("Needs your attention");
@@ -79,6 +83,9 @@ describe("Activity Logs: the page", () => {
     expect(follows(byId(page, "md-activity-kpis")!, attention)).toBe(true);
     expect(byId(page, "scope-bar")).toBeNull();
     expect(byId(page, "period-bar")).not.toBeNull();
+    expect(byId(page, "month-picker")).not.toBeNull();
+    expect(byId(page, "md-activity-area")).not.toBeNull();
+    expect(byId(page, "md-activity-actor")).not.toBeNull();
   });
 
   it("gives every card a way to see how its figures are made and a question for the assistant", async () => {
@@ -256,11 +263,16 @@ describe("Activity Logs: the sensitive actions", () => {
     expect(byId(page, "md-activity-categories")).toBeNull(); // categories belong to the sensitive list
   });
 
-  it("narrows the list to a person picked in the people table, and back", async () => {
+  it("narrows the whole page to a person picked in the people table, and back", async () => {
     Element.prototype.scrollIntoView = vi.fn();
     page = await render();
     await page.click('[data-testid="row-Anita Rao"]');
-    expect(requested(page).some((r) => r.includes("/activity/sensitive?") && r.includes("user=Anita+Rao"))).toBe(true);
+    for (const card of ["summary", "trend", "modules", "users", "heatmap", "sensitive", "sign-ins"]) {
+      expect(
+        requested(page).some((r) => r.includes(`/activity/${card}?`) && r.includes("actor=Anita+Rao")),
+        card,
+      ).toBe(true);
+    }
     expect(text(page, "md-activity-user-filter")).toContain("Only Anita Rao");
     expect(rows(page)).toHaveLength(5);
     await page.click('[data-testid="md-activity-user-filter"]');
@@ -330,5 +342,50 @@ describe("Activity Logs: when something goes wrong or there is nothing", () => {
     expect(text(page, "md-activity-signins-empty")).toContain("No sign-ins in this period");
     expect(text(page, "md-activity-attention")).toContain("No system activity was recorded in the last 7 days");
     expect(rows(page)).toHaveLength(0);
+  });
+});
+
+describe("Activity Logs: filters in the address and details on click (2026-11-21)", () => {
+  it("reads the period, area and person from the address and asks every card for them", async () => {
+    page = await renderMdPage(MdActivity, FIXTURES, { path: "/md/activity?month=2026-09&area=payroll&actor=Babu+K" });
+    for (const card of ["summary", "trend", "heatmap", "sensitive"]) {
+      expect(
+        requested(page).some(
+          (r) =>
+            r.includes(`/activity/${card}?`) &&
+            r.includes("month=2026-09") &&
+            r.includes("area=payroll") &&
+            r.includes("actor=Babu+K"),
+        ),
+        card,
+      ).toBe(true);
+    }
+    // the options are the period's, not narrowed
+    expect(requested(page)).toContain("/api/md/activity/options?month=2026-09");
+    expect(getAssistantState().context?.filters).toEqual({
+      Period: "28 Sep – 04 Oct 2026",
+      Area: "Payroll & pay",
+      Person: "Babu K",
+    });
+    await page.click('[data-testid="md-activity-clear-focus"]');
+    expect(requested(page).some((r) => r.includes("/activity/summary?month=2026-09") && !r.includes("area="))).toBe(
+      true,
+    );
+  });
+
+  it("an area in the chart narrows the page to it", async () => {
+    page = await render();
+    await page.click('[data-testid="md-activity-area-bars"] [data-testid="bar-access"] button');
+    expect(requested(page).some((r) => r.includes("/activity/summary?") && r.includes("area=access"))).toBe(true);
+  });
+
+  it("opens one line of the activity in full", async () => {
+    page = await render();
+    await page.click('[data-testid="md-activity-row-9001"]');
+    expect(requested(page)).toContain("/api/md/activity/entries/9001");
+    const sheet = document.body.querySelector('[data-testid="md-activity-entry-sheet"]');
+    expect(sheet?.textContent).toContain("Assigned MD: md_test");
+    expect(sheet?.textContent).toContain("Super Admin");
+    expect(sheet?.textContent).toContain("10.0.0.5");
   });
 });

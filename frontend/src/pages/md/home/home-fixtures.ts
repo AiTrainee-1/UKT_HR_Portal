@@ -83,9 +83,14 @@ const trendDay = (date: string, s: DayCounts, p: DayCounts, today = false) => ({
   production: p,
 });
 
+const staffMonth = counts(1704, 1204, 12, 30);
+const productionMonth = counts(1140, 0, 0, 0);
+
 export const HOME: DashboardHome = {
   generatedAt: "2026-11-13T17:26:21",
   today: "2026-11-13",
+  month: "2026-11",
+  waiting: { leave: 2, permission: 1, outpass: 1, total: 4 },
   employees: {
     total: 256,
     staff: 142,
@@ -134,6 +139,40 @@ export const HOME: DashboardHome = {
       trendDay("2026-11-12", counts(142, 82, 1, 3), counts(114, 0, 0, 0)),
       trendDay("2026-11-13", staffToday, productionToday, true),
     ],
+    month: {
+      month: "2026-11",
+      label: "November 2026",
+      current: true,
+      from: "2026-11-01",
+      to: "2026-11-13",
+      completeDays: 12,
+      ...both(staffMonth, productionMonth),
+      staff: staffMonth,
+      production: productionMonth,
+      units: [
+        {
+          id: 1,
+          name: "Head Office",
+          ...counts(1428, 1150, 12, 30),
+          staff: counts(1428, 1150, 12, 30),
+          production: counts(0, 0, 0, 0),
+        },
+        {
+          id: 4,
+          name: "Unit1",
+          ...both(counts(132, 20, 0, 0), productionMonth),
+          staff: counts(132, 20, 0, 0),
+          production: productionMonth,
+        },
+        {
+          id: null,
+          name: "No unit",
+          ...counts(144, 34, 0, 0),
+          staff: counts(144, 34, 0, 0),
+          production: counts(0, 0, 0, 0),
+        },
+      ],
+    },
   },
   payroll: {
     months: [

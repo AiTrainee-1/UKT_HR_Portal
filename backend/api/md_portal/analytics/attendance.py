@@ -24,7 +24,7 @@ from __future__ import annotations
 import threading
 from bisect import bisect_left, bisect_right
 from collections import defaultdict, namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Iterable
 
@@ -108,6 +108,9 @@ DEPARTMENT_LIMIT_DEFAULT = 25
 DEPARTMENT_LIMIT_MAX = 50
 EVIDENCE_DATES = 8  # dates shown as evidence on a person row
 
+#: A data-gap day (data_gap_days) needs at least this many day records of the type: below it "1 in 10" is noise.
+DATA_GAP_MIN_RECORDS = 10
+
 #: Punches before this time of day belong to the previous day's late exit (the engine's cross-midnight window ends
 #: about 05:00), so they do not mean "in today".
 LIVE_PUNCH_FROM = time(5, 0)
@@ -123,9 +126,15 @@ WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 SP, SH, SA, SL, XP, XH = range(6)  # present, half day, absent, on approved leave, worked a day off (full / half)
 LATE_FLAG = 1  # the engine flagged the arrival late
 INFORMED_FLAG = 2  # HR marked the absence as informed in advance
-# Tally slots (a tally is a list of ints: the six codes, then these two counters)
-T_LATE, T_INFORMED = 6, 7
-TALLY_SIZE = 8
+QUARTER_FLAG = 4  # arrived after the Late window: a quarter of a shift came off (arrival_zone "quarter", 2026-11-18)
+PENALTY_FLAG = 8  # Penalty Early Out: left more than the penalty minutes early, penalty_deduction came off (2026-11-13)
+# What the day earned and what the penalty took, in quarters of a shift, packed above the flags (the engine only ever
+# stores quarters: 0.25 / 0.5 / 0.75 / 1.0, production up to 1.5), so a row stays a 4-tuple every consumer can unpack.
+SHIFT_Q_SHIFT, SHIFT_Q_MASK = 4, 0xF  # bits 4-7: shifts_earned x 4 (0-15)
+PENALTY_Q_SHIFT, PENALTY_Q_MASK = 8, 0x7  # bits 8-10: penalty_deduction x 4 (0-7)
+# Tally slots (a tally is a list of ints: the six codes, then these counters)
+T_LATE, T_INFORMED, T_QUARTER, T_PENALTY, T_SHIFT_Q, T_PENALTY_Q = 6, 7, 8, 9, 10, 11
+TALLY_SIZE = 12
 
 _Rec = namedtuple("_Rec", "status date")  # what classify_day reads of a day record
 
@@ -141,6 +150,44 @@ def add_row(tally: list[int], code: int, flags: int) -> None:
             tally[T_LATE] += 1
         if flags & INFORMED_FLAG:
             tally[T_INFORMED] += 1
+        if flags & QUARTER_FLAG:
+            tally[T_QUARTER] += 1
+        if flags & PENALTY_FLAG:
+            tally[T_PENALTY] += 1
+        tally[T_SHIFT_Q] += (flags >> SHIFT_Q_SHIFT) & SHIFT_Q_MASK
+        tally[T_PENALTY_Q] += (flags >> PENALTY_Q_SHIFT) & PENALTY_Q_MASK
+
+
+def _quarters(value: Any, mask: int) -> int:
+    """A stored fraction of a shift (Decimal 0.25 steps) as whole quarters, capped to what its bits can hold."""
+    try:
+        return max(0, min(mask, int(round(float(value or 0) * 4))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def day_flags(
+    is_late: bool, arrival_zone: str | None, penalty: bool, penalty_deduction: Any, shifts_earned: Any
+) -> int:
+    """The flags of a worked day: late, a quarter off for arriving after the Late window, a Penalty Early Out, and what
+    the day earned / what the penalty took, in quarters of a shift."""
+    flags = LATE_FLAG if is_late else 0
+    if arrival_zone == "quarter":
+        flags |= QUARTER_FLAG
+    if penalty:
+        flags |= PENALTY_FLAG
+        flags |= _quarters(penalty_deduction, PENALTY_Q_MASK) << PENALTY_Q_SHIFT
+    return flags | (_quarters(shifts_earned, SHIFT_Q_MASK) << SHIFT_Q_SHIFT)
+
+
+def t_shifts(t: list[int]) -> float:
+    """Shifts earned on the days worked (what payroll pays from), from the quarters in the tally."""
+    return round(t[T_SHIFT_Q] / 4.0, 2)
+
+
+def t_deducted(t: list[int]) -> float:
+    """Shifts that came off for arriving after the Late window (0.25 each) and for Penalty Early Outs."""
+    return round((t[T_QUARTER] + t[T_PENALTY_Q]) / 4.0, 2)
 
 
 def tally_rows(rows: Iterable[tuple]) -> list[int]:
@@ -304,6 +351,7 @@ class Frame:
     roster: Roster
     schedule: Schedule
     settings: Any
+    gaps: dict[str, set[date]] = field(default_factory=dict)  # data-gap days per type, left out
     _late: dict[tuple[int, date], int] | None = None
     _late_unknown: int = 0
 
@@ -316,6 +364,8 @@ class Frame:
         out: set[int] = set()
         for emp, joined, last in self.roster_people:
             if (joined and d < joined) or (last and d > last):
+                continue
+            if d in self.gaps.get(emp.employment_type, ()):
                 continue
             if self.schedule.is_scheduled(emp, d):
                 out.add(emp.id)
@@ -384,20 +434,66 @@ class Frame:
         return self._late_unknown
 
 
+def data_gap_days(start: date, end: date, today: date) -> dict[str, set[date]]:
+    """{employment type: days} on which (almost) nobody of that type has attendance although the day is not their
+    holiday: fewer than 1 in 10 of the day records of the type's active people show work (present, half a shift or any
+    punch). The devices' punches did not arrive (not synced, a device down): such a day says nothing about anybody, so it
+    is left out instead of calling everyone absent. The same rule as HR's Analytics page (hr_analytics.collect.data_gaps),
+    company-wide per type (whether punches arrived is not a fact of one department), and only where at least
+    ``DATA_GAP_MIN_RECORDS`` records make "1 in 10" meaningful. Today is never judged."""
+    rows = (
+        AttendanceDayRecord.objects.filter(employee__status="active", date__range=(start, min(end, today)))
+        .order_by()
+        .values("employee__employment_type", "date")
+        .annotate(
+            worked=Count("id", filter=Q(status__in=("present", "half_shift")) | Q(total_punches__gt=0)),
+            off=Count("id", filter=Q(status="holiday")),
+            total=Count("id"),
+        )
+    )
+    out: dict[str, set[date]] = defaultdict(set)
+    for r in rows:
+        due = r["total"] - r["off"]
+        if r["date"] < today and due >= DATA_GAP_MIN_RECORDS and r["worked"] * 10 < due:
+            out[r["employee__employment_type"] or "staff"].add(r["date"])
+    return dict(out)
+
+
 def _classify(
-    scope: Scope, people: dict[int, Person], roster: Roster, schedule: Schedule, start: date, last: date, today: date
+    scope: Scope,
+    people: dict[int, Person],
+    roster: Roster,
+    schedule: Schedule,
+    start: date,
+    last: date,
+    today: date,
+    gaps: dict[str, set[date]] | None = None,
 ) -> tuple[list[tuple[date, int, int, int]], dict[int, date | None]]:
-    """The day records of the window as compact rows, and the last day each leaver is counted to."""
+    """The day records of the window as compact rows, and the last day each leaver is counted to. A day of a data gap
+    (``data_gap_days``) is left out for every person of that type."""
+    gaps = gaps or {}
     raw = (
         AttendanceDayRecord.objects.filter(scope.employee_q("employee__"), date__gte=start, date__lte=last)
         .order_by()
-        .values_list("employee_id", "date", "status", "is_late", "is_informed")
+        .values_list(
+            "employee_id",
+            "date",
+            "status",
+            "is_late",
+            "is_informed",
+            "arrival_zone",
+            "penalty_early_out",
+            "penalty_deduction",
+            "shifts_earned",
+        )
     )
     rows: list[tuple[date, int, int, int]] = []
     last_worked: dict[int, date] = {}
-    for eid, d, status, is_late, informed in raw:
+    for eid, d, status, is_late, informed, zone, penalty, penalty_deduction, shifts in raw:
         emp = people.get(eid)
         if emp is None:
+            continue
+        if d in gaps.get(emp.employment_type, ()):
             continue
         verdict = classify_day(_Rec(status, d), emp, roster, today, PRODUCTION_SUNDAY_IS_OFF)
         if verdict == PRESENT or verdict == HALF:
@@ -406,7 +502,7 @@ def _classify(
                 code = SP if scheduled else XP
             else:
                 code = SH if scheduled else XH
-            flags = LATE_FLAG if is_late else 0
+            flags = day_flags(is_late, zone, penalty, penalty_deduction, shifts)
             if eid not in last_worked or d > last_worked[eid]:
                 last_worked[eid] = d
         elif verdict == ABSENT or verdict == LEAVE:
@@ -442,8 +538,10 @@ def _build_frame(scope: Scope, start: date, end: date, today: date) -> Frame:
     rows: list[tuple[date, int, int, int]] = []
     expected: dict[date, int] = {}
     roster_people: list[tuple[Person, date | None, date | None]] = []
+    gaps: dict[str, set[date]] = {}
     if people and last >= start:
-        rows, cutoff = _classify(scope, people, roster, schedule, start, last, today)
+        gaps = data_gap_days(start, last, today)
+        rows, cutoff = _classify(scope, people, roster, schedule, start, last, today, gaps)
         exits = roster.exits
         for eid, emp in people.items():
             if emp.status == "active":
@@ -457,6 +555,8 @@ def _build_frame(scope: Scope, start: date, end: date, today: date) -> Frame:
             n = 0
             for emp, joined, finish in roster_people:
                 if (joined and d < joined) or (finish and d > finish):
+                    continue
+                if d in gaps.get(emp.employment_type, ()):
                     continue
                 if schedule.is_scheduled(emp, d):
                     n += 1
@@ -474,6 +574,7 @@ def _build_frame(scope: Scope, start: date, end: date, today: date) -> Frame:
         roster=roster,
         schedule=schedule,
         settings=settings,
+        gaps=gaps,
     )
 
 
@@ -784,6 +885,171 @@ def _prov_coverage(cov: dict) -> dict:
     )
 
 
+def _prov_shifts(rows: int | None) -> dict:
+    return prov(
+        "shifts-earned",
+        "Shifts earned",
+        dataset=_DAY_RECORDS,
+        definition=(
+            "The shifts the days worked earned, as payroll pays them: a full day 1, a half day 0.5, a day that lost a "
+            "quarter 0.75, and a production day up to 1.5 under the shift-table rules."
+        ),
+        formula="sum of shifts earned on the days worked (scheduled days and days off worked)",
+        rows=rows,
+        filters=_SCHEDULED_FILTERS,
+        caveats=[_COVERAGE_CAVEAT],
+    )
+
+
+def _prov_deductions(rows: int | None, settings: Any) -> dict:
+    minutes = getattr(settings, "early_out_penalty_minutes", None)
+    limit = f"{minutes} minutes" if minutes else "the penalty minutes"
+    return prov(
+        "shift-deductions",
+        "Shifts deducted (quarter and Penalty Early Out)",
+        dataset=_DAY_RECORDS,
+        definition=(
+            "What came off shifts for arriving after the Late window (a quarter of a shift: the day shows 0.75) and for "
+            f"a Penalty Early Out (leaving more than {limit} before the day's end, the penalty set in Settings)."
+        ),
+        formula="0.25 x days arriving after the Late window + the Penalty Early Out deductions",
+        rows=rows,
+        filters=_SCHEDULED_FILTERS,
+        caveats=["Days computed before these rules existed carry neither mark."],
+    )
+
+
+def _prov_gaps(days: int) -> dict:
+    return prov(
+        "data-gaps",
+        "Days left out: no punches arrived",
+        dataset=_DAY_RECORDS,
+        definition=(
+            "A day on which fewer than 1 in 10 of a type's (staff or production) day records show work, although it is "
+            "not their holiday: the devices' punches did not arrive (not synced, a device down). Such a day says nothing "
+            "about anybody, so it is left out of every figure for that type instead of counting everyone absent."
+        ),
+        formula=f"worked x 10 < records that are not a holiday, with at least {DATA_GAP_MIN_RECORDS} records of the type",
+        rows=days,
+        caveats=["The same rule as HR's Analytics page."],
+    )
+
+
+def _gap_list(frame: Frame, start: date, end: date) -> list[dict]:
+    """The data-gap days of a window that touch someone in the scope, oldest first, with the type left out."""
+    kinds = {p.employment_type for p in frame.people.values()}
+    out = [
+        {"date": d.isoformat(), "type": kind}
+        for kind, days in frame.gaps.items()
+        if kind in kinds
+        for d in days
+        if start <= d <= end
+    ]
+    return sorted(out, key=lambda g: (g["date"], g["type"]))
+
+
+def _gap_note(gaps: list[dict]) -> str:
+    by_type: dict[str, list[str]] = defaultdict(list)
+    for g in gaps:
+        by_type[g["type"]].append(g["date"])
+    parts = []
+    for kind, days in sorted(by_type.items()):
+        span = days[0] if days[0] == days[-1] else f"{days[0]} to {days[-1]}"
+        parts.append(f"{_plural(len(days), 'day')} for {kind} ({span})")
+    return (
+        "Left out because no punches arrived (fewer than 1 in 10 people show work): "
+        + "; ".join(parts)
+        + ". Syncing the devices for those days brings them back."
+    )
+
+
+def _pts_phrase(delta: dict | None, good: str) -> str:
+    """ "up 2.1 points", "down 0.4 points", "no change" (what the change of a percentage reads as)."""
+    if not delta or delta.get("abs") is None:
+        return ""
+    value = round(float(delta["abs"]), 1)
+    if value == 0:
+        return " (no change on the previous period)"
+    word = "up" if value > 0 else "down"
+    return f" ({word} {abs(value):.1f} points on the previous period)"
+
+
+def _briefing(metrics: dict, counts: dict, live: dict | None, gaps: list[dict], compared: bool) -> list[dict]:
+    """Two to five plain sentences the server writes from the figures of the same answer, each with a tone (good / bad /
+    neutral), for the top of the Insights tab. Every number in them is one of the figures beside it."""
+    out: list[dict] = []
+    att = (metrics.get("attendancePct") or {}).get("value")
+    if att is not None:
+        delta = (metrics["attendancePct"] or {}).get("delta") if compared else None
+        tone = "neutral"
+        if delta and delta.get("abs") is not None and abs(delta["abs"]) >= 0.5:
+            tone = "good" if delta["abs"] > 0 else "bad"
+        out.append(
+            {
+                "id": "attendance",
+                "tone": tone,
+                "text": f"Attendance was {att:.1f}% of scheduled days{_pts_phrase(delta, 'up')}.",
+            }
+        )
+        absent, late = counts.get("absent") or 0, counts.get("late") or 0
+        absence = (metrics.get("absenteeismPct") or {}).get("value")
+        bits = []
+        if absence is not None:
+            bits.append(f"{_plural(absent, 'unplanned absence day')} ({absence:.1f}%)")
+        if late:
+            late_pct = (metrics.get("latePct") or {}).get("value")
+            bits.append(f"{_plural(late, 'late arrival')}" + (f" ({late_pct:.1f}% of days worked)" if late_pct else ""))
+        if bits:
+            out.append({"id": "absence", "tone": "bad" if absent or late else "good", "text": " and ".join(bits) + "."})
+        quarter, penalty = counts.get("quarterDays") or 0, counts.get("penaltyEarlyOuts") or 0
+        deducted = (metrics.get("shiftsDeducted") or {}).get("value")
+        if quarter or penalty:
+            parts = []
+            if quarter:
+                parts.append(f"{_plural(quarter, 'day')} lost a quarter shift for arriving after the Late window")
+            if penalty:
+                parts.append(f"{_plural(penalty, 'Penalty Early Out')}")
+            out.append(
+                {
+                    "id": "deductions",
+                    "tone": "bad",
+                    "text": "; ".join(parts)
+                    + (
+                        f": {deducted:g} {'shift' if deducted == 1 else 'shifts'} deducted in all." if deducted else "."
+                    ),
+                }
+            )
+        shifts = (metrics.get("shiftsEarned") or {}).get("value")
+        if shifts is not None:
+            out.append(
+                {"id": "shifts", "tone": "neutral", "text": f"The days worked earned {shifts:,.2f} shifts for payroll."}
+            )
+    if live and live.get("board") and live.get("expected"):
+        b = live["board"]
+        out.append(
+            {
+                "id": "today",
+                "tone": "neutral",
+                "text": (
+                    f"Today so far: {b['present']} present, {b['onDuty']} on duty, {b['onLeave'] + b['cl']} on leave or "
+                    f"CL, {b['leaveApplied']} waiting for leave approval and {b['absent']} not in yet, of "
+                    f"{live['expected']} scheduled."
+                ),
+            }
+        )
+    if gaps:
+        out.append(
+            {
+                "id": "gaps",
+                "tone": "bad",
+                "text": f"{_plural(len(gaps), 'day')} left out because no punches arrived for them.",
+            }
+        )
+    if not out:
+        out.append({"id": "empty", "tone": "neutral", "text": "No completed day with attendance records yet."})
+    return out
+
+
 def _metric(value: Any, previous: Any, good: str | None, spark: list | None = None) -> dict:
     """One headline figure with the previous period's value and the change between the two (as displayed)."""
     return {"value": value, "previous": previous, "delta": change(value, previous), "good": good, "spark": spark}
@@ -870,6 +1136,10 @@ def _figures(frame: Frame, start: date, end: date, ot_rows: list[tuple], punch_r
         "overtimeHours": _ot_hours(ot_rows, start, end, frame.settings),
         "halfDays": t_halves(t) if has_rows else None,
         "leaveDays": t[SL] if has_rows else None,
+        "shiftsEarned": t_shifts(t) if has_rows else None,
+        "shiftsDeducted": t_deducted(t) if has_rows else None,
+        "quarterDays": t[T_QUARTER] if has_rows else None,
+        "penaltyEarlyOuts": t[T_PENALTY] if has_rows else None,
         "missingPunches": pending if frame.people else None,
         "scheduledDays": cov["expectedDays"] or None,
         "coveragePct": cov["coveragePct"],
@@ -912,6 +1182,9 @@ def _trend_point(key: date, days: int, t: list[int], rostered: int) -> dict:
         "absent": t[SA],
         "leave": t[SL],
         "late": t[T_LATE],
+        "quarter": t[T_QUARTER],
+        "penalty": t[T_PENALTY],
+        "shiftsEarned": t_shifts(t),
         "expected": scheduled,
         "rostered": rostered,
         "coveragePct": pct(min(scheduled, rostered), rostered),
@@ -966,7 +1239,16 @@ def summary_for(scope: Scope, period: Period, today: date) -> dict:
     live = live_today(scope, win.today) if win.includes_today else None
     if win.measured is None:
         return envelope(
-            {"measured": None, "previous": None, "metrics": {}, "counts": {}, "coverage": None, "live": live},
+            {
+                "measured": None,
+                "previous": None,
+                "metrics": {},
+                "counts": {},
+                "coverage": None,
+                "live": live,
+                "dataGaps": [],
+                "briefing": _briefing({}, {}, live, [], False),
+            },
             period=period,
             scope=scope,
             provenance=[_prov_live()] if live else [],
@@ -994,6 +1276,10 @@ def summary_for(scope: Scope, period: Period, today: date) -> dict:
         "leaveDays": metric("leaveDays", None),
         "scheduledDays": metric("scheduledDays", None),
         "coveragePct": metric("coveragePct", "up"),
+        "shiftsEarned": metric("shiftsEarned", None),
+        "shiftsDeducted": metric("shiftsDeducted", "down"),
+        "quarterDays": metric("quarterDays", "down"),
+        "penaltyEarlyOuts": metric("penaltyEarlyOuts", "down"),
     }
     counts = {
         "present": t[SP],
@@ -1005,6 +1291,8 @@ def summary_for(scope: Scope, period: Period, today: date) -> dict:
         "scheduledWithRecord": t_scheduled(t),
         "workedOnDaysOff": t[XP] + t[XH],
         "informedAbsences": t[T_INFORMED],
+        "quarterDays": t[T_QUARTER],
+        "penaltyEarlyOuts": t[T_PENALTY],
         "overtimeDays": sum(
             1 for _e, d, _m, s, _c in ot_rows if measured.start <= d <= measured.end and s != "rejected"
         ),
@@ -1020,10 +1308,17 @@ def summary_for(scope: Scope, period: Period, today: date) -> dict:
         _prov_leave_days(t[SL]),
         _prov_scheduled(cur["coverage"]["expectedDays"]),
         _prov_coverage(cur["coverage"]),
+        _prov_shifts(t_worked(t)),
+        _prov_deductions(t[T_QUARTER] + t[T_PENALTY], frame.settings),
     ]
+    gap_dates = _gap_list(frame, measured.start, measured.end)
+    if gap_dates:
+        provenance.append(_prov_gaps(len(gap_dates)))
     if live:
         provenance.append(_prov_live())
     notes = _notes(frame, win, cur["coverage"])
+    if gap_dates:
+        notes.append(_gap_note(gap_dates))
     if not getattr(frame.settings, "compensation_feature_enabled", True):
         notes.append("Overtime is not shown: the Compensation feature is switched off in Settings.")
     if not getattr(frame.settings, "morning_late_in_enabled", True):
@@ -1036,6 +1331,8 @@ def summary_for(scope: Scope, period: Period, today: date) -> dict:
             "counts": counts,
             "coverage": cur["coverage"],
             "live": live,
+            "dataGaps": gap_dates,
+            "briefing": _briefing(metrics, counts, live, gap_dates, previous is not None),
         },
         period=period,
         scope=scope,
@@ -1497,18 +1794,7 @@ def live_today(scope: Scope, today: date | None = None) -> dict:
     HR opens Attendance, and a rate over a half-finished day would be wrong anyway; so today is shown as a count:
     scheduled, in (punched), on approved leave, not in yet. Always provisional."""
     today = today or ist_today()
-    people = {eid: p for eid, p in load_people(scope).items() if p.status == "active"}
-    roster = Roster(_RosterCtx(scope, today), today, today)
-    schedule = Schedule(roster)
-    exits = roster.exits
-    working: dict[int, Person] = {}
-    for eid, p in people.items():
-        joined = parse_date(p.join_date)
-        last = exits.get(eid)
-        if (joined and joined > today) or (last and last < today):
-            continue
-        if schedule.is_scheduled(p, today):
-            working[eid] = p
+    people, working = _working_today(scope, today)
 
     on_leave: set[int] = set()
     staff = {
@@ -1526,12 +1812,7 @@ def live_today(scope: Scope, today: date | None = None) -> dict:
             .order_by()
             .values_list("employee_id", flat=True)
         )
-    punched = set(
-        AttendanceLog.objects.filter(scope.employee_q("employee__"), date=today, punch_time__gte=LIVE_PUNCH_FROM)
-        .order_by()
-        .values_list("employee_id", flat=True)
-        .distinct()
-    )
+    punched = _punched_today(scope, today)
     by_unit: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
     by_dept: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
     by_type: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0, 0])
@@ -1544,6 +1825,7 @@ def live_today(scope: Scope, today: date | None = None) -> dict:
     scheduled, inside, leave, not_in = totals
     unit_ids = {p.unit: p.branch_id for p in people.values()}
     is_real_today = today == ist_today()
+    board, _members = _today_board(scope, working, punched, today)
     return {
         "date": today.isoformat(),
         "provisional": True,
@@ -1560,7 +1842,145 @@ def live_today(scope: Scope, today: date | None = None) -> dict:
         "byType": _live_groups(
             {{"staff": "Staff", "production": "Production"}.get(k, k): v for k, v in by_type.items()}
         ),
+        "board": board,
     }
+
+
+def _working_today(scope: Scope, today: date) -> tuple[dict[int, Person], dict[int, Person]]:
+    """(active people of the scope, those of them scheduled to work today)."""
+    people = {eid: p for eid, p in load_people(scope).items() if p.status == "active"}
+    roster = Roster(_RosterCtx(scope, today), today, today)
+    schedule = Schedule(roster)
+    exits = roster.exits
+    working: dict[int, Person] = {}
+    for eid, p in people.items():
+        joined = parse_date(p.join_date)
+        last = exits.get(eid)
+        if (joined and joined > today) or (last and last < today):
+            continue
+        if schedule.is_scheduled(p, today):
+            working[eid] = p
+    return people, working
+
+
+def _punched_today(scope: Scope, today: date) -> set[int]:
+    return set(
+        AttendanceLog.objects.filter(scope.employee_q("employee__"), date=today, punch_time__gte=LIVE_PUNCH_FROM)
+        .order_by()
+        .values_list("employee_id", flat=True)
+        .distinct()
+    )
+
+
+BOARD_LABELS = {
+    "present": "Present",
+    "onDuty": "On Duty",
+    "onLeave": "On Leave",
+    "cl": "CL",
+    "leaveApplied": "Leave (waiting for approval)",
+    "absent": "Not in yet",
+}
+
+
+def attendance_today_people(scope: Scope, state: str = "absent", limit: int = 50, today: date | None = None) -> dict:
+    """The people on one of today's six cards (``BOARD_STATES``), with their first punch today when they have one:
+    the drill-down of the Attendance Insights' "Today" card. Provisional like the count."""
+    if state not in BOARD_STATES:
+        raise MdParamError(f"'state' must be one of: {', '.join(BOARD_STATES)}.")
+    limit = _clamp_limit(limit, 50, 200)
+    today = today or ist_today()
+    _people, working = _working_today(scope, today)
+    punched = _punched_today(scope, today)
+    board, members = _today_board(scope, working, punched, today)
+    ids = members[state]
+    first = dict(
+        AttendanceLog.objects.filter(employee_id__in=ids[:limit], date=today, punch_time__gte=LIVE_PUNCH_FROM)
+        .order_by()
+        .values("employee_id")
+        .annotate(first=Min("punch_time"))
+        .values_list("employee_id", "first")
+    )
+    rows = [
+        {
+            **_person_row(working[eid]),
+            "type": working[eid].employment_type,
+            "firstPunch": first[eid].strftime("%H:%M") if first.get(eid) else None,
+        }
+        for eid in sorted(ids, key=lambda i: (working[i].dept, working[i].name))[:limit]
+    ]
+    return envelope(
+        {
+            "date": today.isoformat(),
+            "state": state,
+            "label": BOARD_LABELS[state],
+            "total": len(ids),
+            "board": board,
+            "rows": rows,
+        },
+        scope=scope,
+        provenance=[_prov_live()],
+        notes=["Provisional: the day is still running."] if today == ist_today() else [],
+    )
+
+
+#: The six status cards of HR's Staff / Production Attendance page, in its order, and its priority: an approved On-Duty
+#: first (that is where the person works, punched or not), then anyone who punched, then approved Casual Leave, approved
+#: leave (a half day included), a leave or CL request still waiting, and only then absent ("not in yet" today).
+BOARD_STATES = ("present", "onDuty", "onLeave", "cl", "leaveApplied", "absent")
+
+
+def _today_board(
+    scope: Scope, working: dict[int, Person], punched: set[int], today: date
+) -> tuple[dict[str, int], dict[str, list[int]]]:
+    """Everyone scheduled today on one of the six cards of HR's Attendance page (attendance_views._leave_state_fields +
+    pages/hr/attendance/logic.boardStateOf), so the MD's count is the page's count. Leave applies to production too here,
+    as on the page (the old "in / on leave / not in" counts above keep their rule)."""
+    from ...payroll_calendar import ON_DUTY_APPROVED_STATES, on_duty_states_by_employee
+
+    ids = set(working)
+    on_duty = {
+        eid
+        for eid, days in (on_duty_states_by_employee(ids, today, today) if ids else {}).items()
+        if today in days and days[today]["state"] in ON_DUTY_APPROVED_STATES
+    }
+    approved_leave: set[int] = set()
+    pending: set[int] = set()
+    if ids:
+        for lr in (
+            LeaveRequest.objects.filter(scope.employee_q("employee__"), status__in=("approved", "pending"))
+            .filter(leave_overlap_q(today, today))
+            .only("employee_id", "status", "start_date", "end_date")
+        ):
+            span = parse_leave_range(lr)
+            if lr.employee_id in ids and span and span[0] <= today <= span[1]:
+                (approved_leave if lr.status == "approved" else pending).add(lr.employee_id)
+    cl_rows = (
+        CasualLeaveRequest.objects.filter(
+            scope.employee_q("employee__"), date=today, status__in=("approved", "pending")
+        )
+        .order_by()
+        .values_list("employee_id", "status")
+        if ids
+        else []
+    )
+    cl = {eid for eid, status in cl_rows if status == "approved"}
+    pending |= {eid for eid, status in cl_rows if status == "pending"}
+    members: dict[str, list[int]] = {k: [] for k in BOARD_STATES}
+    for eid in sorted(ids):
+        if eid in on_duty:
+            state = "onDuty"
+        elif eid in punched:
+            state = "present"
+        elif eid in cl:
+            state = "cl"
+        elif eid in approved_leave:
+            state = "onLeave"
+        elif eid in pending:
+            state = "leaveApplied"
+        else:
+            state = "absent"
+        members[state].append(eid)
+    return {k: len(v) for k, v in members.items()}, members
 
 
 # ─── exceptions: who and where needs the MD's attention ──────────────────────────────────────────────────────────
@@ -2302,9 +2722,10 @@ def _pending_snapshot(scope: Scope, today: date) -> list[dict]:
     return out
 
 
-def _leave_days_by_type(scope: Scope, people: dict[int, Person], lo: date, hi: date) -> tuple[list[dict], int, int]:
+def _leave_days_by_type(scope: Scope, people: dict[int, Person], lo: date, hi: date) -> tuple[list[dict], int, float]:
     """Approved leave days by type inside [lo, hi] (Sundays skipped, a half day = 0.5, one request per employee-day),
-    plus casual leave. Production employees are left out: attendance does not use leave for them."""
+    plus casual leave (a first-half / second-half Casual Leave is half a day, as HR's carry-forward and Analytics count
+    it). Production employees are left out: attendance does not use leave for them."""
     catalog = LeaveTypeCatalog()
     seen: set[tuple[int, date]] = set()
     by_type: dict[str, dict] = {}
@@ -2336,18 +2757,19 @@ def _leave_days_by_type(scope: Scope, people: dict[int, Person], lo: date, hi: d
     casual = list(
         CasualLeaveRequest.objects.filter(scope.employee_q("employee__"), status="approved", date__gte=lo, date__lte=hi)
         .order_by()
-        .values_list("employee_id", "date")
+        .values_list("employee_id", "date", "portion")
     )
-    casual = [(e, d) for e, d in casual if e in people]
+    casual = [(e, d, 1.0 if (portion or "full") == "full" else 0.5) for e, d, portion in casual if e in people]
+    casual_days = round(sum(w for _e, _d, w in casual), 1)
     if casual:
         by_type["casual-paid"] = {
             "key": "casual-paid",
             "name": "Casual leave (paid day)",
-            "days": float(len(casual)),
-            "requests": {("c", e, d) for e, d in casual},
+            "days": casual_days,
+            "requests": {("c", e, d) for e, d, _w in casual},
             "paid": True,
         }
-        on_leave |= {e for e, _d in casual}
+        on_leave |= {e for e, _d, _w in casual}
     rows = sorted(
         (
             {
@@ -2361,7 +2783,7 @@ def _leave_days_by_type(scope: Scope, people: dict[int, Person], lo: date, hi: d
         ),
         key=lambda r: (-r["days"], r["name"]),
     )
-    return rows, len(on_leave), len(casual)
+    return rows, len(on_leave), casual_days
 
 
 PERMISSION_LABELS = {
@@ -2477,6 +2899,231 @@ def attendance_leave(scope: Scope, period: Period) -> dict:
 
 
 # ─── one day ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+# ─── drill-down: the people behind a figure, and one person's days ───────────────────────────────────────────────
+
+#: What a click on a figure lists: the rows of the period that make it, per person.
+PEOPLE_METRICS: dict[str, tuple[str, Callable[[int, int], bool]]] = {
+    "absent": ("Unplanned absence days", lambda code, flags: code == SA),
+    "late": ("Late arrivals", lambda code, flags: bool(flags & LATE_FLAG)),
+    "half": ("Half days", lambda code, flags: code in (SH, XH)),
+    "leave": ("Days on approved leave", lambda code, flags: code == SL),
+    "quarter": ("Arrived after the Late window (0.25 off)", lambda code, flags: bool(flags & QUARTER_FLAG)),
+    "penalty": ("Penalty Early Outs", lambda code, flags: bool(flags & PENALTY_FLAG)),
+    "worked": ("Days worked", lambda code, flags: code in (SP, SH, XP, XH)),
+    "workedOff": ("Days off worked", lambda code, flags: code in (XP, XH)),
+}
+PEOPLE_PAGE_MAX = 100
+
+
+def attendance_people(
+    scope: Scope,
+    period: Period,
+    metric: str = "absent",
+    day: date | None = None,
+    page: int = 1,
+    page_size: int = 25,
+) -> dict:
+    """The employees behind one figure of the period (or of one day of it), most days first: the drill-down of a KPI
+    card, a department row or a day of the trend. Each row has the days that make the figure (newest first), the
+    person's attendance % and shifts earned over the same days, so the list answers "who, and how often"."""
+    if metric not in PEOPLE_METRICS:
+        raise MdParamError(f"'metric' must be one of: {', '.join(PEOPLE_METRICS)}.")
+    label, wanted = PEOPLE_METRICS[metric]
+    page_size = _clamp_limit(page_size, 25, PEOPLE_PAGE_MAX)
+    page = max(1, int(page or 1)) if str(page or "1").isdigit() else 1
+    frame, win = frame_for(scope, period)
+    if win.measured is None:
+        rows: list[tuple] = []
+        lo = hi = None
+    else:
+        lo, hi = (day, day) if day else (win.measured.start, win.measured.end)
+        if day and not (win.measured.start <= day <= win.measured.end):
+            raise MdParamError(f"{day.isoformat()} is not a complete day of {period.label}.")
+        rows = frame.window(lo, hi)
+    per_emp = _by_employee(rows)
+    minutes = frame.late_minutes() if metric == "late" else {}
+    found = []
+    for eid, emp_rows in per_emp.items():
+        hits = [r for r in emp_rows if wanted(r[2], r[3])]
+        if not hits:
+            continue
+        t = tally_rows(emp_rows)
+        extra: dict[str, Any] = {}
+        if metric == "late":
+            known = [minutes[(eid, r[0])] for r in hits if (eid, r[0]) in minutes]
+            extra["avgLateMinutes"] = _round(sum(known) / len(known), 1) if known else None
+        if metric == "absent":
+            extra["informed"] = sum(1 for r in hits if r[3] & INFORMED_FLAG)
+        found.append(
+            _person_row(
+                frame.people[eid],
+                type=frame.people[eid].employment_type,
+                days=len(hits),
+                dates=_iso_dates((r[0] for r in hits))[:EVIDENCE_DATES],
+                scheduled=t_scheduled(t),
+                attendancePct=t_attendance(t),
+                shiftsEarned=t_shifts(t),
+                **extra,
+            )
+        )
+    found.sort(key=lambda r: (-r["days"], r["name"]))
+    total = len(found)
+    start = (page - 1) * page_size
+    return envelope(
+        {
+            "metric": metric,
+            "label": label,
+            "day": day.isoformat() if day else None,
+            "window": None if lo is None else {"start": lo.isoformat(), "end": hi.isoformat()},
+            "total": total,
+            "totalDays": sum(r["days"] for r in found),
+            "page": page,
+            "pageSize": page_size,
+            "rows": found[start : start + page_size],
+        },
+        period=period,
+        scope=scope,
+        provenance=[_prov_attendance(len(rows))],
+        notes=_notes(frame, win, None) if win.measured is None else [],
+    )
+
+
+@dataclass
+class _OnePerson(Scope):
+    """A scope of exactly one employee (the drill-down of a person): every frame helper then reads only their days."""
+
+    employee_id: int = 0
+
+    def key(self) -> str:
+        return f"e{self.employee_id}"
+
+    def employee_q(self, prefix: str = "") -> Q:
+        return Q(**{f"{prefix}id": self.employee_id})
+
+
+_VERDICT_LABEL = {
+    PRESENT: "Present",
+    HALF: "Half day",
+    ABSENT: "Absent",
+    LEAVE: "On leave",
+    "off": "Day off",
+    "masked": "Not employed",
+    "pending": "Today (running)",
+}
+
+
+def attendance_employee(employee_id: int, period: Period) -> dict:
+    """One employee's days in the period as payroll sees them: the verdict, the shifts earned, late minutes, a quarter
+    off or a Penalty Early Out, the first and last punch and where the punches came from. The drill-down of a person row
+    on the Attendance Insights (their record page has the rest)."""
+    emp = (
+        Employee.objects.filter(pk=employee_id)
+        .values("id", "employee_code", "first_name", "last_name", "employment_type", "department__name", "branch__name")
+        .first()
+    )
+    if emp is None:
+        raise MdParamError(f"There is no employee with id {employee_id}.")
+    scope = _OnePerson(employee_id=int(employee_id))
+    today = ist_today()
+    frame, win = frame_for(scope, period, today)
+    person = frame.people.get(int(employee_id))
+    days: list[dict] = []
+    t = new_tally()
+    if win.measured is not None and person is not None:
+        lo, hi = win.measured.start, win.measured.end
+        counted = {r[0]: r for r in frame.window(lo, hi)}
+        minutes = frame.late_minutes()
+        records = {
+            r["date"]: r
+            for r in AttendanceDayRecord.objects.filter(employee_id=employee_id, date__range=(lo, hi))
+            .order_by()
+            .values(
+                "date",
+                "status",
+                "shifts_earned",
+                "is_late",
+                "first_punch",
+                "last_punch",
+                "total_punches",
+                "arrival_zone",
+                "penalty_early_out",
+                "penalty_deduction",
+                "early_out_minutes",
+                "primary_source",
+                "source",
+                "is_informed",
+                "late_reason",
+            )
+        }
+        for d in _days(lo, hi):
+            rec = records.get(d)
+            row = counted.get(d)
+            gap = d in frame.gaps.get(person.employment_type, ())
+            scheduled = frame.schedule.is_scheduled(person, d)
+            if rec is None:
+                if scheduled and not frame.roster.outside_employment(person, d):
+                    days.append({"date": d.isoformat(), "label": "No record", "scheduled": True, "dataGap": gap})
+                continue
+            verdict = classify_day(_Rec(rec["status"], d), person, frame.roster, today, PRODUCTION_SUNDAY_IS_OFF)
+            if row is not None:
+                add_row(t, row[2], row[3])
+            days.append(
+                {
+                    "date": d.isoformat(),
+                    "label": _VERDICT_LABEL.get(verdict, verdict.title()),
+                    "status": rec["status"],
+                    "scheduled": scheduled,
+                    "counted": row is not None,
+                    "dataGap": gap,
+                    "shiftsEarned": float(rec["shifts_earned"] or 0),
+                    "late": bool(rec["is_late"]),
+                    "lateMinutes": minutes.get((int(employee_id), d)),
+                    "quarterOff": rec["arrival_zone"] == "quarter",
+                    "penaltyEarlyOut": bool(rec["penalty_early_out"]),
+                    "penaltyDeduction": float(rec["penalty_deduction"] or 0),
+                    "earlyOutMinutes": rec["early_out_minutes"] or 0,
+                    "firstPunch": rec["first_punch"].strftime("%H:%M") if rec["first_punch"] else None,
+                    "lastPunch": rec["last_punch"].strftime("%H:%M") if rec["last_punch"] else None,
+                    "punches": rec["total_punches"] or 0,
+                    "source": rec["primary_source"],
+                    "manual": rec["source"] == "manual",
+                    "informed": rec["is_informed"],
+                    "reason": rec["late_reason"],
+                }
+            )
+    name = f"{emp['first_name'] or ''} {emp['last_name'] or ''}".strip() or emp["employee_code"] or f"#{employee_id}"
+    return envelope(
+        {
+            "employee": {
+                "employeeId": emp["id"],
+                "name": name,
+                "code": emp["employee_code"] or "",
+                "type": emp["employment_type"] or "staff",
+                "department": emp["department__name"] or UNASSIGNED_DEPARTMENT,
+                "unit": emp["branch__name"] or UNASSIGNED_UNIT,
+            },
+            "measured": _period_block(win.measured),
+            "totals": {
+                "scheduled": t_scheduled(t),
+                "present": t[SP],
+                "half": t_halves(t),
+                "absent": t[SA],
+                "leave": t[SL],
+                "late": t[T_LATE],
+                "quarterDays": t[T_QUARTER],
+                "penaltyEarlyOuts": t[T_PENALTY],
+                "attendancePct": t_attendance(t),
+                "shiftsEarned": t_shifts(t),
+                "shiftsDeducted": t_deducted(t),
+            },
+            "days": days,
+        },
+        period=period,
+        provenance=[_prov_attendance(t_scheduled(t)), _prov_shifts(t_worked(t))],
+        notes=_notes(frame, win, None) if win.measured is None else [],
+    )
 
 
 def parse_day_param(value: Any, today: date | None = None) -> date:

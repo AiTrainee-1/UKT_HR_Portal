@@ -2,7 +2,6 @@ import { Fragment, useId, useLayoutEffect, useRef, useState, type ReactNode } fr
 import { Link, useLocation } from "wouter";
 import { ArrowLeftRight, ChevronRight, LogOut, Menu, PanelLeftClose, Sparkles, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { UKTLogo } from "@/components/ui/dashboard-sidebar";
 import { useAuth } from "@/contexts/AuthContext";
 import { usePayrollSettings } from "@/lib/api-client/custom-hooks";
 import { toggleAssistant, useAssistantState } from "@/lib/md/assistant-store";
@@ -14,6 +13,9 @@ import { useMdHods } from "@/pages/md/approvals/api";
 import { hodLabel, hodPath } from "@/pages/md/approvals/logic";
 import type { Hod } from "@/pages/md/approvals/types";
 import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
+import { prefetchAssistantPanel } from "./assistant/panel-loader";
+import { prefetchProps } from "./shell/prefetch";
+import UktLogo from "./shell/UktLogo";
 
 /** @deprecated The MD portal no longer has a gold: its colours are wine, midnight indigo and sand (md-portal.md section 11).
  *  Kept, with the wine, because other files still import it; use `text-md-wine` / `bg-md-wine` or `var(--md-wine)`. */
@@ -45,6 +47,7 @@ function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: st
   return (
     <Link
       href={item.path}
+      {...prefetchProps(item.path)}
       onClick={onClose}
       data-testid={`md-nav-${item.id}`}
       aria-current={active ? "page" : undefined}
@@ -97,6 +100,7 @@ function ApprovalsItem({ item, current, onClose }: { item: MdNavItem; current: s
     return (
       <Link
         href={item.path}
+        {...prefetchProps(item.path)}
         onClick={onClose}
         data-testid={`md-nav-${item.id}`}
         aria-current={onPage ? "page" : undefined}
@@ -160,6 +164,7 @@ function HodSubNav({ hods, current, onClose }: { hods: Hod[]; current: string; o
           <li key={hod.id}>
             <Link
               href={path}
+              {...prefetchProps(path)}
               onClick={onClose}
               aria-current={active ? "location" : undefined}
               data-testid={`md-nav-approvals-hod-${hod.id}`}
@@ -193,6 +198,7 @@ function RailItem({ item, current, onClose }: { item: MdNavItem; current: string
     <Tip label={item.title} hint={dot ? `${waiting} waiting` : undefined}>
       <Link
         href={item.path}
+        {...prefetchProps(item.path)}
         onClick={onClose}
         aria-label={dot ? `${item.title}, ${waiting} waiting` : item.title}
         aria-current={active ? "page" : undefined}
@@ -256,7 +262,7 @@ export default function MdSidebar({
           className={cn("rounded-full object-contain", collapsed ? "h-6 w-6" : "h-7 w-7")}
         />
       ) : (
-        <UKTLogo className={cn("w-auto", collapsed ? "h-6" : "h-7")} />
+        <UktLogo className={cn("w-auto", collapsed ? "h-6" : "h-7")} />
       )}
     </span>
   );
@@ -329,6 +335,7 @@ export default function MdSidebar({
               <button
                 type="button"
                 onClick={toggleAssistant}
+                onPointerEnter={prefetchAssistantPanel}
                 aria-label="AI assistant"
                 aria-pressed={assistantOpen}
                 data-testid="md-ask-ai"
@@ -341,6 +348,7 @@ export default function MdSidebar({
             <button
               type="button"
               onClick={toggleAssistant}
+              onPointerEnter={prefetchAssistantPanel}
               aria-pressed={assistantOpen}
               data-testid="md-ask-ai"
               className="md-btn md-btn-ink md-shell-ask-ai"

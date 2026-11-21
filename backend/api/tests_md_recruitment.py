@@ -49,8 +49,20 @@ from .models import (
     ScreeningCandidate,
 )
 from .tests_md_support import MdApiTestCase, md_headers
+from .tests_reporting_rc_layout import list_retired_reports, unlist_retired_reports
 
 TODAY = date(2026, 10, 5)
+
+
+def setUpModule():
+    # The agreement tests below compare this page with the report definitions whose rules it shares (Recruitment
+    # Funnel, Job Openings, Resignation Register, New Joinings, Exits Register). Those reports left the Report Center's
+    # list on 2026-11-19 (reporting/layout.py) and answer 404 there, but their definitions still hold the shared rules.
+    list_retired_reports()
+
+
+def tearDownModule():
+    unlist_retired_reports()
 
 
 def ist(y, m, d, h=10, mi=0) -> datetime:
@@ -941,6 +953,45 @@ class Resignations(Company):
         r = self.res(limit=1)
         self.assertEqual((len(r["pending"]), r["pendingShown"], r["summary"]["pending"]), (1, 1, 3))
 
+    def test_decisions_in_the_period_say_who_decided_and_why_a_rejection_was_made(self):
+        late = mk_resignation(
+            self.w.A5,
+            created=ist(2026, 9, 18),
+            status="rejected",
+            reason="Health",
+            rejected_by="dept_head",
+            approval_trail=[
+                {"role": "hod", "decision": "rejected", "by": "Priya Head", "at": "2026-09-20T10:00:00+05:30",
+                 "comment": "Peak season, please stay till December"},
+            ],
+        )  # fmt: skip
+        r = self.res()
+        mine = next(d for d in r["decisions"] if d["id"] == late.id)
+        self.assertEqual(
+            (mine["status"], mine["decidedOn"], mine["decidedBy"], mine["stage"], mine["remark"]),
+            ("rejected", "2026-09-20", "Priya Head", "Department Head", "Peak season, please stay till December"),
+        )
+        self.assertNotIn("reason", mine)  # the employee's own words never sit beside their name
+        self.assertTrue(all("2026-09-01" <= d["decidedOn"] <= "2026-09-30" for d in r["decisions"]))
+        self.assertEqual(r["decisionsTotal"], len(r["decisions"]))
+        self.assertIn("resignation-decisions", {p["id"] for p in r["provenance"]})
+
+    def test_one_resignation_in_full_with_its_steps_and_only_the_group_of_its_reason(self):
+        d = R.resignation_detail(self.w.P2.id, today=TODAY)["resignation"]
+        self.assertEqual((d["status"], d["waitingForText"], d["requestedOn"]), ("pending", "HR", "2026-09-30"))
+        self.assertEqual((d["lastWorkingDate"], d["noticeDays"], d["daysWaiting"]), ("2026-11-20", 51, 5))
+        self.assertEqual(d["reasonGroup"]["id"], "family")
+        self.assertNotIn("reason", d)
+        self.assertTrue(d["submittedAt"].startswith("2026-09-30T10:00"))
+        self.assertTrue(d["steps"])
+        self.assertIsNone(d["decision"])
+        self.assertIsNone(R.resignation_detail(999999, today=TODAY))
+        r = self.client.get(f"/api/md/recruitment/resignations/{self.w.P2.id}", **md_headers(self.md))
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertEqual(
+            self.client.get("/api/md/recruitment/resignations/999999", **md_headers(self.md)).status_code, 404
+        )
+
     def test_agrees_with_the_report_centers_resignation_register(self):
         r = self.client.get(
             "/api/reports/run/resignation-register",
@@ -1449,7 +1500,16 @@ class Tools(Company):
 
 # ─── permission and parameters ──────────────────────────────────────────────────────────────────────────────────
 
-ROUTES = ("summary", "attention", "funnel", "positions", "resignations", "joiners", "trend", "sources")
+ROUTES = (
+    "summary",
+    "attention",
+    "funnel",
+    "positions",
+    "resignations",
+    "joiners",
+    "trend",
+    "sources",
+)
 
 
 class Access(Company):
@@ -1470,7 +1530,9 @@ class Access(Company):
     def test_the_urls_are_exactly_the_documented_routes(self):
         from .md_portal.routes import recruitment as routes
 
-        self.assertEqual(sorted(str(p.pattern) for p in routes.urlpatterns), sorted(ROUTES))
+        self.assertEqual(
+            sorted(str(p.pattern) for p in routes.urlpatterns), sorted([*ROUTES, "resignations/<int:resignation_id>"])
+        )
 
     def test_bad_parameters_are_a_400_that_says_why(self):
         cases = {

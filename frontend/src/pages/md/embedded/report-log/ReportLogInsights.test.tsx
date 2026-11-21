@@ -4,6 +4,7 @@ import { getAssistantState } from "@/lib/md/assistant-store";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../../testing/renderMdPage";
 import * as fx from "./fixtures";
 import ReportLogInsights, { Strip } from "./index";
+import * as sfx from "./scheduled-fixtures";
 
 // jsdom has no layout, so recharts' ResponsiveContainer would draw nothing (and warn). Give the chart a fixed size so the
 // page's real chart configuration is rendered and a wrong series or axis setting fails here.
@@ -20,6 +21,7 @@ let page: RenderedPage | undefined;
 afterEach(() => {
   page?.unmount();
   page = undefined;
+  window.history.replaceState(null, "", "/");
 });
 
 // A tab with seven requests, two charts and Radix popovers is slow to settle on a busy machine: leave room.
@@ -37,6 +39,8 @@ const FIXTURES: Fixtures = {
   [`${BASE}/departments`]: (params: URLSearchParams) =>
     params.get("by") === "unit" ? fx.units : params.get("by") === "type" ? fx.types : fx.departments,
   [`${BASE}/exports`]: fx.exportsData,
+  [`${BASE}/scheduled`]: sfx.scheduled,
+  [`${BASE}/absences`]: (params: URLSearchParams) => sfx.absences(params),
 };
 
 const EMPTY: Fixtures = {
@@ -48,13 +52,17 @@ const EMPTY: Fixtures = {
   [`${BASE}/departments`]: (params: URLSearchParams) =>
     fx.emptyBreakdown((params.get("by") as "department") ?? "department"),
   [`${BASE}/exports`]: fx.emptyExports,
+  [`${BASE}/scheduled`]: sfx.emptyScheduled,
 };
 
 const text = (selector: string) => page?.container.querySelector(selector)?.textContent ?? null;
 const kpi = (id: string) => text(`[data-testid="md-reportlog-kpi-${id}-value"]`);
 const row = (id: string) => page?.container.querySelector(`[data-testid="${id}"]`)?.textContent ?? "";
 
-async function open(fixtures: Fixtures = FIXTURES) {
+/** Opens the tab on the last 30 days (the address carries the filter, as a shared link would): the hand-counted figures
+ *  are for that period. `search` overrides it ("" = the tab's own default, the running month). */
+async function open(fixtures: Fixtures = FIXTURES, search = "?i.period=last_30_days") {
+  window.history.replaceState(null, "", `/md/attendance/report-log${search}`);
   page = await renderMdPage(ReportLogInsights, fixtures, { path: "/md/attendance/report-log" });
   return page;
 }
@@ -269,6 +277,44 @@ describe("Report Log insights", () => {
     expect(text('[data-testid="md-reportlog-notes"]')).toContain("There were no absences on scheduled days");
     // what it cannot tell is still said: it does not depend on the data
     expect(p.container.querySelector('[data-testid="md-reportlog-limits"]')).not.toBeNull();
+  });
+
+  it("opens on the running month by default", async () => {
+    const p = await open(FIXTURES, "");
+    expect(p.requests()).toContain(`${BASE}/summary?period=this_month`);
+    expect(p.requests()).toContain(`${BASE}/scheduled?period=this_month&limit=10`);
+  });
+
+  it("shows the scheduled attendance reports and the ones that did not reach everyone", async () => {
+    const p = await open();
+    expect(p.requests()).toContain(`${BASE}/scheduled?period=last_30_days&limit=10`);
+    expect(text('[data-testid="md-reportlog-scheduled-runs"]')).toContain("8");
+    expect(text('[data-testid="md-reportlog-scheduled-failed"]')).toContain("1 failed · 1 partly sent");
+    expect(text('[data-testid="md-reportlog-failure-5"]')).toContain("WhatsApp is not configured");
+    expect(text('[data-testid="md-reportlog-scheduled-channels"]')).toContain("7 sent, 4 queued, 3 failed");
+  });
+
+  it("says when nothing is scheduled", async () => {
+    const p = await open({ ...FIXTURES, [`${BASE}/scheduled`]: sfx.emptyScheduled });
+    expect(p.container.querySelector('[data-testid="md-reportlog-scheduled-empty"]')).not.toBeNull();
+  });
+
+  it("drills from the Not informed tile to the people, and from a gap day to its absences", async () => {
+    const p = await open();
+    await p.click('[data-testid="md-reportlog-kpi-notInformed"]');
+    expect(p.requests()).toContain(`${BASE}/absences?period=last_30_days&mark=not_informed&page=1&pageSize=25`);
+    const sheet = () => document.querySelector('[data-testid="md-reportlog-absences-sheet"]');
+    expect(sheet()?.textContent).toContain("Asha Test · Fri");
+    expect(sheet()?.textContent).toContain("absent 3 times in this selection");
+    expect(sheet()?.textContent).toContain("Not informed");
+    const day = p.container.querySelector<HTMLElement>('[data-testid^="md-reportlog-gap-"] button');
+    expect(day).not.toBeNull();
+    await act(async () => {
+      day?.click();
+    });
+    await p.settle();
+    const asked = p.requests().find((r) => r.startsWith(`${BASE}/absences?period=last_30_days&mark=all&day=`));
+    expect(asked).toBeDefined();
   });
 
   it("draws a weekly trend for a long period and explains the weekly points", async () => {

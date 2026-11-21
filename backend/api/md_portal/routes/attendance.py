@@ -11,12 +11,19 @@ analytics/attendance.py and returns its envelope.
     GET overtime     hours by department, top people, trend, decisions (?limit=)
     GET leave        leave days by type, pending approvals, permissions
     GET day          one day's snapshot (?date=YYYY-MM-DD | today | yesterday)
+    GET people       drill-down: the employees behind a figure (?metric=absent|late|half|leave|quarter|penalty|worked|
+                     workedOff, &day=YYYY-MM-DD, &page=, &pageSize=)
+    GET employee/<id>  drill-down: one employee's days in the period
+    GET today-people drill-down: the people on one of today's six cards (?state=present|onDuty|onLeave|cl|leaveApplied|
+                     absent, &limit=)
+
+Every period route takes ?month=YYYY-MM as well as ?period= or ?from=&to= (common.resolve_period).
 """
 
 from django.urls import path
 
 from ..analytics import attendance as A
-from ..common import MdParamError, md_get, request_params, resolve_period, resolve_scope
+from ..common import MdParamError, md_get, parse_day, request_params, resolve_period, resolve_scope
 
 
 def _limit(params: dict, default: int, maximum: int) -> int:
@@ -93,6 +100,34 @@ def day(request):
     )
 
 
+@md_get
+def people(request):
+    scope, period, params = _args(request)
+    day = params.get("day")
+    return A.attendance_people(
+        scope,
+        period,
+        metric=str(params.get("metric") or "absent"),
+        day=parse_day(day, "day") if day else None,
+        page=_limit(params | {"limit": params.get("page")}, 1, 10_000),
+        page_size=_limit(params | {"limit": params.get("pageSize")}, 25, A.PEOPLE_PAGE_MAX),
+    )
+
+
+@md_get
+def employee(request, employee_id: int):
+    params = request_params(request)
+    return A.attendance_employee(employee_id, resolve_period(params, default="this_month"))
+
+
+@md_get
+def today_people(request):
+    params = request_params(request)
+    return A.attendance_today_people(
+        resolve_scope(params), str(params.get("state") or "absent"), _limit(params, 50, 200)
+    )
+
+
 urlpatterns = [
     path("summary", summary),
     path("trend", trend),
@@ -103,4 +138,7 @@ urlpatterns = [
     path("overtime", overtime),
     path("leave", leave),
     path("day", day),
+    path("people", people),
+    path("employee/<int:employee_id>", employee),
+    path("today-people", today_people),
 ]

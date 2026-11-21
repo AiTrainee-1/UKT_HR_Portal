@@ -205,6 +205,55 @@ class RequestsTests(Base):
         self.assertEqual(by_kind["on_duty"]["detail"], "ABC Traders")
         self.assertEqual(by_kind["leave"]["from"], "2026-09-06")
 
+    def test_every_request_says_when_it_was_asked_what_for_and_why(self):
+        """Owner brief 2026-11-21 (as on the HR Requests page): request date / submitted at, the requested date(s) with
+        what that date is, and the reason under its label."""
+        self.one_of_every_kind()
+        ResignationRequest.objects.filter(employee=self.emp).update(last_working_date=date(2026, 10, 31))
+        LeaveRequest.objects.create(
+            employee=self.emp,
+            type="casual",
+            start_date="2026-09-07",
+            end_date="2026-09-09",
+            total_days=3,
+            approval_trail=[],
+            reason="Wedding",
+        )
+        items = self.get(f"{URL}/{self.manager.id}").json()["items"]
+        by_kind = {}
+        for i in items:
+            by_kind.setdefault(i["kind"], []).append(i)
+            self.assertTrue(i["submittedAt"], i["kind"])
+            self.assertEqual(i["reasonLabel"], "Reason", i["kind"])
+        labels = {k: v[0]["requested"]["label"] for k, v in by_kind.items() if v[0]["requested"]}
+        self.assertEqual(labels["resignation"], "Last working day")
+        self.assertEqual(labels["outpass"], "Going out on")
+        self.assertEqual(labels["on_duty"], "On-Duty day")
+        self.assertEqual(labels["holiday_work"], "Work date")
+        self.assertEqual(labels["casual_leave"], "Requested date")
+        self.assertEqual(by_kind["resignation"][0]["requested"]["from"], "2026-10-31")
+        self.assertEqual(by_kind["permission"][0]["requested"], {
+            "from": "2026-09-10", "to": None, "note": by_kind["permission"][0]["requested"]["note"],
+            "label": "Requested date",
+        })  # fmt: skip
+        self.assertEqual(by_kind["missing_punch"][0]["requested"]["note"], "IN at 09:00")
+        ranged = next(i for i in by_kind["leave"] if i["requested"]["to"])
+        self.assertEqual(
+            (ranged["requested"]["from"], ranged["requested"]["to"], ranged["requested"]["label"]),
+            ("2026-09-07", "2026-09-09", "Requested dates"),
+        )
+        self.assertEqual(ranged["reason"], "Wedding")
+
+    def test_a_rejection_carries_its_reason_in_the_steps(self):
+        self.missing_punch()
+        pk = MissingPunchRequest.objects.get().pk
+        r = self.decide(kind="missing_punch", id=pk, decision="rejected", comment="No gate record of that day")
+        self.assertEqual(r.status_code, 200, r.content)
+        item = self.get(f"{URL}/{self.manager.id}", status="rejected").json()["items"][0]
+        self.assertEqual(item["state"], "rejected")
+        comments = [s["comment"] for s in item["steps"] if s["state"] == "rejected"]
+        self.assertEqual(comments, ["No gate record of that day"])
+
     def test_another_heads_requests_and_the_heads_own_are_not_listed(self):
         self.leave(self.ravi)
         ManagerEmployeeAssignment.objects.create(manager=self.manager, employee=self.boss)

@@ -1,17 +1,49 @@
 import { describe, expect, it } from "vitest";
 import { HOME } from "./home-fixtures";
 import {
+  addMonths,
   averagePresentPct,
   changePct,
   countsFor,
   currentAndPrevious,
+  monthName,
+  monthOf,
   payrollRows,
   shortDate,
   staffShare,
   trendRows,
   unitRows,
+  validMonth,
   weekday,
 } from "./home-logic";
+
+describe("the Dashboard's month", () => {
+  it("reads the month of a date or the server's clock", () => {
+    expect(monthOf("2026-11-13T17:26")).toBe("2026-11");
+    expect(monthOf("2026-01-01")).toBe("2026-01");
+    expect(monthOf(undefined)).toBeNull();
+    expect(monthOf("soon")).toBeNull();
+  });
+
+  it("steps across years and names the month", () => {
+    expect(addMonths("2026-01", -1)).toBe("2025-12");
+    expect(addMonths("2025-12", 1)).toBe("2026-01");
+    expect(addMonths("2026-11", -17)).toBe("2025-06");
+    expect(monthName("2026-10")).toBe("October 2026");
+    expect(monthName("2026-10", true)).toBe("Oct 2026");
+  });
+
+  it("takes a month from the address only when the server can answer it", () => {
+    expect(validMonth("2026-10", "2026-11")).toBe("2026-10");
+    expect(validMonth("2026-11", "2026-11")).toBe("2026-11");
+    expect(validMonth("2026-12", "2026-11")).toBeNull(); // not started
+    expect(validMonth("2025-06", "2026-11")).toBe("2025-06"); // 17 back: the oldest
+    expect(validMonth("2025-05", "2026-11")).toBeNull();
+    expect(validMonth("2026-13", "2026-11")).toBeNull();
+    expect(validMonth("October", "2026-11")).toBeNull();
+    expect(validMonth(null, "2026-11")).toBeNull();
+  });
+});
 
 describe("the attendance views", () => {
   it("picks the whole company, staff or production", () => {

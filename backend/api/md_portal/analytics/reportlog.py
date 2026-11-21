@@ -21,9 +21,14 @@ So the honest questions an MD can ask of this page, and what the data can say:
   (module ``attendance``). Attendance exports are the ones whose report belongs to the Report Center's Attendance group
   (or the punch export). Exports from the Report Log page itself are not in the audit trail.
 
-What it cannot tell (and the page says so, in ``unknowns``): when or whether a report was *sent*, whether one was *late*
-(no schedule or deadline exists), whether a run *failed* (failures are only in the server log), who set an Informed
-mark or when (the mark is a bare yes / no), and exports made from the Report Log page itself.
+* **Are the attendance reports going out?** Since 2026-11-17 HR can schedule attendance reports (Attendance Notify,
+  ``AttendanceNotifyRun`` / ``AttendanceNotifyDelivery``: WhatsApp, Gmail or the internal Chat). Every run and every
+  recipient is recorded with what happened (sent, queued, failed, skipped), so "sent", "failed" and "late" can be told
+  for those reports (``reportlog_scheduled``).
+
+What it cannot tell (and the page says so, in ``unknowns``): whether a report downloaded by hand was passed on, whether a
+Report Center export *failed* (only in the server log), who set an Informed mark or when (the mark is a bare yes / no),
+and exports made from the Report Log page itself.
 
 Scope (unit / department / staff-production) applies to absences. An audit entry belongs to an HR user, not to an
 employee, so export figures are for the whole company whatever the scope; the notes say so when a scope is chosen.
@@ -43,7 +48,8 @@ from django.db.models import Count, Max, Q
 from django.db.models.functions import TruncDate
 
 from ...clock import FACTORY_TZ, ist_today
-from ...models import AttendanceDayRecord, AuditLog
+from ...models import AttendanceDayRecord, AttendanceNotifyAutomation, AttendanceNotifyDelivery, AttendanceNotifyRun
+from ...models import AuditLog
 from ...reporting.registry import all_specs
 from ..assistant.tools_base import integer_param, string_param, tool
 from ..common import MdParamError, Period, Scope, cached, change, envelope, pct, prov
@@ -79,15 +85,35 @@ CALENDAR_MAX_DAYS = 120
 MAX_EXPORT_ROWS = 5000
 LIST_MAX = 25
 LIST_DEFAULT = 10
+#: The absences drill-down pages its rows (at most this many a page).
+ABSENCE_PAGE_MAX = 100
+ABSENCE_PAGE_DEFAULT = 25
+#: The HR registers in the Report Center's HR group that are attendance reports (the owner's 2026-11-19 layout moved the
+#: statutory attendance registers there). Their exports count as attendance report exports.
+HR_ATTENDANCE_REPORTS = (
+    "production-daily-punches",
+    "production-shift-rules",
+    "hr-daily-movement-register",
+    "hr-punching-register",
+    "hr-strength-register",
+    "hr-attendance-register-summary",
+    "hr-time-card",
+)
+#: Scheduled report runs that did not reach everyone (Attendance Notify): failed outright, or done for only some recipients.
+NOTIFY_FAILED = (AttendanceNotifyRun.STATUS_FAILED, AttendanceNotifyRun.STATUS_PARTIAL)
+#: Failed scheduled runs in the period from which it is a warning (a single failure is information).
+NOTIFY_FAILED_WARN = 2
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 #: What the data can never say about this page. Shown on the page and quoted by the assistant.
 UNKNOWNS = [
     "Exports made from the Report Log page itself (the Excel, PDF or image of the absent list) are produced in the "
     "browser and are not recorded anywhere.",
-    "Nothing records that a report was sent to anyone, so 'sent' and 'not sent' cannot be told apart.",
-    "There is no schedule or deadline for a report, so a late or missing report cannot be judged.",
-    "A failed export is only written to the server log, never to the audit trail, so failures and re-runs cannot be counted.",
+    "Only the reports scheduled in Attendance Notify are recorded as sent: a report someone downloads and forwards by "
+    "hand leaves no trace.",
+    "A report that is not scheduled has no deadline, so only a scheduled report can be judged late or missing.",
+    "A failed Report Center export is only written to the server log, never to the audit trail, so its failures and "
+    "re-runs cannot be counted (Attendance Notify runs do record their failures).",
     "An Informed / Not informed mark does not record who made it or when, so who followed up an absence is unknown.",
 ]
 
@@ -280,9 +306,13 @@ def _gap_days(rows) -> list[dict]:
 
 
 def _attendance_titles() -> list[str]:
-    """The titles of the Report Center's Attendance reports, longest first (so "Late Coming Summary (Counts)" is not
-    taken for "Late Coming Detail")."""
-    return sorted({s.title for s in all_specs() if s.category == "attendance"}, key=lambda t: (-len(t), t))
+    """The titles of the Report Center's attendance reports, longest first (so "Late Coming Summary (Counts)" is not
+    taken for "Late Coming Detail"): the Attendance group, retired reports included (older exports still carry their
+    titles), and the attendance registers of the HR group (HR_ATTENDANCE_REPORTS)."""
+    return sorted(
+        {s.title for s in all_specs() if s.category == "attendance" or s.id in HR_ATTENDANCE_REPORTS},
+        key=lambda t: (-len(t), t),
+    )
 
 
 def _attendance_q(titles: list[str]) -> Q:
@@ -387,7 +417,9 @@ def _provenance(scope: Scope, period: Period, *, rows: dict[str, int | None]) ->
             definition=(
                 "Each time someone exported an attendance report from the Report Center, or exported punches from "
                 "Attendance Search, the audit trail records who, when and which report. 'Attendance report' means a "
-                "report in the Report Center's Attendance group."
+                "report in the Report Center's Attendance group (retired ones included, for older exports) or one of "
+                "the attendance registers of its HR group (Punching, Strength, Daily Movement, Attendance Register, "
+                "Time Card, Production Daily Punches, Production Shift Rules)."
             ),
             formula="audit entries with action 'export' for those reports, counted on the day they were made (Indian time)",
             rows=rows.get("exports"),
@@ -395,7 +427,25 @@ def _provenance(scope: Scope, period: Period, *, rows: dict[str, int | None]) ->
             caveats=[
                 "Exports from the Report Log page itself are produced in the browser and are NOT recorded.",
                 "The audit trail belongs to HR users, not employees, so unit / department filters do not apply.",
-                "Nothing records that a report was sent, was late or failed.",
+                "Reports sent on a schedule are counted separately (Attendance Notify).",
+            ],
+        ),
+        "reportlog-scheduled": prov(
+            "reportlog-scheduled",
+            "Scheduled attendance reports",
+            dataset="Attendance Notify runs and deliveries",
+            definition=(
+                "HR schedules attendance reports in Attendance Notify (WhatsApp, Gmail or the internal Chat). Each run "
+                "(a scheduled slot, 'Run now' or a retry) records its recipients and what happened to each: sent, "
+                "queued (WhatsApp, waiting in the paced queue), failed or skipped. A run is 'failed' when no recipient "
+                "got it and 'partial' when some did."
+            ),
+            formula="runs by the day they were due (Indian time); delivered = sent + queued recipients",
+            rows=rows.get("scheduled"),
+            filters=[period.label, f"{period.start.isoformat()} to {period.end.isoformat()}", "Whole company"],
+            caveats=[
+                "A queued WhatsApp message has left the HRMS for the paced queue; its final delivery is in WhatsApp Control.",
+                "The runs are for the whole company: a run's report may cover one unit or everyone.",
             ],
         ),
         "reportlog-previous": prov(
@@ -446,7 +496,10 @@ def _notes(win: _Windows, ab: _Absences, scope: Scope) -> list[str]:
             f"The comparison with the previous period is not shown for periods longer than {A.MAX_COMPARE_DAYS} days."
         )
     if not scope.is_everyone():
-        notes.append("Export figures are for the whole company: the audit trail is not split by unit or department.")
+        notes.append(
+            "Export and scheduled-report figures are for the whole company: the audit trail and Attendance Notify are "
+            "not split by unit or department."
+        )
     return notes
 
 
@@ -487,6 +540,14 @@ def reportlog_summary(scope: Scope, period: Period) -> dict:
             "previous": exp_prev[source],
             "change": change(exp_cur[source], exp_prev[source]),
         }
+    sched_cur = _scheduled_totals(period.start, period.end)
+    sched_prev = _scheduled_totals(previous_period.start, previous_period.end)
+    for key in ("runs", "failedRuns", "delivered"):
+        metrics[f"scheduled{key[0].upper()}{key[1:]}"] = {
+            "value": sched_cur[key],
+            "previous": sched_prev[key],
+            "change": change(sched_cur[key], sched_prev[key]),
+        }
     gap = _gap_days(ab.window(win.measured.start, win.measured.end)) if win.measured else []
     last_rows = list(
         _exports(period.start, period.end)
@@ -506,7 +567,11 @@ def reportlog_summary(scope: Scope, period: Period) -> dict:
     entries = _provenance(
         scope,
         period,
-        rows={"absences": cur["absences"] if cur else 0, "exports": exp_cur["attendance"]},
+        rows={
+            "absences": cur["absences"] if cur else 0,
+            "exports": exp_cur["attendance"],
+            "scheduled": sched_cur["runs"],
+        },
     )
     notes = _notes(win, ab, scope)
     if win.measured is not None and cur["absences"] == 0 and not win.includes_today:
@@ -521,6 +586,7 @@ def reportlog_summary(scope: Scope, period: Period) -> dict:
             "gapMinAbsences": GAP_MIN_ABSENCES,
             "coverage": ab.coverage,
             "latestExport": latest,
+            "activeAutomations": sched_cur["activeAutomations"],
             "unknowns": list(UNKNOWNS),
         },
         period=period,
@@ -531,6 +597,7 @@ def reportlog_summary(scope: Scope, period: Period) -> dict:
             "reportlog-followup",
             "reportlog-gaps",
             "reportlog-exports",
+            "reportlog-scheduled",
             "reportlog-previous",
         ),
         notes=notes,
@@ -830,6 +897,292 @@ def reportlog_exports(period: Period, limit: int = LIST_DEFAULT) -> dict:
     )
 
 
+# ─── the drill-down: the absences behind a figure ───────────────────────────────────────────────────────────────────
+
+MARKS = {"all": None, "informed": INFORMED, "not_informed": NOT_INFORMED, "unmarked": UNMARKED}
+_MARK_TEXT = {INFORMED: "informed", NOT_INFORMED: "not_informed", UNMARKED: "unmarked"}
+
+
+@cached()
+def reportlog_absences(
+    scope: Scope,
+    period: Period,
+    mark: str = "all",
+    day: str | None = None,
+    by: str | None = None,
+    group: str | None = None,
+    page: int = 1,
+    page_size: int = ABSENCE_PAGE_DEFAULT,
+) -> dict:
+    """The absences behind a figure on the page, newest first: who was absent on a scheduled day, where they work and how
+    HR marked it. Narrowed by ``mark`` (informed / not_informed / unmarked), one ``day`` (YYYY-MM-DD) and one group
+    (``by`` department / unit / type with its ``group`` name, as the comparison shows it). Paged."""
+    if mark not in MARKS:
+        raise MdParamError(f"'mark' must be one of: {', '.join(MARKS)}.")
+    if by and by not in _GROUP_KEYS:
+        raise MdParamError(f"'by' must be one of: {', '.join(BY_CHOICES)}.")
+    one_day = None
+    if day:
+        try:
+            one_day = date.fromisoformat(str(day)[:10])
+        except ValueError:
+            raise MdParamError(f"'{day}' is not a date: use YYYY-MM-DD.") from None
+    page = _int_arg(page, "page", 1, 1, 10_000)
+    page_size = _int_arg(page_size, "pageSize", ABSENCE_PAGE_DEFAULT, 1, ABSENCE_PAGE_MAX)
+    win = _Windows(period, ist_today())
+    ab = _Absences(scope, win)
+    rows = ab.window(win.measured.start, win.measured.end) if win.measured else []
+    if one_day is not None:
+        rows = [r for r in rows if r[0] == one_day]
+    if by and group is not None:
+        label = _GROUP_KEYS[by]
+        rows = [r for r in rows if label(ab.people[r[1]]) == group]
+    counts = _share(_tally(rows))
+    wanted = MARKS[mark]
+    if wanted is not None:
+        rows = [r for r in rows if r[2] == wanted]
+    # newest day first, names A-Z within a day
+    rows.sort(key=lambda r: ab.people[r[1]].name.lower())
+    rows.sort(key=lambda r: r[0], reverse=True)
+    total = len(rows)
+    shown = rows[(page - 1) * page_size : page * page_size]
+    # how many times each person on this page was absent in the whole selection (repeat absentees stand out)
+    repeats: dict[int, int] = defaultdict(int)
+    for r in rows:
+        repeats[r[1]] += 1
+    items = []
+    for d, eid, state in shown:
+        p = ab.people[eid]
+        items.append(
+            {
+                "date": d.isoformat(),
+                "weekday": WEEKDAYS[d.weekday()],
+                "employeeId": eid,
+                "employeeCode": p.code,
+                "employeeName": p.name,
+                "department": p.dept,
+                "unit": p.unit,
+                "type": p.employment_type,
+                "mark": _MARK_TEXT[state],
+                "absencesInSelection": repeats[eid],
+            }
+        )
+    entries = _provenance(scope, period, rows={"absences": counts["absences"]})
+    return envelope(
+        {
+            "filters": {"mark": mark, "day": one_day.isoformat() if one_day else None, "by": by, "group": group},
+            "counts": counts,
+            "rows": items,
+            "total": total,
+            "page": page,
+            "pageSize": page_size,
+            "pages": max(1, -(-total // page_size)),
+        },
+        period=period,
+        scope=scope,
+        provenance=_pick(entries, "reportlog-absences", "reportlog-followup"),
+        notes=_notes(win, ab, scope),
+    )
+
+
+# ─── scheduled attendance reports (Attendance Notify) ───────────────────────────────────────────────────────────────
+
+
+def _runs(start: date, end: date):
+    return AttendanceNotifyRun.objects.filter(run_date__gte=start, run_date__lte=end)
+
+
+def _scheduled_totals(start: date, end: date) -> dict:
+    raw = _runs(start, end).aggregate(
+        runs=Count("id"),
+        failed=Count("id", filter=Q(status=AttendanceNotifyRun.STATUS_FAILED)),
+        partial=Count("id", filter=Q(status=AttendanceNotifyRun.STATUS_PARTIAL)),
+    )
+    delivered = AttendanceNotifyDelivery.objects.filter(
+        run__run_date__gte=start,
+        run__run_date__lte=end,
+        status__in=(AttendanceNotifyDelivery.STATUS_SENT, AttendanceNotifyDelivery.STATUS_QUEUED),
+    ).count()
+    return {
+        "runs": int(raw["runs"] or 0),
+        "failedRuns": int((raw["failed"] or 0) + (raw["partial"] or 0)),
+        "delivered": delivered,
+        "activeAutomations": AttendanceNotifyAutomation.objects.filter(is_active=True).count(),
+    }
+
+
+_CHANNEL_LABEL = {"whatsapp": "WhatsApp", "email": "Gmail", "chat": "Chat"}
+
+
+@cached()
+def reportlog_scheduled(period: Period, limit: int = LIST_DEFAULT) -> dict:
+    """The attendance reports HR scheduled in Attendance Notify: the automations switched on (by channel), the runs due
+    in the period and what happened to them, the recipients reached, the runs that did not reach everyone (with the
+    reason) and runs per day. Whole company."""
+    limit = _int_arg(limit, "limit", LIST_DEFAULT, 1, LIST_MAX)
+    previous = period.previous()
+    automations = list(
+        AttendanceNotifyAutomation.objects.values("channel").annotate(
+            total=Count("id"), active=Count("id", filter=Q(is_active=True))
+        )
+    )
+    runs = _runs(period.start, period.end)
+    by_status = dict(runs.values_list("status").annotate(n=Count("id")).values_list("status", "n"))
+    by_trigger = dict(runs.values_list("trigger").annotate(n=Count("id")).values_list("trigger", "n"))
+    deliveries = AttendanceNotifyDelivery.objects.filter(run__run_date__gte=period.start, run__run_date__lte=period.end)
+    by_channel: dict[str, dict] = {}
+    for r in deliveries.values("run__channel", "status").annotate(n=Count("id")).order_by():
+        slot = by_channel.setdefault(
+            r["run__channel"], {"sent": 0, "queued": 0, "failed": 0, "skipped": 0, "pending": 0}
+        )
+        key = r["status"] if r["status"] in slot else "pending"
+        slot[key] += r["n"]
+    recipients = (
+        deliveries.filter(status__in=(AttendanceNotifyDelivery.STATUS_SENT, AttendanceNotifyDelivery.STATUS_QUEUED))
+        .values("recipient")
+        .distinct()
+        .count()
+    )
+    per_auto = list(
+        runs.values("automation_name", "channel")
+        .annotate(
+            runs=Count("id"),
+            done=Count("id", filter=Q(status=AttendanceNotifyRun.STATUS_DONE)),
+            failed=Count("id", filter=Q(status__in=NOTIFY_FAILED)),
+            last=Max("started_at"),
+        )
+        .order_by("-runs", "automation_name")
+    )
+    failures = list(
+        runs.filter(status__in=NOTIFY_FAILED)
+        .annotate(
+            failedDeliveries=Count("deliveries", filter=Q(deliveries__status=AttendanceNotifyDelivery.STATUS_FAILED))
+        )
+        .order_by("-run_date", "-started_at")
+        .values(
+            "id", "automation_name", "channel", "run_date", "slot", "status", "error", "trigger", "failedDeliveries"
+        )[:limit]
+    )
+    per_day = {
+        d: (n, f)
+        for d, n, f in runs.values("run_date")
+        .annotate(n=Count("id"), f=Count("id", filter=Q(status__in=NOTIFY_FAILED)))
+        .values_list("run_date", "n", "f")
+    }
+    last = runs.order_by("-started_at").values("automation_name", "channel", "run_date", "slot", "status").first()
+    cur = _scheduled_totals(period.start, period.end)
+    prev = _scheduled_totals(previous.start, previous.end)
+    days = list(_days(period.start, period.end))
+    entry = _provenance(Scope(), period, rows={"scheduled": cur["runs"]})["reportlog-scheduled"]
+    notes = []
+    if not automations:
+        notes.append("No attendance report has been scheduled in Attendance Notify yet.")
+    elif cur["runs"] == 0:
+        notes.append(f"No scheduled attendance report was due in this selection ({period.label}).")
+    return envelope(
+        {
+            "automations": {
+                "total": sum(a["total"] for a in automations),
+                "active": sum(a["active"] for a in automations),
+                "byChannel": [
+                    {"channel": a["channel"], "label": _CHANNEL_LABEL.get(a["channel"], a["channel"]), **a}
+                    for a in sorted(automations, key=lambda a: a["channel"])
+                ],
+            },
+            "runs": {
+                "total": cur["runs"],
+                "previous": prev["runs"],
+                "change": change(cur["runs"], prev["runs"]),
+                "done": by_status.get(AttendanceNotifyRun.STATUS_DONE, 0),
+                "partial": by_status.get(AttendanceNotifyRun.STATUS_PARTIAL, 0),
+                "failed": by_status.get(AttendanceNotifyRun.STATUS_FAILED, 0),
+                "skipped": by_status.get(AttendanceNotifyRun.STATUS_SKIPPED, 0),
+                "running": by_status.get(AttendanceNotifyRun.STATUS_RUNNING, 0),
+                "scheduled": by_trigger.get(AttendanceNotifyRun.TRIGGER_SCHEDULE, 0),
+                "manual": by_trigger.get(AttendanceNotifyRun.TRIGGER_MANUAL, 0),
+                "retries": by_trigger.get(AttendanceNotifyRun.TRIGGER_RETRY, 0),
+                "reachedEveryonePct": pct(by_status.get(AttendanceNotifyRun.STATUS_DONE, 0), cur["runs"]),
+            },
+            "delivered": cur["delivered"],
+            "deliveredPrevious": prev["delivered"],
+            "recipients": recipients,
+            "byChannel": [
+                {"channel": c, "label": _CHANNEL_LABEL.get(c, c), **v} for c, v in sorted(by_channel.items())
+            ],
+            "byAutomation": [
+                {
+                    "automation": a["automation_name"] or "Deleted automation",
+                    "channel": a["channel"],
+                    "label": _CHANNEL_LABEL.get(a["channel"], a["channel"]),
+                    "runs": a["runs"],
+                    "done": a["done"],
+                    "failed": a["failed"],
+                    "lastRun": _wall(a["last"]),
+                }
+                for a in per_auto[:limit]
+            ],
+            "failures": [
+                {
+                    "id": f["id"],
+                    "automation": f["automation_name"] or "Deleted automation",
+                    "channel": _CHANNEL_LABEL.get(f["channel"], f["channel"]),
+                    "date": f["run_date"].isoformat(),
+                    "slot": f["slot"],
+                    "status": f["status"],
+                    "trigger": f["trigger"],
+                    "error": (f["error"] or "")[:200],
+                    "failedDeliveries": f["failedDeliveries"],
+                }
+                for f in failures
+            ],
+            "days": [
+                {"date": d.isoformat(), "runs": per_day.get(d, (0, 0))[0], "failed": per_day.get(d, (0, 0))[1]}
+                for d in days
+            ][-CALENDAR_MAX_DAYS:],
+            "lastRun": (
+                {
+                    "automation": last["automation_name"] or "Deleted automation",
+                    "channel": _CHANNEL_LABEL.get(last["channel"], last["channel"]),
+                    "date": last["run_date"].isoformat(),
+                    "slot": last["slot"],
+                    "status": last["status"],
+                }
+                if last
+                else None
+            ),
+        },
+        period=period,
+        provenance=[entry],
+        notes=notes,
+    )
+
+
+def _scheduled_exceptions(period: Period) -> list[dict]:
+    """Scheduled attendance reports that did not reach everyone."""
+    rows = list(
+        _runs(period.start, period.end)
+        .filter(status__in=NOTIFY_FAILED)
+        .values_list("automation_name", "run_date", "error")
+        .order_by("-run_date", "-started_at")
+    )
+    if not rows:
+        return []
+    n = len(rows)
+    name, last_day, _error = rows[0]
+    error = next((e for _n, _d, e in rows if e), "")
+    reason = f" Last reason given: {error[:120]}." if error else ""
+    return [
+        _item(
+            "scheduled-failed",
+            "warning" if n >= NOTIFY_FAILED_WARN else "info",
+            f"{_num(n)} scheduled attendance {_plural(n, 'report')} did not reach everyone",
+            f"Latest: {name or 'a deleted automation'} on {last_day:%d %b}.{reason} See Attendance Notify -> History.",
+            "scheduledFailedRuns",
+            f"Which scheduled attendance reports failed in {period.label}, and why?",
+        )
+    ]
+
+
 # ─── "needs your attention": exceptions for a period and for the Dashboard ──────────────────────────────────────────
 
 
@@ -951,6 +1304,7 @@ def _exceptions(scope: Scope, period: Period, *, limit: int) -> list[dict]:
                 f"Who stopped exporting attendance reports, and why ({period.label})?",
             )
         )
+    items.extend(_scheduled_exceptions(period))
     items.sort(key=lambda i: _SEVERITY_RANK[i["severity"]])
     return items[:limit]
 
@@ -969,11 +1323,12 @@ def reportlog_attention(scope: Scope, period: Period) -> dict:
             f"nothing marked, on 2 or more days; {_p(NOT_INFORMED_WARN_PCT)}+ of absences marked Not informed; a department "
             f"with {HOTSPOT_MIN_ABSENCES}+ absences, {_p(HOTSPOT_MIN_UNMARKED_PCT)}+ of them unmarked and "
             f"{HOTSPOT_RATIO}x the company's share; attendance exports that stopped after at least "
-            f"{EXPORT_STOP_MIN_BEFORE} in the period before."
+            f"{EXPORT_STOP_MIN_BEFORE} in the period before; scheduled attendance reports (Attendance Notify) that did "
+            f"not reach everyone (a warning from {NOTIFY_FAILED_WARN})."
         ),
         formula="simple threshold rules over the figures on this page",
         filters=[period.label, scope.describe()],
-        caveats=["These are rules of thumb: no follow-up target or report schedule is configured in the system."],
+        caveats=["These are rules of thumb: no follow-up target is configured in the system."],
     )
     return envelope({"items": items}, period=period, scope=scope, provenance=[rules])
 
@@ -1043,10 +1398,25 @@ def reportlog_briefing(scope: Scope, period: Period) -> dict:
         )
     else:
         sentences.append(_sentence("exports", f"No attendance report export is on record for {period.label.lower()}."))
+    runs, failed = m["scheduledRuns"]["value"], m["scheduledFailedRuns"]["value"]
+    if runs:
+        sentences.append(
+            _sentence(
+                "scheduled",
+                f"{_num(runs)} scheduled attendance {_plural(runs, 'report')} went out through Attendance Notify to "
+                f"{_num(m['scheduledDelivered']['value'])} {_plural(m['scheduledDelivered']['value'], 'recipient')}"
+                + (f"; {_num(failed)} did not reach everyone." if failed else ", all of them delivered."),
+                "bad" if failed else "good",
+            )
+        )
+    elif summary["activeAutomations"]:
+        sentences.append(
+            _sentence("scheduled", f"No scheduled attendance report was due in {period.label.lower()}.", "neutral")
+        )
     sentences.append(
         _sentence(
             "limits",
-            "Exports from the Report Log page itself, whether a report was sent, and who marked an absence are not recorded.",
+            "Exports from the Report Log page itself, reports forwarded by hand, and who marked an absence are not recorded.",
         )
     )
     return envelope(
@@ -1154,6 +1524,10 @@ def _exports_tool(period: Period, limit: int = LIST_DEFAULT) -> dict:
     return reportlog_exports(period, limit=limit)
 
 
+def _scheduled_tool(period: Period, limit: int = LIST_DEFAULT) -> dict:
+    return reportlog_scheduled(period, limit=limit)
+
+
 TOOLS = [
     tool(
         "report_log_summary",
@@ -1210,5 +1584,19 @@ TOOLS = [
         extra={"limit": _LIMIT},
         defaults={"limit": LIST_DEFAULT},
         person_fields=("userName",),
+    ),
+    tool(
+        "report_log_scheduled_reports",
+        "The attendance reports HR scheduled in Attendance Notify (sent by WhatsApp, Gmail or the internal Chat): the "
+        "automations switched on by channel, the runs due in the period (done, partial, failed, skipped; scheduled, run "
+        "by hand or retried) against the previous period, recipients reached, the runs that did not reach everyone with "
+        "the reason, and runs per day. Whole company. Use for 'are the attendance reports going out', 'did the daily "
+        "absent report reach everyone' and 'which scheduled report failed'.",
+        _scheduled_tool,
+        page=PAGE,
+        period="last_30_days",
+        scope=False,
+        extra={"limit": _LIMIT},
+        defaults={"limit": LIST_DEFAULT},
     ),
 ]

@@ -1,20 +1,16 @@
 import { useState } from "react";
 import { useBrief, pageQuestion } from "@/components/md/embedded/brief";
-import { FilterBar, PeriodBar, ScopeBar } from "@/components/md/kit/FilterBar";
 import { ErrorBanner, NoteBanner } from "@/components/md/kit/states";
 import { kpiDelta, kpiValueText, sortInsights } from "@/components/md/kit/dto";
 import { describeMdError, useMdOrg } from "@/lib/api-client/custom-hooks/md";
 import { usePublishAssistantContext } from "@/lib/md/assistant-store";
-import {
-  EVERYONE,
-  periodParams,
-  scopeIsEveryone,
-  scopeParams,
-  type PeriodChoice,
-  type ScopeChoice,
-} from "@/lib/md/period";
+import { scopeIsEveryone } from "@/lib/md/period";
 import { StripFigure, StripInsights, StripNote, StripShell } from "../shared/InsightStrip";
+import InsightsFilterBar from "../shared/InsightsFilterBar";
 import SegTabs from "../shared/SegTabs";
+import { whenParams, type InsightsDefaults } from "../shared/filters";
+import { useInsightsFilters } from "../shared/useInsightsFilters";
+import AbsencesSheet, { type AbsenceFilter } from "./AbsencesSheet";
 import AttentionCard from "./AttentionCard";
 import BriefingCard from "./BriefingCard";
 import CompareCard from "./CompareCard";
@@ -24,11 +20,16 @@ import GapsCard from "./GapsCard";
 import GroupsCard from "./GroupsCard";
 import KpiStrip from "./KpiStrip";
 import LimitsCard from "./LimitsCard";
+import ScheduledCard from "./ScheduledCard";
 import { useReportLogData } from "./hooks";
-import { GROUP_TABS, askQuestions, assistantSummary, focusScope, periodText, scopeText } from "./logic";
+import { GROUP_TABS, askQuestions, assistantSummary, focusScope, scopeText } from "./logic";
+import { MARK_LABEL } from "./scheduled-logic";
 import type { GroupBy, RlGroupRow } from "./types";
 
 const PAGE = "report-log";
+
+/** Opens on the month that is running; Range offers the presets and a custom range. */
+const DEFAULTS: InsightsDefaults = {};
 
 /**
  * Report Log, Insights & AI: are absences being followed up on the Daily Report (Informed / Not informed), on which days
@@ -37,14 +38,16 @@ const PAGE = "report-log";
  * What the data cannot say (reports sent, late or failed, who marked an absence) is stated at the foot, not guessed.
  */
 export default function ReportLogInsights() {
-  const [period, setPeriod] = useState<PeriodChoice>({ preset: "last_30_days" });
-  const [scope, setScope] = useState<ScopeChoice>(EVERYONE);
+  const { filters, params, label, setWhen, setScope } = useInsightsFilters(DEFAULTS);
+  const scope = filters.scope;
   const [by, setBy] = useState<GroupBy>("department");
+  const [absences, setAbsences] = useState<AbsenceFilter | null>(null);
   const org = useMdOrg();
-  const data = useReportLogData({ ...periodParams(period), ...scopeParams(scope) }, periodParams(period), by);
+  // the exports and the scheduled reports are company-wide: they take the period only
+  const data = useReportLogData(params, whenParams(filters.when), by);
   const { summary } = data;
 
-  const periodLabel = summary.data?.period?.label ?? periodText(period);
+  const periodLabel = summary.data?.period?.label ?? label;
   const selection = scopeText(scope, summary.data?.scope?.description);
   const ask = askQuestions(periodLabel, scopeIsEveryone(scope) ? null : selection);
 
@@ -52,7 +55,13 @@ export default function ReportLogInsights() {
     page: PAGE,
     title: "Report Log",
     filters: { Period: periodLabel, Scope: selection },
-    summary: assistantSummary(summary.data),
+    summary: {
+      ...assistantSummary(summary.data),
+      "Scheduled reports sent": data.scheduled.data?.runs.total ?? null,
+      "Scheduled reports that did not reach everyone": data.scheduled.data
+        ? data.scheduled.data.runs.failed + data.scheduled.data.runs.partial
+        : null,
+    },
   });
 
   const focus = (row: RlGroupRow) => {
@@ -62,10 +71,7 @@ export default function ReportLogInsights() {
 
   return (
     <div className="space-y-5" data-testid="md-reportlog-insights">
-      <FilterBar>
-        <PeriodBar value={period} onChange={setPeriod} />
-        <ScopeBar value={scope} onChange={setScope} org={org.data} />
-      </FilterBar>
+      <InsightsFilterBar filters={filters} onWhen={setWhen} onScope={setScope} org={org.data} />
 
       {summary.isError && (
         <ErrorBanner message={describeMdError(summary.error)} onRetry={() => void summary.refetch()} />
@@ -73,13 +79,17 @@ export default function ReportLogInsights() {
 
       <BriefingCard query={data.briefing} ask={ask.briefing} />
 
-      <KpiStrip summary={summary} trend={data.trend} />
+      <KpiStrip summary={summary} trend={data.trend} onDrill={(mark, title) => setAbsences({ mark, title })} />
 
       <AttentionCard query={data.attention} ask={ask.attention} />
 
       <FollowUpCard query={data.trend} ask={ask.trend} />
 
-      <GapsCard query={data.gaps} ask={ask.gaps} />
+      <GapsCard
+        query={data.gaps}
+        ask={ask.gaps}
+        onDay={(day) => setAbsences({ mark: "all", day, title: `${MARK_LABEL.all} on the day` })}
+      />
 
       <GroupsCard
         query={data.groups}
@@ -96,11 +106,15 @@ export default function ReportLogInsights() {
         onFocus={focus}
       />
 
+      <ScheduledCard query={data.scheduled} ask={ask.scheduled} />
+
       <ExportsCard query={data.exports} trend={data.trend} ask={ask.exports} />
 
       <CompareCard query={summary} ask={ask.compare} />
 
       <LimitsCard query={summary} ask={ask.limits} />
+
+      <AbsencesSheet filter={absences} params={params} onClose={() => setAbsences(null)} />
 
       {summary.data && summary.data.notes.length > 0 && (
         <NoteBanner>
@@ -139,7 +153,8 @@ export function Strip() {
           <StripInsights items={insights} testId="md-reportlog-strip-insights" />
           <p className="md-analytics-strip-caveat" data-testid="md-reportlog-strip-caveat">
             Exports made from this page (Excel, PDF, image) are produced in the browser and are not recorded, so the
-            export figures cover Report Center and Attendance Search exports only.
+            export figures cover Report Center and Attendance Search exports only; reports scheduled in Attendance
+            Notify are counted on the Insights tab.
           </p>
         </>
       }

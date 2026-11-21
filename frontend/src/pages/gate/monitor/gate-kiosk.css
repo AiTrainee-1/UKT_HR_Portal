@@ -1,0 +1,604 @@
+/* The gate kiosk's look (/gatemonitor and /gatemonitor/console): a deep slate page, quiet glass panels, and one colour
+   for the answer of a scan that the whole page takes for a few seconds (an edge light round the screen, a wash behind the
+   panels, the scanner card) and the result card keeps until the next scan.
+
+   Tones (data-gk-tone on any element): green = let through, orange = stop and look, red = refused, return = back from a
+   tea break, neutral = nothing decided. Each sets four RGB triplets: --gk-rgb (the light itself), --gk-deep
+   and --gk-darker (the scanner card's fill), --gk-ink (words written in the tone on the dark page).
+
+   Motion: everything that moves sits inside @media (prefers-reduced-motion: no-preference); with reduced motion the same
+   states only fade. Under the Clean theme the page is flat (no gradient, no soft shadow, no blur): the scoped rules at the
+   end keep the colours and the edge light (a solid frame), and drop the decoration. */
+
+/* In the components layer, so a Tailwind utility on the same element (rounded-none, border-0) still wins. */
+@layer components {
+  /* ── tones ─────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  .gk-root,
+  [data-gk-tone] {
+    --gk-rgb: 148 163 184;
+    --gk-deep: 51 65 85;
+    --gk-darker: 15 23 42;
+    --gk-ink: 203 213 225;
+  }
+  [data-gk-tone="green"] {
+    --gk-rgb: 16 185 129;
+    --gk-deep: 4 120 87;
+    --gk-darker: 6 64 51;
+    --gk-ink: 110 231 183;
+  }
+  [data-gk-tone="orange"] {
+    --gk-rgb: 249 115 22;
+    --gk-deep: 194 65 12;
+    --gk-darker: 108 37 12;
+    --gk-ink: 253 186 116;
+  }
+  [data-gk-tone="red"] {
+    --gk-rgb: 239 68 68;
+    --gk-deep: 185 28 28;
+    --gk-darker: 110 20 20;
+    --gk-ink: 252 165 165;
+  }
+  [data-gk-tone="return"] {
+    --gk-rgb: 56 189 248;
+    --gk-deep: 3 105 161;
+    --gk-darker: 49 46 129;
+    --gk-ink: 125 211 252;
+  }
+  [data-gk-tone="neutral"] {
+    --gk-rgb: 148 163 184;
+    --gk-deep: 71 85 105;
+    --gk-darker: 30 41 59;
+    --gk-ink: 203 213 225;
+  }
+  /* ── the page ──────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  .gk-root {
+    position: relative;
+    isolation: isolate;
+    background-color: rgb(7 11 20);
+    color: rgb(226 232 240);
+  }
+
+  /* the backdrop: two soft lights and a faint grid, fixed so it never adds a scrollbar */
+  .gk-bg {
+    position: fixed;
+    inset: 0;
+    z-index: -2;
+    pointer-events: none;
+    background-image:
+      radial-gradient(60% 50% at 12% 0%, rgb(0 100 150 / 0.32), transparent 70%),
+      radial-gradient(50% 45% at 100% 100%, rgb(67 56 202 / 0.18), transparent 70%),
+      linear-gradient(rgb(255 255 255 / 0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px);
+    background-size:
+      auto,
+      auto,
+      44px 44px,
+      44px 44px;
+  }
+
+  /* the answer's light: a wash behind the panels and an edge light round the screen (above everything, never clickable) */
+  .gk-wash,
+  .gk-edge {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 1100ms ease;
+  }
+  .gk-wash {
+    z-index: -1;
+    background-image:
+      radial-gradient(70% 55% at 50% -5%, rgb(var(--gk-rgb) / 0.42), transparent 70%),
+      radial-gradient(40% 40% at 0% 100%, rgb(var(--gk-rgb) / 0.22), transparent 70%),
+      radial-gradient(40% 40% at 100% 100%, rgb(var(--gk-rgb) / 0.22), transparent 70%);
+  }
+  .gk-edge {
+    z-index: 60;
+    box-shadow:
+      inset 0 0 0 4px rgb(var(--gk-rgb) / 0.95),
+      inset 0 0 110px 12px rgb(var(--gk-rgb) / 0.42);
+  }
+  .gk-wash[data-on="true"],
+  .gk-edge[data-on="true"] {
+    opacity: 0.8;
+    animation: gk-fade-in 320ms ease-out;
+  }
+
+  /* a glass panel */
+  .gk-panel {
+    border: 1px solid rgb(255 255 255 / 0.08);
+    border-radius: 1.5rem;
+    background-color: rgb(15 23 42 / 0.72);
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 24px 48px -28px rgb(0 0 0 / 0.7);
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+  }
+
+  /* the live dot of "Connected" */
+  .gk-live-dot {
+    position: relative;
+  }
+  .gk-live-dot::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+    border-radius: 9999px;
+    border: 2px solid currentColor;
+    opacity: 0;
+  }
+
+  /* ── the scanner card ──────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  .gk-scanner {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+    border: 1px solid rgb(255 255 255 / 0.1);
+    border-radius: 1.75rem;
+    background-color: rgb(15 23 42);
+    background-image: radial-gradient(120% 90% at 50% 0%, rgb(30 41 59) 0%, rgb(15 23 42) 55%, rgb(2 6 23) 100%);
+    box-shadow: 0 30px 60px -30px rgb(0 0 0 / 0.8);
+    transition:
+      border-color 500ms ease,
+      box-shadow 700ms ease;
+  }
+  .gk-scanner[data-on="true"] {
+    border-color: rgb(var(--gk-rgb) / 0.65);
+    box-shadow:
+      0 0 0 1px rgb(var(--gk-rgb) / 0.35),
+      0 30px 90px -24px rgb(var(--gk-rgb) / 0.6);
+  }
+  /* the colour the card turns: its own layer, so the change cross-fades */
+  .gk-scanner-tone {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: 0;
+    background-color: rgb(var(--gk-deep));
+    background-image: radial-gradient(
+      120% 100% at 50% 0%,
+      rgb(var(--gk-rgb) / 0.95) 0%,
+      rgb(var(--gk-deep)) 48%,
+      rgb(var(--gk-darker)) 100%
+    );
+    transition: opacity 600ms ease;
+  }
+  .gk-scanner[data-on="true"] .gk-scanner-tone {
+    opacity: 1;
+  }
+
+  /* the QR frame of the ready state: four corners and a scan line */
+  .gk-frame {
+    position: relative;
+    width: 9.5rem;
+    height: 9.5rem;
+  }
+  .gk-corner {
+    position: absolute;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-color: rgb(255 255 255 / 0.85);
+    border-style: solid;
+    border-width: 0;
+  }
+  .gk-corner[data-at="tl"] {
+    top: 0;
+    left: 0;
+    border-top-width: 4px;
+    border-left-width: 4px;
+    border-top-left-radius: 1rem;
+  }
+  .gk-corner[data-at="tr"] {
+    top: 0;
+    right: 0;
+    border-top-width: 4px;
+    border-right-width: 4px;
+    border-top-right-radius: 1rem;
+  }
+  .gk-corner[data-at="bl"] {
+    bottom: 0;
+    left: 0;
+    border-bottom-width: 4px;
+    border-left-width: 4px;
+    border-bottom-left-radius: 1rem;
+  }
+  .gk-corner[data-at="br"] {
+    bottom: 0;
+    right: 0;
+    border-bottom-width: 4px;
+    border-right-width: 4px;
+    border-bottom-right-radius: 1rem;
+  }
+  .gk-frame[data-busy="true"] .gk-corner {
+    border-color: rgb(147 197 253);
+  }
+  .gk-frame[data-dim="true"] .gk-corner {
+    border-color: rgb(255 255 255 / 0.35);
+  }
+  .gk-scanline {
+    position: absolute;
+    left: 10%;
+    right: 10%;
+    top: 50%;
+    height: 2px;
+    border-radius: 2px;
+    background-color: rgb(56 189 248);
+    background-image: linear-gradient(90deg, transparent, rgb(125 211 252), transparent);
+    box-shadow: 0 0 14px 2px rgb(56 189 248 / 0.65);
+  }
+  .gk-frame[data-dim="true"] .gk-scanline {
+    display: none;
+  }
+
+  /* the answer's disc and its glyph */
+  .gk-disc {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 7.5rem;
+    height: 7.5rem;
+    border-radius: 9999px;
+    border: 2px solid rgb(255 255 255 / 0.4);
+    background-color: rgb(255 255 255 / 0.16);
+    box-shadow: 0 0 0 10px rgb(255 255 255 / 0.06);
+    color: white;
+  }
+  @media (min-width: 640px) {
+    .gk-disc {
+      width: 8.5rem;
+      height: 8.5rem;
+    }
+  }
+  .gk-ripple,
+  .gk-sweep {
+    position: absolute;
+    inset: -2px;
+    border-radius: 9999px;
+    pointer-events: none;
+  }
+  .gk-ripple {
+    border: 2px solid rgb(255 255 255 / 0.55);
+    opacity: 0;
+  }
+  .gk-sweep {
+    inset: -10px;
+    opacity: 0;
+    background-image: conic-gradient(from 0deg, rgb(255 255 255 / 0.65), rgb(255 255 255 / 0) 30%, transparent);
+    -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 5px), black calc(100% - 4px));
+    mask: radial-gradient(farthest-side, transparent calc(100% - 5px), black calc(100% - 4px));
+  }
+  .gk-glyph path,
+  .gk-glyph line,
+  .gk-glyph circle[data-draw] {
+    fill: none;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  /* the result card's accent */
+  .gk-result {
+    position: relative;
+    overflow: hidden;
+  }
+  .gk-result::before {
+    content: "";
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 4px;
+    background-color: rgb(var(--gk-rgb));
+  }
+  .gk-tone-ink {
+    color: rgb(var(--gk-ink));
+  }
+  .gk-tone-tile {
+    background-color: rgb(var(--gk-rgb) / 0.16);
+    color: rgb(var(--gk-ink));
+    box-shadow: inset 0 0 0 1px rgb(var(--gk-rgb) / 0.35);
+  }
+
+  /* ── the sign-in ───────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+  .gk-legend-dot {
+    display: inline-block;
+    width: 0.625rem;
+    height: 0.625rem;
+    border-radius: 9999px;
+    background-color: rgb(var(--gk-rgb));
+    box-shadow: 0 0 0 3px rgb(var(--gk-rgb) / 0.22);
+  }
+
+  /* ── motion: reduced motion gets fades only ────────────────────────────────────────────────────────────────────────── */
+
+  @keyframes gk-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes gk-rise {
+    from {
+      opacity: 0;
+      transform: translateY(10px);
+    }
+  }
+  @keyframes gk-pop {
+    0% {
+      opacity: 0;
+      transform: scale(0.55);
+    }
+    55% {
+      opacity: 1;
+      transform: scale(1.09);
+    }
+    75% {
+      transform: scale(0.97);
+    }
+    90% {
+      transform: scale(1.015);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes gk-draw {
+    from {
+      stroke-dashoffset: 1;
+    }
+    to {
+      stroke-dashoffset: 0;
+    }
+  }
+  @keyframes gk-shake {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    20% {
+      transform: translateX(-8px);
+    }
+    40% {
+      transform: translateX(7px);
+    }
+    60% {
+      transform: translateX(-5px);
+    }
+    80% {
+      transform: translateX(3px);
+    }
+  }
+  @keyframes gk-pulse {
+    0%,
+    100% {
+      transform: scale(1);
+    }
+    50% {
+      transform: scale(1.07);
+    }
+  }
+  @keyframes gk-ripple {
+    0% {
+      opacity: 0.7;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1.55);
+    }
+  }
+  @keyframes gk-sweep {
+    0% {
+      opacity: 0;
+      transform: rotate(0deg);
+    }
+    15% {
+      opacity: 1;
+    }
+    85% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: rotate(-360deg);
+    }
+  }
+  @keyframes gk-come-back {
+    0% {
+      opacity: 0;
+      transform: translateX(28px) scale(0.85);
+    }
+    60% {
+      opacity: 1;
+      transform: translateX(-4px) scale(1.04);
+    }
+    100% {
+      transform: translateX(0) scale(1);
+    }
+  }
+  @keyframes gk-hand {
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes gk-scan {
+    0% {
+      top: 12%;
+    }
+    100% {
+      top: 88%;
+    }
+  }
+  @keyframes gk-live {
+    0% {
+      opacity: 0.6;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(2.2);
+    }
+  }
+  @keyframes gk-bloom {
+    0% {
+      opacity: 0;
+    }
+    20% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.8;
+    }
+  }
+
+  /* the content of the scanner card and the result card come in with a fade (also under reduced motion) */
+  .gk-enter {
+    animation: gk-fade-in 260ms ease-out both;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .gk-enter {
+      animation: gk-rise 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    .gk-wash[data-on="true"],
+    .gk-edge[data-on="true"] {
+      animation: gk-bloom 1500ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .gk-live-dot::after {
+      animation: gk-live 2.4s ease-out infinite;
+    }
+    .gk-scanline {
+      animation: gk-scan 2.2s ease-in-out infinite alternate;
+    }
+    .gk-frame[data-busy="true"] .gk-scanline {
+      animation-duration: 0.7s;
+    }
+
+    .gk-disc {
+      animation: gk-pop 620ms cubic-bezier(0.34, 1.4, 0.64, 1) both;
+    }
+    .gk-glyph [data-draw] {
+      stroke-dasharray: 1;
+      stroke-dashoffset: 1;
+      animation: gk-draw 460ms cubic-bezier(0.65, 0, 0.35, 1) forwards;
+      animation-delay: 220ms;
+    }
+    .gk-glyph [data-draw="2"] {
+      animation-delay: 420ms;
+    }
+    .gk-glyph [data-draw="3"] {
+      animation-delay: 560ms;
+    }
+
+    /* check: the ring ripples out once */
+    [data-glyph="check"] .gk-ripple {
+      animation: gk-ripple 900ms ease-out 260ms;
+    }
+    /* cross: a small shake once it has drawn */
+    .gk-disc-wrap[data-glyph="cross"] {
+      animation: gk-shake 440ms ease-in-out 560ms;
+    }
+    /* warning and wait: a soft pulse, twice, and a ripple with each */
+    .gk-disc-wrap:is([data-glyph="warn"], [data-glyph="wait"]) {
+      animation: gk-pulse 700ms ease-in-out 620ms 2;
+    }
+    :is([data-glyph="warn"], [data-glyph="wait"]) .gk-ripple {
+      animation: gk-ripple 700ms ease-out 620ms 2;
+    }
+    [data-glyph="wait"] .gk-hand {
+      transform-origin: 12px 12px;
+      animation: gk-hand 1.4s cubic-bezier(0.65, 0, 0.35, 1) 300ms;
+    }
+    /* return: the disc comes back in from the right and a light sweeps round it the other way */
+    [data-glyph="return"] .gk-disc {
+      animation: gk-come-back 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    [data-glyph="return"] .gk-sweep {
+      animation: gk-sweep 1100ms cubic-bezier(0.45, 0, 0.25, 1) 200ms;
+    }
+  }
+}
+
+/* The app's clay buttons (index.css, unlayered) draw a white neumorphic glow made for a light page: none on the kiosk. */
+.gk-root .clay-btn,
+.gk-root .clay-btn:hover,
+.gk-root .clay-btn:active {
+  box-shadow: none;
+}
+
+/* ── Clean theme: flat ─────────────────────────────────────────────────────────────────────────────────────────────── */
+
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-bg,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-wash,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-sweep {
+  display: none;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-edge {
+  box-shadow: inset 0 0 0 8px rgb(var(--gk-rgb));
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-panel {
+  background-color: rgb(15 23 42);
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-scanner,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-scanner[data-on="true"] {
+  background-image: none;
+  box-shadow: none;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-scanner-tone {
+  background-image: none;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-scanline {
+  background-image: none;
+  box-shadow: none;
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-disc,
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-legend-dot {
+  box-shadow: none;
+}
+/* the theme paints every pressed toggle (aria-pressed) in the brand's light blue, drawn for a light page: on the kiosk the
+   Scan / Gate records switch stays white on dark and the voice button stays a quiet pill */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-root .gk-seg.gk-seg[aria-pressed="true"] {
+  background-color: rgb(255 255 255);
+  border-color: transparent;
+  color: rgb(15 23 42);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-root .gk-seg.gk-seg[aria-pressed="false"] {
+  background-color: transparent;
+  color: rgb(226 232 240);
+}
+/* the theme turns light grey words (written for a dark panel) into a mid grey made for a white page: on the kiosk's dark page
+   they keep their light colour; the light sheets (.gk-light: the Gate records sheet, the sign-in form) keep the theme's */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  .gk-root
+  :is([class~="text-slate-100"], [class~="text-slate-200"]):not(.gk-light, .gk-light *) {
+  color: rgb(226 232 240);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  .gk-root
+  [class~="text-slate-300"]:not(.gk-light, .gk-light *) {
+  color: rgb(203 213 225);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  .gk-root
+  [class~="text-slate-400"]:not(.gk-light, .gk-light *) {
+  color: rgb(148 163 184);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme])
+  .gk-root
+  [class~="text-sky-300"]:not(.gk-light, .gk-light *) {
+  color: rgb(125 211 252);
+}
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .gk-root .gk-voice.gk-voice[aria-pressed] {
+  background-color: rgb(255 255 255 / 0.04);
+  border-color: rgb(255 255 255 / 0.1);
+  color: rgb(226 232 240);
+}
