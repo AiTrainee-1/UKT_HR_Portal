@@ -50,6 +50,8 @@ def hr_dashboard_summary(request: Request) -> Response:
         total=Count("id"),
         active=Count("id", filter=Q(status="active")),
         inactive=Count("id", filter=Q(status="inactive")),
+        # the active employees split by kind (2026-11-23: the dashboard shows active employees only)
+        active_production=Count("id", filter=Q(status="active", employment_type="production")),
     )
     # Requests HR can act on RIGHT NOW under the approval pipelines HR configured (approval_workflow.py): identical to
     # "everything pending" out of the box, and follows the pipeline if HR has moved or removed its own step.
@@ -121,6 +123,9 @@ def hr_dashboard_summary(request: Request) -> Response:
             "totalEmployees": emp_stats["total"] or 0,
             "activeEmployees": emp_stats["active"] or 0,
             "inactiveEmployees": emp_stats["inactive"] or 0,
+            # added 2026-11-23: the active employees as staff / production (the dashboard's Active Employees card)
+            "activeStaff": (emp_stats["active"] or 0) - (emp_stats["active_production"] or 0),
+            "activeProduction": emp_stats["active_production"] or 0,
             "pendingLeaves": pending_leaves,
             "unreadNotifications": unread_notifications,
             "totalDepartments": total_departments,

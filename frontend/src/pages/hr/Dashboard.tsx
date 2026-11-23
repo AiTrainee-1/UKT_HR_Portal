@@ -418,9 +418,10 @@ export default function HrDashboard() {
         {/* ── KPI Row ─────────────────────────────────────────────────────── */}
         <Gate k="dashboard.key_figures">
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {/* Active employees only (owner 2026-11-23): inactive employees are not counted anywhere on the dashboard */}
             <KpiCard
-              label="Total Employees" loading={!summary} value={summary?.totalEmployees ?? 0}
-              sub={`${summary?.activeEmployees ?? 0} active`}
+              label="Active Employees" loading={!summary} value={summary?.activeEmployees ?? 0}
+              sub={`${(summary as any)?.activeStaff ?? 0} staff · ${(summary as any)?.activeProduction ?? 0} production`}
               icon={Users} accent="#006496"
               onClick={() => navigate("/hr/employees")}
             />
@@ -649,7 +650,7 @@ export default function HrDashboard() {
             <SectionTitle action="Manage Departments" onAction={() => navigate("/hr/departments")}>
               <span className="flex items-center gap-1.5">
                 <Building2 size={12} style={{ color: "#006496" }} />
-                Department Headcount
+                Active Employees by Department
               </span>
             </SectionTitle>
             {deptData.length > 0 ? (
@@ -675,7 +676,7 @@ export default function HrDashboard() {
             <SectionTitle action="View Employees" onAction={() => navigate("/hr/employees")}>
               <span className="flex items-center gap-1.5">
                 <Users size={12} style={{ color: "#006496" }} />
-                Workforce Composition
+                Active Workforce Composition
               </span>
             </SectionTitle>
             {genderData.length > 0 ? (
