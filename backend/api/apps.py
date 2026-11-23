@@ -179,6 +179,14 @@ class ApiConfig(AppConfig):
             logger.warning("MD auto attendance scheduler bootstrap skipped: %s", e)
 
         try:
+            # Employees -> Investigation: the nightly Auto Trigger (01:00), off from its own switch
+            from .investigation import scheduler as investigation_scheduler
+
+            investigation_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Investigation Auto Trigger scheduler bootstrap skipped: %s", e)
+
+        try:
             # phone pushes still waiting after a restart, stuck pushes, Expo's delivery receipts: every minute
             push_delivery_scheduler.start_scheduler_if_needed()
         except Exception as e:

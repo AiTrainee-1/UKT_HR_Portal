@@ -609,6 +609,14 @@ api/missed_payroll/exports.py
 api/missed_payroll/views.py
 api/missed_payroll/urls.py
 api/tests_missed_payroll.py
+api/models/investigation.py
+api/investigation/__init__.py
+api/investigation/engine.py
+api/investigation/service.py
+api/investigation/views.py
+api/investigation/urls.py
+api/investigation/scheduler.py
+api/tests_employee_investigation.py
 api/tests_salary_slip_center.py
 api/models/payroll_excess.py
 api/payroll_excess.py

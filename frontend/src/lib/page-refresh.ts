@@ -42,6 +42,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/employees/productionemployee",
   // Factory Employees (drivers, housekeeping...): a list with its own dialogs and sheets, like Production Employees
   "/hr/employees/factory-emp",
+  // Investigation (employees away 15 / 30+ days) puts the Refresh button in its title row
+  "/hr/employees/investigation",
   // Compensation is five pages (CTC Breakdown, OT Detection, Compensation Leave, History, Reports) with subtabs in the path
   /^\/hr\/compensation(\/|$)/,
   "/hr/settlement",

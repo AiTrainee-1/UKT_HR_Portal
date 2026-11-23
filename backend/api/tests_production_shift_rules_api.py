@@ -1287,9 +1287,12 @@ class PermissionTests(Base):
         self.assertEqual(resolve_module("production-shift-rules/preview"), "settings.production_shifts")
         # the Production view of Settings -> Attendance (a sub-tab key that follows the tab)
         self.assertEqual(resolve_module("production-shift-config"), "settings.attendance.production")
-        # (the HR Requests page's Notify preview is the other POST that only reads)
+        # The other POSTs that only read: the HR Requests page's Notify preview, and Factory Employees' shift plan
+        # (2026-11-20: factory_shift_plan runs shift_planner.plan without lock, which only SELECTs; the write is
+        # employees/factory/shifts/apply, which stays an edit)
         self.assertEqual(
-            READ_ONLY_POST_PATHS, frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview"})
+            READ_ONLY_POST_PATHS,
+            frozenset({"production-shift-rules/preview", "hr/hod-reminders/preview", "employees/factory/shifts/plan"}),
         )
 
     def test_an_administrator_reads_saves_and_previews(self):

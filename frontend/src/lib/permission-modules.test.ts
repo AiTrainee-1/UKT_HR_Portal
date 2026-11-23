@@ -140,6 +140,18 @@ describe("moduleForPath", () => {
     expect(moduleForPath("/hr/missed-payroll")).toBe("missed_payroll");
   });
 
+  it("gates Employees -> Investigation by its own key, which follows the Active / Inactive switch, then Employees", () => {
+    expect(moduleForPath("/hr/employees/investigation")).toBe("employees.investigation");
+    expect(resolvePermission({ employees: "edit" }, "employees.investigation")).toBe("edit");
+    expect(resolvePermission({ employees: "edit", "employees.status": "view" }, "employees.investigation")).toBe(
+      "view",
+    );
+    expect(
+      resolvePermission({ "employees.status": "view", "employees.investigation": "edit" }, "employees.investigation"),
+    ).toBe("edit");
+    expect(resolvePermission({ employees: "hidden" }, "employees.investigation")).toBe("hidden");
+  });
+
   it("gates the Biometric Connectors pages like Attendance until a role sets them, whatever the case of the address", () => {
     // Biometric Device Status and Device Control moved there from Attendance: since 2026-11-11 they have keys of their
     // own, which follow Attendance until a role sets them

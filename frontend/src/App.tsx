@@ -101,6 +101,7 @@ const ProductionPayrollBiweekly = lazy(() => import("@/pages/hr/ProductionPayrol
 const ProductionPayrollMonthly = lazy(() => import("@/pages/hr/ProductionPayrollMonthly"));
 const ProductionEmployees = lazy(() => import("@/pages/hr/ProductionEmployees"));
 const FactoryEmployees = lazy(() => import("@/pages/hr/FactoryEmployees"));
+const EmployeeInvestigation = lazy(() => import("@/pages/hr/EmployeeInvestigation"));
 const Settlement = lazy(() => import("@/pages/hr/Settlement"));
 const SalarySlipCenter = lazy(() => import("@/pages/hr/SalarySlipCenter"));
 const MissedPayroll = lazy(() => import("@/pages/hr/MissedPayroll"));
@@ -353,6 +354,9 @@ function Router() {
         </Route>
         <Route path="/hr/employees/factory-emp">
           {() => <ProtectedRoute component={FactoryEmployees} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path="/hr/employees/investigation">
+          {() => <ProtectedRoute component={EmployeeInvestigation} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/employees/:id/edit">
           {() => <ProtectedRoute component={EditEmployee} allowedRoles={["hr"]} />}

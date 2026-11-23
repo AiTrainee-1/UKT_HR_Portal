@@ -2543,6 +2543,22 @@ Done (`engine.write`, run slot `payroll_progress`, atomic per employee): the row
 - `GET bank-check|download/report|download/statement(fmt=pdf|xlsx)|download/bank-file ?kind&month&year&ids=` (entries only; the bank file pays Done, not paid, with account + IFSC, NET > 0; 409 when nobody). Statement rows come from `payroll_statement_views._staff_values / _production_values` with the saved figures, plus `Why missed` and `Status` columns.
 Audit module `payroll`. Tests `api/tests_missed_payroll.py`.
 
+## Employees -> Investigation (api/models/investigation.py, api/investigation/; migration 0179)
+
+Additive (two new tables). Permission key `employees.investigation` (API prefix `employee-investigation/`, route `/hr/employees/investigation`; follows `employees.status` until a role sets it).
+
+### InvestigationSettings (`employee_investigation_settings`, one row pk=1)
+`auto_enabled` (default true), `auto_days` (30: the Auto Trigger acts after MORE than this), `last_run_at`, `last_run_summary` JSON `{ran, at, day, inactivated, employeeIds}`, `updated_by`, `updated_at`. Read without creating (`service.settings_row`).
+
+### EmployeeInvestigation (`employee_investigations`)
+Every decision: `action` inactivated | auto_inactivated | kept_active | reactivated, `employee_id`, `spell_start` (first day away of the absence it is about), `last_attended`, `absent_days`, `calendar_days`, `bucket` "15"|"30"|"auto", `reason`, `by`, `at`, `details` JSON (gapDays, leaveDays, workingDays, coveredByLeave, neverAttended). A kept_active / reactivated decision holds while `spell_start` equals the current spell's start.
+
+### Rules (`investigation/engine.py`, read-only)
+Attended day = any punch (AttendanceLog), or an AttendanceDayRecord present/half_shift with shifts > 0 that is On-Duty (`primary_source`) or a manual day without compensation marker and not an approved Casual Leave date. Spell = last attended day + 1 .. yesterday (calendar days); never attended = from the join date (read with `join_date_of(decode_serial=True)`; a date after today = none). No-data day = a non-Sunday, non-holiday day on which fewer than 1 in 10 of the employee's unit's active employees punched (units under 5 never judged); `absent_days` = calendar days - no-data days. Lists: 15-29 / 30+. Approved leave (`hr_analytics.collect.approved_leave`) on every working day of the spell = `covered_by_leave`. Auto Trigger (nightly 01:00 IST, `investigation/scheduler.py`, switch): active, absent_days > auto_days, not covered by leave, not kept active for this spell, not never-attended -> `status` inactive + decision `auto_inactivated` (by "Auto Trigger") + one Activity Logs line.
+
+### Endpoints (`/api/employee-investigation/...`, HR only, branch-scoped lists; GET = view, POST/PUT = edit)
+`GET summary` {d15, d30, tonight, autoEnabled}; `GET list?bucket=15|30&kind=all|staff|production` {bucket, kind, asOf, counts, settings, employees[{id, code, name, kind, status, department, designation, unit, phone, joinDate, lastAttended, awayFrom, calendarDays, absentDays, noDataDays, workingDays, leaveDays, coveredByLeave, neverAttended, bucket, decision, keptActive, autoTonight, autoWhyNot}]}; `GET auto?kind=` {settings, tonight[row], history[decision + employee + since]}; `GET detail?employeeId=` {employee, decisions, calendarFrom, calendar[{date, kind leave|half_leave|holiday|sunday|no_data|leave_pending|absent, holiday}], leaves, casualLeaves, punches}; `POST inactivate|keep-active {employeeIds (<=200), reason 3-500, bucket}`, `POST reactivate {employeeIds, reason}` -> {done, refused}; `PUT settings {autoEnabled}` (403 for a unit login). Activity Logs module `employees`. Tests `api/tests_employee_investigation.py`.
+
 ## Payroll Excess / Detection (api/models/payroll_excess.py; migrations 0171, 0172)
 
 ### PayrollExcessEntry (`payroll_excess_entries`)

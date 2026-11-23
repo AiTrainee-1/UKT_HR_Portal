@@ -65,3 +65,5 @@ export * from "./md";
 export * from "./md-admin";
 // Employees -> Factory Employees (2026-11-20): drivers, housekeeping, chefs, security; their labels and the list
 export * from "./factory-employees";
+// Employees -> Investigation (2026-11-23): employees away 15 / 30+ days in a row, Keep active / Mark inactive, Auto Trigger
+export * from "./employee-investigation";

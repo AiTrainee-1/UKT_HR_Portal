@@ -12,6 +12,7 @@ import Employees from "../Employees";
 const h = vi.hoisted(() => ({
   paginated: vi.fn(),
   count: vi.fn(),
+  investigation: vi.fn(),
 }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
@@ -66,6 +67,7 @@ vi.mock("@/lib/api-client/custom-hooks", async (original) => ({
   useListBranches: () => ({ data: [{ id: 1, name: "Unit 1" }] }),
   useListEmployeesPaginated: (params: unknown, options?: { enabled?: boolean }) => h.paginated(params, options),
   useEmployeeCount: (params: unknown, options?: { enabled?: boolean }) => h.count(params, options),
+  useInvestigationSummary: (options?: { enabled?: boolean }) => h.investigation(options),
 }));
 
 beforeAll(() => {
@@ -107,6 +109,7 @@ beforeEach(() => {
     isPlaceholderData: false,
   });
   h.count.mockReturnValue({ data: 4 });
+  h.investigation.mockReturnValue({ data: { d15: 3, d30: 2, tonight: 1, autoEnabled: true } });
 });
 
 afterEach(() => {
@@ -148,6 +151,7 @@ describe("the header buttons", () => {
   it("keeps Inactive, Bulk Upload and Add Employee on the Staff tab, and no TDS button", () => {
     mount("/hr/employees");
     expect(q("button-toggle-inactive")).not.toBeNull();
+    expect(q("button-investigation")).not.toBeNull();
     expect(q("button-bulk-upload")).not.toBeNull();
     expect(q("button-add-employee")).not.toBeNull();
     expect(q("button-tds")).toBeNull();
@@ -166,9 +170,28 @@ describe("the header buttons", () => {
     expect(q("button-tds")).toBeNull();
   });
 
+  it("has an Investigation button next to Inactive, its badge everyone away 15+ days, opening the Investigation page", () => {
+    mount("/hr/employees");
+    const button = must("button-investigation");
+    expect(button.previousElementSibling).toBe(must("button-toggle-inactive"));
+    expect(text(must("investigation-count"))).toBe("5 away 15 days or more");
+    expect(h.investigation).toHaveBeenLastCalledWith({ enabled: true });
+    click(button);
+    expect(window.location.pathname).toBe("/hr/employees/investigation");
+  });
+
+  it("shows no badge when nobody is away 15 days or more", () => {
+    h.investigation.mockReturnValue({ data: { d15: 0, d30: 0, tonight: 0, autoEnabled: true } });
+    mount("/hr/employees?tab=production");
+    expect(text(must("button-investigation"))).toBe("Investigation");
+    expect(q("investigation-count")).toBeNull();
+  });
+
   it("replaces all three with ONE TDS – Tax Deducted at Source button on the Co Emp tab", () => {
     mount("/hr/employees?tab=coemp");
     expect(q("button-toggle-inactive")).toBeNull();
+    expect(q("button-investigation")).toBeNull();
+    expect(h.investigation).toHaveBeenLastCalledWith({ enabled: false });
     expect(q("button-bulk-upload")).toBeNull();
     expect(q("button-add-employee")).toBeNull();
     expect(text(must("button-tds"))).toBe("TDS – Tax Deducted at Source");
@@ -301,6 +324,14 @@ describe("the per-tab permission keys", () => {
     expect(tabLabels()).toEqual(["Staff(1)", "Production(0)"]);
     expect(q("mock-coemp")).toBeNull();
     expect(h.paginated).toHaveBeenLastCalledWith(expect.anything(), { enabled: true });
+  });
+
+  it("drops the Investigation button, and asks nothing for its badge, when the page is hidden", () => {
+    levels({ "employees.investigation": "hidden" });
+    mount("/hr/employees");
+    expect(q("button-investigation")).toBeNull();
+    expect(q("button-toggle-inactive")).not.toBeNull();
+    expect(h.investigation).toHaveBeenLastCalledWith({ enabled: false });
   });
 
   it("drops the TDS button and ignores view=tds when the TDS panel is hidden", () => {

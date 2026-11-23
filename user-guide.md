@@ -303,6 +303,13 @@ When an employee resigns or is terminated:
 
 ---
 
+#### Investigation: employees who keep not coming (23 Nov 2026)
+
+On the Employees page, **Investigation** (next to **Inactive**) opens `/hr/employees/investigation`, for staff and production. Days are **calendar days** since the employee last attended (a punch, an On-Duty day or a day HR set as worked), up to yesterday; Sundays and holidays in between count. A day on which the employee's unit recorded almost no punches (fewer than 1 in 10 of its people: the device or its connection was down) is a **no-data day** and is not counted, so an outage never makes people look absent.
+
+- **15 Days** (away 15-29 days) and **30 Days** (30 or more): each row shows the last day attended, the days away, the approved leave in that time, and the latest decision. **Leave details** shows the absence day by day (leave, holiday, Sunday, no data, absent), their leave and Casual Leave requests and the last punches. **Mark inactive** (with a reason) moves the employee to the Inactive list, like the Inactive switch. **Keep active** (with a reason, for example agreed long medical leave) tells the Auto Trigger to leave them alone until they attend again; a later absence starts fresh.
+- **Auto Trigger**: every night at 01:00 the system marks inactive everyone away **more than 30 days** who is not kept active. It never inactivates someone whose every working day away is **approved leave**, or someone with **no attendance ever recorded** (they stay listed for HR to check). The tab shows the switch (on from the start; a login for all units can turn it off), the last run, **Tonight** (who the next run would inactivate, with Keep active) and the **history** of everyone it inactivated, with **Make active again** (with a reason; it also keeps them active for that absence).
+
 ### 4.3 Attendance
 
 **What it's for:** Tracks daily attendance for all employees. This is the most critical page for payroll accuracy.

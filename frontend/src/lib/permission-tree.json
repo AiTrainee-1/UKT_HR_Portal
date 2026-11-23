@@ -153,6 +153,15 @@
               "enforce": "server"
             },
             {
+              "key": "employees.investigation",
+              "label": "Investigation",
+              "type": "page",
+              "help": "Employees away 15 / 30+ days in a row: their leave, Keep active, Mark inactive, and the nightly Auto Trigger.",
+              "routes": ["/hr/employees/investigation"],
+              "inherits": "employees.status",
+              "enforce": "server"
+            },
+            {
               "key": "employees.profile",
               "label": "Employee profile",
               "type": "page",

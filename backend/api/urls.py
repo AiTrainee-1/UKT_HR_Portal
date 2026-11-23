@@ -1058,6 +1058,8 @@ urlpatterns = [
     path("salary-slip-center/", include("api.salary_slip_center.urls")),
     # ── HR -> Payroll -> Missed Payroll: employees the regular payroll missed; Done writes Payroll (api/missed_payroll/) ──
     path("missed-payroll/", include("api.missed_payroll.urls")),
+    # ── Employees -> Investigation: continuous absence 15 / 30 days, Keep active / inactive, Auto Trigger ──
+    path("employee-investigation/", include("api.investigation.urls")),
     # ── Staff Payroll: Excess tab, Not included view, Payslip tab (payroll_excess_views.py; 2026-11-20) ──
     path("", include("api.urls_payroll_excess")),
     # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──

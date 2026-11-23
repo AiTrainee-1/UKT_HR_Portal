@@ -123,6 +123,17 @@ EMPLOYEES = N(
         "The Active / Inactive switch on a row.",
         apiPatterns=[r"employees/\d+/status"],
     ),
+    # Employees -> Investigation (owner 2026-11-23): continuous absence; marks people inactive, so until a role sets it,
+    # it follows "Activate / deactivate an employee"
+    N(
+        "employees.investigation",
+        "Investigation",
+        "page",
+        "Employees away 15 / 30+ days in a row: their leave, Keep active, Mark inactive, and the nightly Auto Trigger.",
+        routes=["/hr/employees/investigation"],
+        api=["employee-investigation"],
+        inherits="employees.status",
+    ),
     N(
         "employees.profile",
         "Employee profile",

@@ -25,6 +25,9 @@ const hr = (permissions: Perms): User => ({ role: "hr", employeeId: null, permis
 const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/dashboard": "dashboard",
   "/hr/employees": "employees",
+  // Investigation (2026-11-23) is a new page under Employees whose key follows employees.status (itself following
+  // employees): whoever could open the Employees page opens it the same way
+  "/hr/employees/investigation": "employees",
   "/hr/departments": "employees.departments",
   "/hr/designations": "employees.designations",
   "/hr/branches": "employees.branches",

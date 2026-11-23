@@ -19,12 +19,12 @@ import {
 } from "@/lib/api-client";
 import {
   useListBranches, getListBranchesQueryKey,
-  useListEmployeesPaginated, useEmployeeCount,
+  useListEmployeesPaginated, useEmployeeCount, useInvestigationSummary,
 } from "@/lib/api-client/custom-hooks";
 import { useQueryClient } from "@tanstack/react-query";
 import { useAuth, isRouteViewOnly } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { Landmark, Plus, Search, UserCheck, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
+import { Landmark, Plus, Search, UserCheck, UserSearch, UserX, Trash2, Eye, Pencil, UploadCloud } from "lucide-react";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { moduleForPath } from "@/lib/permission-modules";
@@ -148,6 +148,11 @@ export default function Employees() {
     status: "inactive",
   }, { enabled: rosterOpen });
 
+  // Employees -> Investigation: the badge is everyone away 15+ days in a row (the 15 Days and 30 Days lists together).
+  const investigationLevel = level("employees.investigation");
+  const { data: investigation } = useInvestigationSummary({ enabled: rosterOpen && investigationLevel !== "hidden" });
+  const awayCount = investigation ? investigation.d15 + investigation.d30 : 0;
+
   const { data: branches } = useListBranches({ enabled: !isBranchScoped, queryKey: getListBranchesQueryKey() });
   const deleteMutation = useDeleteEmployee();
   const statusMutation = useUpdateEmployeeStatus();
@@ -260,6 +265,28 @@ export default function Employees() {
                     </span>
                   )}
                 </Button>
+                {/* Employees away 15 / 30+ days in a row (its own page, which locks itself when this role may only view it) */}
+                {investigationLevel !== "hidden" && (
+                <Button
+                  variant="outline"
+                  onClick={() => navigate("/hr/employees/investigation")}
+                  className={PHONE_HALF}
+                  data-testid="button-investigation"
+                  title="Employees away from the company 15 days or more in a row"
+                >
+                  <UserSearch size={16} className="mr-2" />
+                  Investigation
+                  {awayCount > 0 && (
+                    <span
+                      className="ml-2 rounded-full bg-gray-200 px-1.5 py-0.5 text-[11px] sm:text-[10px] font-bold text-gray-700"
+                      data-testid="investigation-count"
+                    >
+                      {awayCount}
+                      <span className="sr-only"> away 15 days or more</span>
+                    </span>
+                  )}
+                </Button>
+                )}
                 {/* Only opens the Bulk Upload page, which locks itself when this role may only view it. */}
                 {level("employees.bulk_upload") !== "hidden" && (
                 <Button variant="outline" onClick={() => navigate("/hr/employees/bulk-upload")} className={PHONE_HALF} data-testid="button-bulk-upload">
