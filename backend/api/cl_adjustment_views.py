@@ -1,8 +1,11 @@
 """Casual Leave Carry Forward (owner 2026-11-04): on the HR Casual Leave page (Carry Forward tab) HR turns an employee's
-ABSENT, ON LEAVE or HALF DAY days into Casual Leave from their yearly balance, a full day or a half day each. HR portal
+ABSENT, ON LEAVE or HALF DAY days into Casual Leave from their balance, a full day or a half day each. HR portal
 only for now: the employee apps just read the balance and the Casual Leave, which already include these.
 
-The yearly balance stays a fixed 12 (owner: never add extra days). "Deduct days": HR enters how many days at most (a half
+The balance is the policy's (Settings -> Casual Leave, cl_balance.py; owner: never add extra days here). With the monthly
+allocation and carry forward the picked days come out of what is left now (this month's balance); without carry forward
+each picked date's month must still hold its own days (a date before the employee's start counts in the start's month).
+"Deduct days": HR enters how many days at most (a half
 counts 0.5), the system detects the employee's absent, on-leave and half days of a month, and HR picks dates up to that
 many days, choosing Full day, First half or Second half for each. Exactly the picked dates become approved Casual Leave
 (written as an approved Casual Leave always is: a full day = paid Present 1.00; a half pays its half and the other half
@@ -25,7 +28,7 @@ their days. The number is only the most that may be picked, never a deduction of
     GET  /api/casual-leaves/adjustments?year=&employeeId=&page=&pageSize=
          -> {year, items: [Adjustment], total, page, pageSize, summary: {changes, employees, days}}
 
-Rules: this year's dates up to today only; staff, active, 6 months of service, within the caller's branch; every date must
+Rules: this year's dates up to today only; staff, active, the policy's service, within the caller's branch; every date must
 be absent, on leave or a half day and hold no Casual Leave yet, with a portion that day allows; no more days than the
 number entered nor than the balance has left; a reason always; all or nothing. The log keeps one line per employee per save
 (CasualLeaveAdjustment kind "assign"); it is a record only, the approved Casual Leave itself lowers the balance. Gated by
@@ -412,12 +415,50 @@ def _portion_refusal(o: OpenDay, portion: str) -> str | None:
     return f"{day}: that part of the day cannot be given."
 
 
+def _after_picks(led: cl_balance.YearLedger, picks: list[tuple[date, str]]) -> cl_balance.YearLedger:
+    """The ledger as it will be once the picked dates are approved Casual Leave (a date before the start counts in the
+    start's month, as cl_balance counts a Casual Leave HR gave)."""
+    from dataclasses import replace
+
+    used = list(led.used)
+    for d, portion in picks:
+        month = d.month if led.start is None or d >= led.start else led.start.month
+        used[month - 1] += PORTION_DAYS[portion]
+    return replace(led, used=used)
+
+
+def _room_refusal(led: cl_balance.YearLedger, picks: list[tuple[date, str]], today: date) -> str | None:
+    """Why the picked days do not fit the employee's balance (None when they do)."""
+    if led.start is None:
+        return f"No Casual Leave balance for {today.year}: the policy's service is not complete in {today.year}."
+    total = sum((PORTION_DAYS[p] for _d, p in picks), Decimal("0"))
+    if led.pol.carries_within_year:
+        left = led.available(today.month)
+        if total > left:
+            return f"Only {_days_word(left)} of Casual Leave left, so {_days_word(total)} cannot be given."
+        return None
+    # without carry forward each month's days are for that month only
+    by_month: dict[int, Decimal] = {}
+    for d, portion in picks:
+        month = d.month if d >= led.start else led.start.month
+        by_month[month] = by_month.get(month, Decimal("0")) + PORTION_DAYS[portion]
+    for month, days in sorted(by_month.items()):
+        left = led.available(month)
+        if days > left:
+            name = cl_balance.MONTH_NAMES[month - 1]
+            return (
+                f"Only {_days_word(left)} of {name}'s Casual Leave left (unused days do not carry over), so "
+                f"{_days_word(days)} cannot be given for {name}."
+            )
+    return None
+
+
 @api_view(["POST"])
 @require_hr
 def casual_leave_assign(request: Request) -> Response:
     from django.utils import timezone
 
-    from .casual_leave_views import ELIGIBILITY_MONTHS, _service_months, _write_attendance_for_cl
+    from .casual_leave_views import _write_attendance_for_cl
     from .models import CasualLeaveRequest
 
     data = request.data if isinstance(request.data, dict) else {}
@@ -485,7 +526,8 @@ def casual_leave_assign(request: Request) -> Response:
             e.id: e for e in scope_to_branch(Employee.objects.select_for_update(), request).filter(pk__in=list(seen))
         }
         staff_ids = [i for i in found if found[i].employment_type == "staff"]
-        balances = cl_balance.balances(staff_ids, today.year, cut_over)
+        pol = cl_balance.policy()
+        ledgers = cl_balance.ledgers(staff_ids, today.year, cut_over, pol)
         plan = []
         for emp_id, picks, total in wanted:
             emp = found.get(emp_id)
@@ -498,16 +540,14 @@ def casual_leave_assign(request: Request) -> Response:
             if emp.status != "active":
                 problems.append({"employeeId": emp_id, "error": "This employee is not active."})
                 continue
-            months = _service_months(emp)
-            if months is None:
+            joined = cl_balance.parse_join_date(emp.join_date)
+            if joined is None:
                 problems.append({"employeeId": emp_id, "error": "Join date not set: Casual Leave cannot be given."})
                 continue
-            if months < ELIGIBILITY_MONTHS:
+            if today < cl_balance.eligible_from(joined, pol):
+                done = cl_balance.service_done(joined, today, pol)
                 problems.append(
-                    {
-                        "employeeId": emp_id,
-                        "error": f"Casual Leave starts after {ELIGIBILITY_MONTHS} months of service (now {months}).",
-                    }
+                    {"employeeId": emp_id, "error": f"Casual Leave starts after {pol.service_text()} (now {done})."}
                 )
                 continue
             open_days = {o.date: o for o in _open_days([emp_id], picks[0][0], picks[-1][0])[emp_id]}
@@ -525,16 +565,14 @@ def casual_leave_assign(request: Request) -> Response:
             if refusal:
                 problems.append({"employeeId": emp_id, "error": refusal})
                 continue
-            remaining = Decimal(str(balances[emp_id]["remaining"]))
-            if total > remaining:
-                problems.append(
-                    {
-                        "employeeId": emp_id,
-                        "error": f"Only {_days_word(remaining)} of Casual Leave left, so {_days_word(total)} cannot be given.",
-                    }
-                )
+            led = ledgers[emp_id]
+            if refusal := _room_refusal(led, picks, today):
+                problems.append({"employeeId": emp_id, "error": refusal})
                 continue
-            plan.append((emp, picks, total, remaining))
+            # the balance as the screens show it (this month's), before and after
+            before = led.available(today.month)
+            after = _after_picks(led, picks).available(today.month)
+            plan.append((emp, picks, total, before, after))
 
         if problems:
             names = {e.id: _name(e) for e in found.values()}
@@ -551,7 +589,7 @@ def casual_leave_assign(request: Request) -> Response:
             )
 
         made = []
-        for emp, picks, total, before in plan:
+        for emp, picks, total, before, after in plan:
             for d, portion in picks:
                 cl = CasualLeaveRequest.objects.create(
                     employee=emp,
@@ -582,14 +620,14 @@ def casual_leave_assign(request: Request) -> Response:
                     days=-total,
                     reason=reason,
                     balance_before=before,
-                    balance_after=before - total,
+                    balance_after=after,
                     created_by=actor,
                     kind=CasualLeaveAdjustment.KIND_ASSIGN,
                     dates=[{"date": d.isoformat(), "portion": p} for d, p in picks],
                 )
             )
 
-    for a, (emp, picks, total, before) in zip(made, plan):
+    for a, (emp, picks, total, before, after) in zip(made, plan):
         listed = ", ".join(f"{d.strftime('%d %b %Y')} ({PORTION_WORDS[p]})" for d, p in picks)
         log_action(
             request,
@@ -598,7 +636,7 @@ def casual_leave_assign(request: Request) -> Response:
             record_id=a.id,
             description=(
                 f"Casual Leave {today.year}: {_name(emp)} ({emp.employee_code}) given {_days_word(total)} for "
-                f"{listed}, {cl_balance.number(before)} → {cl_balance.number(before - total)} left. Reason: {reason}"
+                f"{listed}, {cl_balance.number(before)} → {cl_balance.number(after)} left. Reason: {reason}"
             ),
             new_values={"employeeId": emp.id, "dates": [{"date": d.isoformat(), "portion": p} for d, p in picks]},
         )
@@ -608,7 +646,7 @@ def casual_leave_assign(request: Request) -> Response:
     return Response(
         {
             "count": len(made),
-            "days": cl_balance.number(sum((total for _e, _p, total, _b in plan), Decimal("0"))),
+            "days": cl_balance.number(sum((total for _e, _p, total, _b, _a in plan), Decimal("0"))),
             "items": [adjustment_json(a) for a in made],
         },
         status=201,

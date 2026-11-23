@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { CalendarCheck, CalendarHeart, Hourglass, ListChecks, Repeat2, UserCheck, UserX } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { PipelineNote } from "@/components/ApprovalTrail";
@@ -43,6 +43,8 @@ import {
   notEligibleRows,
   portionText,
   requestExportRows,
+  serviceRule,
+  serviceWords,
   sortRequests,
   summarize,
   takenRows,
@@ -137,10 +139,14 @@ export default function CasualLeave() {
   const board = useMemo(() => boardQuery.data?.employees ?? [], [boardQuery.data]);
   const requests = useMemo(() => (requestsQuery.data ?? []) as unknown as ClRequest[], [requestsQuery.data]);
   const summary = useMemo(() => summarize(board, requests), [board, requests]);
-  const months = boardQuery.data?.eligibilityMonths ?? 6;
-  // since 2026-11-02 a month follows the yearly balance (12 a year); an earlier month (or an older server) one a month
+  // the policy of Settings -> Casual Leave (2026-11-21): the service asked for and the days given
+  const service = serviceRule(boardQuery.data);
+  const serviceLabel = serviceWords(service);
+  // since 2026-11-02 a month follows the policy's balance; an earlier month (or an older server) one a month
   const yearly = isYearlyRule(boardQuery.data);
-  const entitlement = boardQuery.data?.yearlyEntitlement ?? 12;
+  const policy = boardQuery.data?.policy;
+  const allowance = policy?.allocationText ?? `${boardQuery.data?.yearlyEntitlement ?? 12} days a year`;
+  const halves = policy?.halfDayAllowed === false ? "full days only" : "a half day counts 0.5";
   const label = monthTitle(year, month);
   const current = isCurrentMonth(year, month, today);
 
@@ -253,8 +259,15 @@ export default function CasualLeave() {
           <div className="min-w-[14rem] flex-1">
             <h2 className="text-2xl font-black text-gray-900">Casual Leave (CL)</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Paid leave · staff only · {yearly ? `${entitlement} days a year (a half day counts 0.5)` : "1 per month"}{" "}
-              · eligible after {months} months of service
+              Paid leave · staff only · {yearly ? `${allowance} (${halves})` : "1 per month"} · eligible after{" "}
+              {serviceLabel} of service ·{" "}
+              <Link
+                href="/hr/settings?tab=casual_leave"
+                className="font-medium text-blue-700 hover:underline"
+                data-testid="cl-policy-link"
+              >
+                Policy
+              </Link>
             </p>
             <PipelineNote workflow="casual_leave" className="mt-1" />
           </div>
@@ -288,7 +301,7 @@ export default function CasualLeave() {
           <StatCard
             label="Not eligible"
             value={boardQuery.isLoading ? "…" : summary.notEligible}
-            sub={`${summary.byReason.not_staff} production · ${summary.byReason.under_service} under ${months} months · ${
+            sub={`${summary.byReason.not_staff} production · ${summary.byReason.under_service} under ${serviceLabel} · ${
               yearly ? `${summary.byReason.no_balance} none left` : `${summary.byReason.used_this_month} used`
             }`}
             icon={UserX}
@@ -416,8 +429,8 @@ export default function CasualLeave() {
                 icon: UserCheck,
                 title: "Nobody is eligible",
                 text: yearly
-                  ? `Staff who have completed ${months} months of service and still have Casual Leave left this year appear here.`
-                  : `Staff who have completed ${months} months of service and have not used this month's Casual Leave appear here.`,
+                  ? `Staff who have completed ${serviceLabel} of service and still have Casual Leave left appear here.`
+                  : `Staff who have completed ${serviceLabel} of service and have not used this month's Casual Leave appear here.`,
               }}
               onExport={() =>
                 exportSheet(`Casual leave eligible ${label}`, BOARD_EXPORT_HEADERS, boardExportRows(eligible))
@@ -453,7 +466,7 @@ export default function CasualLeave() {
                     ...(!yearly || summary.byReason.used_this_month > 0
                       ? [["used_this_month", "Used this month"] as [string, string]]
                       : []),
-                    ["under_service", `Under ${months} months`],
+                    ["under_service", `Under ${serviceLabel}`],
                     ["not_staff", "Production"],
                     ["no_join_date", "No join date"],
                   ],
@@ -479,7 +492,7 @@ export default function CasualLeave() {
             >
               <NotEligibleList
                 rows={notEligible.slice(0, notMore.count)}
-                eligibilityMonths={months}
+                eligibilityMonths={service}
                 onHistory={showHistory}
               />
             </ClTab>

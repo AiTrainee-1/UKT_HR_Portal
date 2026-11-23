@@ -179,6 +179,7 @@ const BASE_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/compensation": "compensation",
   "/hr/salary": "salary",
   // "/hr/salary-slip" (the standalone Salary Slip page, 2026-11-20) comes from the tree: salary_slip_center claims it
+  // "/hr/missed-payroll" (Missed Payroll, 2026-11-23) comes from the tree too: missed_payroll claims it
   "/hr/settlement": "settlement",
   "/hr/reports": "reports",
   "/hr/user-management": "user_management",

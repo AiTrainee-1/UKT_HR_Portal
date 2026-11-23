@@ -51,6 +51,8 @@ const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/compensation": "compensation",
   "/hr/salary": "salary",
   "/hr/salary-slip": "salary_slip",
+  // Missed Payroll (2026-11-23) is a new page whose key inherits payroll: whoever could open Staff Payroll opens it the same way
+  "/hr/missed-payroll": "payroll",
   "/hr/settlement": "settlement",
   // Analytics (2026-11-21) is a new page whose key inherits attendance: whoever could open Attendance opens it the same way
   "/hr/analytics": "attendance",

@@ -108,6 +108,10 @@ NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"payslips/staff(/.*)?", "salary_slip"),
     # Main -> Analytics, 2026-11-21: follows Attendance until a role sets it
     (r"hr-analytics(/.*)?", "attendance"),
+    # Settings -> Casual Leave (the Casual Leave policy), 2026-11-21: follows Settings until a role sets it
+    (r"casual-leave-policy", "settings"),
+    # Payroll -> Missed Payroll, 2026-11-23: follows Staff Payroll until a role sets it
+    (r"missed-payroll(/.*)?", "payroll"),
 )
 
 

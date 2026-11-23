@@ -15,10 +15,11 @@ import { roundUpRupee } from "@/lib/round-up-rupee";
  * May this payroll be paid through a bank file? Never a salary On Hold, never a new joiner not yet added to the payroll
  * (owner 2026-11-10): the server already leaves them out of the month's list, and the file leaves them out again even if
  * it is handed them. A held / new employee released and paid on their own has neither flag any more, so their own
- * one-person file still works.
+ * one-person file still works. Never a payroll added from the Missed Payroll page (2026-11-23): that page pays it with its
+ * own bank file, so it is never paid twice.
  */
-export const isBankFileEligible = (run: Pick<PayrollRunItem, "onHold" | "newJoinerParked">): boolean =>
-  !run.onHold && !run.newJoinerParked;
+export const isBankFileEligible = (run: Pick<PayrollRunItem, "onHold" | "newJoinerParked" | "source">): boolean =>
+  !run.onHold && !run.newJoinerParked && run.source !== "missed_payroll";
 
 /** Which payroll's bank file: the month's ("payroll") or the Skipped Employees' own ("skipped"). */
 export type BankFileSection = "payroll" | "skipped";

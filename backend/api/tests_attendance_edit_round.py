@@ -74,6 +74,10 @@ class RoundBase(Base):
 
     def setUp(self):
         super().setUp()
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         for target in PINNED:
             pin = mock.patch(target, return_value=TODAY)
             pin.start()
@@ -184,7 +188,8 @@ class BalanceMathsTests(RoundBase):
     def test_a_year_wholly_before_the_cut_over_keeps_no_balance(self):
         self.cl(date(2025, 6, 2))
         b = self.balance(2025)
-        self.assertEqual((b["tracked"], b["since"], b["used"], b["remaining"]), (False, None, 0, 12))
+        # no balance is kept for it: nothing given, nothing left (the policy decides from the cut-over, 2026-11-21)
+        self.assertEqual((b["tracked"], b["since"], b["used"], b["remaining"]), (False, None, 0, 0))
 
     def test_the_cut_over_is_a_setting(self):
         self.cl(date(2026, 10, 15))

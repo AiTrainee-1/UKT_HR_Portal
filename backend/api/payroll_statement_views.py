@@ -221,7 +221,11 @@ def _workflow_remarks(payroll: Payroll, remarks: str) -> str:
     """The staff month workflow on the statement (owner 2026-11-10): a held salary says HOLD first; a new joiner not yet
     added to the payroll NEW JOINER (only the Skipped Employees statement lists them); an employee released and paid on
     their own after the month was finalized PAID SEPARATELY with the day (no figure changes)."""
-    if payroll.on_hold:
+    if payroll.source == Payroll.SOURCE_MISSED_PAYROLL:
+        # added from the Missed Payroll page (2026-11-23); paid there, on the day it says
+        paid = payroll.payment_paid_at.astimezone(FACTORY_TZ) if payroll.payment_paid_at else None
+        part = f"MISSED PAYROLL, PAID {paid.day:02d}-{paid.month:02d}-{paid.year}" if paid else "MISSED PAYROLL"
+    elif payroll.on_hold:
         part = "HOLD"
     elif payroll.new_joiner_parked:
         part = "NEW JOINER"
@@ -260,7 +264,7 @@ def _production_values(payroll: Payroll, slip, bd, start, end) -> dict:
     else:
         rate = dec(emp.salary_per_shift)
         worked, absent, late, shifts = None, money(payroll.absent_days), None, money(payroll.present_days)
-    remarks = _remarks(emp, start, end)
+    remarks = _workflow_remarks(payroll, _remarks(emp, start, end)) if payroll.source else _remarks(emp, start, end)
     if period_days is not None and days != period_days:
         # after a change of pay cycle: fewer days (some were paid by another payroll) or more (catch-up days added)
         part = (

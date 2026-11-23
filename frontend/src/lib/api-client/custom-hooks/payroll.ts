@@ -424,6 +424,9 @@ export type PayrollRunItem = {
   paymentPaidBy?: string | null;
   /** Released from hold / new joiner and paid on its own after the month was finalized. */
   releasedFrom?: "hold" | "new_joiner" | null;
+  /** "missed_payroll": added from the Missed Payroll page (2026-11-23) - in the records and the statement, but that page
+   *  pays it, so no bank file here ever includes it; null / absent for every other payroll. */
+  source?: "missed_payroll" | null;
   /** The employee's joining date as the profile holds it (Skipped Employees rows only). */
   joinDate?: string | null;
 };

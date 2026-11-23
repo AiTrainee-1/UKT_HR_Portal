@@ -16,6 +16,7 @@ import {
   whyNot,
   type BoardRow,
   type ClRequest,
+  type ServiceRule,
   type Why,
 } from "./logic";
 
@@ -335,7 +336,8 @@ export function NotEligibleList({
   onHistory,
 }: {
   rows: BoardRow[];
-  eligibilityMonths: number;
+  /** The policy's service rule (a number = months). */
+  eligibilityMonths: number | ServiceRule;
   /** Opens the employee's Casual Leave history (the balance cell is the button). */
   onHistory?: (r: BoardRow) => void;
 }) {

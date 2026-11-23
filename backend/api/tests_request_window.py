@@ -716,6 +716,10 @@ class _Base(TestCase):
         super().setUp()
         approval.clear_cache()
         self.addCleanup(approval.clear_cache)
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         hr = HRUser.objects.create(username="rw_hr", password_hash="x", is_super_admin=True, full_name="Meena")
         self.hr = _bearer({"role": "hr", "hrUserId": hr.id, "name": "Meena"})
         self.emp = _employee("RW1")

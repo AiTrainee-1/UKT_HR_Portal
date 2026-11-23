@@ -20,7 +20,7 @@ import {
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
   CalendarCheck, Bell, Award, TrendingUp, Gift, CreditCard,
   CalendarHeart, MessageCircle, UserCog, FolderOpen, MonitorSmartphone,
-  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned, ClipboardList, Briefcase, BellRing, ReceiptText,
+  Smartphone, Landmark, DoorOpen, Mail, Crown, Fingerprint, MessageSquareText, MapPinned, ClipboardList, Briefcase, BellRing, ReceiptText, CalendarX2,
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────────────────
@@ -156,6 +156,8 @@ export const navGroups: NavGroupData[] = [
       { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
       // slips for any employee, independent of payroll (2026-11-20)
       { path: '/hr/salary-slip', label: 'Salary Slip', icon: ReceiptText },
+      // employees the regular payroll missed for a month; Done adds them to its payroll (2026-11-23)
+      { path: '/hr/missed-payroll', label: 'Missed Payroll', icon: CalendarX2 },
       { path: '/hr/reports', label: 'Reports', icon: BarChart3 },
     ],
   },

@@ -5,6 +5,7 @@ import { ATTENDANCE_SETTINGS, ATTENDANCE_VIEW_OF } from "./AttendanceTab.meta";
 import { PRODUCTION_SHIFT_SETTINGS, PRODUCTION_SHIFT_VIEW_OF } from "./ProductionShiftsTab.meta";
 import { LATE_CYCLE_OF, LATE_DETECTION_SETTINGS, LATE_VIEW_OF } from "./LateDetectionTab.meta";
 import { COMPENSATION_SETTINGS } from "./CompensationTab.meta";
+import { CASUAL_LEAVE_SETTINGS } from "./CasualLeaveTab.meta";
 import { DEVICES_SETTINGS } from "./DevicesTab.meta";
 import { ID_CARD_SETTINGS } from "./IdCardTab.meta";
 import { DOCUMENTS_SETTINGS } from "./DocumentsTab.meta";
@@ -27,6 +28,7 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...PRODUCTION_SHIFT_SETTINGS,
   ...LATE_DETECTION_SETTINGS,
   ...COMPENSATION_SETTINGS,
+  ...CASUAL_LEAVE_SETTINGS,
   ...DEVICES_SETTINGS,
   ...ID_CARD_SETTINGS,
   ...DOCUMENTS_SETTINGS,

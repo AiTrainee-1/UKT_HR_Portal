@@ -10,7 +10,7 @@ Data used (all read-only; nothing here writes):
 
 * Leave: ``LeaveRequest`` (TEXT start/end dates: overlap tests on ISO strings, requests_leave_common) and
   ``CasualLeaveRequest`` (one date, portion full / first_half / second_half = 1 / 0.5 / 0.5 day). Casual Leave balance
-  figures come from ``api/cl_balance.py`` (12 days a calendar year from the cut-over ``PayrollSettings.cl_balance_since``,
+  figures come from ``api/cl_balance.py`` (the Casual Leave policy of Settings, from the cut-over ``PayrollSettings.cl_balance_since``,
   pending holds days, rejected frees them, Carry Forward CL counts whatever its date, a CL on an unworked new-rule birthday
   uses no balance). The cut-over is read without the get_or_create ``cl_balance.since()`` does.
 * Geo: the app records location in three places, and only two of them are punches.
@@ -343,8 +343,9 @@ def _leave_report_run(ctx) -> ReportResult:
         "(Sundays are not counted, holidays are not excluded); a half day counts 0.5. The summary counts an employee's "
         "overlapping requests once per day.",
         f"Casual Leave: one date per request, a full day = 1 and a half day (first or second half) = 0.5. From "
-        f"{display_date(cut_over)} (the cut-over in Settings) every employee has {cl_balance.ENTITLEMENT} Casual Leave "
-        "days a calendar year: approved days use the balance, pending days hold it, a rejected request frees it. Casual "
+        f"{display_date(cut_over)} (the cut-over in Settings) Casual Leave follows the policy in Settings "
+        f"({cl_balance.policy().allocation_text()}): approved days use the balance, pending days hold it, a rejected "
+        "request frees it. Casual "
         "Leave HR gives on the Carry Forward tab uses the balance whatever its date; a Casual Leave on an unworked "
         "birthday under the new birthday rule is a paid birthday leave and uses no balance. Casual Leave dated before "
         "the cut-over followed the older one-per-month rule and is not charged to the yearly balance.",
@@ -552,7 +553,9 @@ def _overall_cl(emp, year: int, y0: date, y1: date, cut_over: date, rows: list, 
     from api.models import CasualLeaveRequest
 
     held = cl_balance.parts([emp.id], y0, y1)[emp.id]
-    bal = cl_balance.balance_json(held, year, cut_over)
+    # the balance as it stands now in this year (December's for a past year), by the policy in Settings
+    pol = cl_balance.policy()
+    bal = cl_balance.balance_json(cl_balance.ledger(emp, year, cut_over=cut_over, pol=pol), cut_over)
     by_request = {p.request_id: p for p in held if p.kind == "casual_leave"}
     proposals = [p for p in held if p.kind == "attendance_correction"]
     cls = list(CasualLeaveRequest.objects.filter(employee_id=emp.id, date__range=(y0, y1)).order_by("date", "id"))
@@ -620,13 +623,11 @@ def _overall_cl(emp, year: int, y0: date, y1: date, cut_over: date, rows: list, 
 
     if bal["tracked"]:
         head = (
-            f"{cl_balance.ENTITLEMENT} days a year from {display_date(bal['since'])}: used {bal['used']}, "
+            f"{pol.allocation_text()} from {display_date(bal['since'])}: used {bal['used']}, "
             f"pending {bal['pending']}, left {bal['remaining']}"
         )
     else:
-        head = (
-            f"No yearly balance for {year}: the {cl_balance.ENTITLEMENT}-day balance starts on {display_date(cut_over)}"
-        )
+        head = f"No Casual Leave balance for {year}: the balance starts on {display_date(cut_over)}"
     extra = []
     if assigned_days:
         extra.append(f"{_days_text(assigned_days)} given by HR on the Carry Forward tab")
@@ -903,7 +904,7 @@ def _overall_run(ctx) -> ReportResult:
         "for leave and Casual Leave and on-duty, and request counts for permissions and missing punches); the second "
         "part lists every request in date order.",
         "Leave days count the request's Monday-Saturday dates inside the year (a half day = 0.5). Casual Leave follows "
-        f"the yearly balance: {cl_balance.ENTITLEMENT} days a calendar year from the cut-over, a half day = 0.5, "
+        f"the policy in Settings: {cl_balance.policy().allocation_text()} from the cut-over, a half day = 0.5, "
         "pending holds days, rejected frees them, Carry Forward days given by HR count whatever their date, and a "
         "Casual Leave on an unworked new-rule birthday uses none.",
         "On-duty days are the IST dates of the requests. Absent / on leave / half days come from the stored attendance "

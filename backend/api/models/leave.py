@@ -432,3 +432,40 @@ class CasualLeaveAdjustment(models.Model):
         db_table = "casual_leave_adjustments"
         ordering = ["-created_at", "-id"]
         indexes = [models.Index(fields=["employee", "year"], name="cl_adjust_emp_year_idx")]
+
+class CasualLeavePolicy(models.Model):
+    """The Casual Leave policy HR sets on Settings -> Casual Leave (owner 2026-11-21: nothing about Casual Leave hardcoded).
+    One row (pk=1, see get()). Read by cl_balance.policy(); the balance engine (cl_balance.py) and the eligibility check
+    (casual_leave_views.check_cl_eligibility) follow it. The day the policy starts counting is
+    PayrollSettings.cl_balance_since (shown and changed on the same tab).
+
+    allocation "monthly": every month the employee is eligible adds `monthly_allocation` days; with `carry_forward` the
+    unused days stay for later months of the year (no monthly limit on them), without it each month's days are for that
+    month only. allocation "yearly": `yearly_allocation` days for the year at once (the rule of 2026-11-02 to 2026-11-21).
+    At 31 December unused days lapse, or with `year_end_carry` move into the next year (at most `year_end_carry_max` days
+    when set)."""
+
+    ELIGIBILITY_MONTHS = "months"
+    ELIGIBILITY_DAYS = "days"
+    ALLOCATION_MONTHLY = "monthly"
+    ALLOCATION_YEARLY = "yearly"
+
+    eligibility_basis = models.CharField(max_length=10, default=ELIGIBILITY_MONTHS, db_default=ELIGIBILITY_MONTHS)
+    eligibility_value = models.IntegerField(default=6, db_default=6)
+    allocation = models.CharField(max_length=10, default=ALLOCATION_MONTHLY, db_default=ALLOCATION_MONTHLY)
+    monthly_allocation = models.DecimalField(max_digits=4, decimal_places=1, default=1, db_default=1)
+    yearly_allocation = models.DecimalField(max_digits=5, decimal_places=1, default=12, db_default=12)
+    carry_forward = models.BooleanField(default=True, db_default=True)
+    year_end_carry = models.BooleanField(default=False, db_default=False)
+    year_end_carry_max = models.DecimalField(max_digits=5, decimal_places=1, null=True, blank=True)
+    half_day_allowed = models.BooleanField(default=True, db_default=True)
+    updated_by = models.CharField(max_length=150, blank=True, default="", db_default="")
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "casual_leave_policy"
+
+    @classmethod
+    def get(cls) -> "CasualLeavePolicy":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

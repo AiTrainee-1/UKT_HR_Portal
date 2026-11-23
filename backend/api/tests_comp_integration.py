@@ -151,6 +151,10 @@ class CasualLeaveOnBirthdayTests(TestCase):
         from .attendance_final import _holiday_dates_for_month
 
         _holiday_dates_for_month.cache_clear()  # cached per month across tests
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         self.addCleanup(_holiday_dates_for_month.cache_clear)
         settings = PayrollSettings.get()
         settings.compensation_feature_enabled = True

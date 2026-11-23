@@ -1088,6 +1088,26 @@ Each cycle page (Weekly, BiWeekly, Monthly) is built like the Staff Payroll page
 
 ---
 
+#### Missed Payroll (Payroll → Missed Payroll, 23 Nov 2026)
+
+`/hr/missed-payroll`, right after Salary Slip in the sidebar. A page of its own for the employees the Staff Payroll or the Production Payroll **missed** for a month: you work their pay out here, check it, and only **Done** adds them to the month's payroll. The Staff and Production Payroll pages work exactly as before; there is no "generate one employee" on them.
+
+- **Staff | Production** tabs and a month picker. Production needs the month to be over (pay is worked out once every shift of the month is complete).
+- **Missed**: active employees by why they were missed. *Not generated* (salary set but no payroll for the month), *Salary not fixed* (no monthly salary / salary per shift on the profile: use **Set salary**, then generate), *On hold* (held on the Staff Payroll), *New joiners* (parked in Skipped → New joiners, or never worked out). Production lists only the days of the month **no payroll pays yet** ("1 Oct – 7 Oct · 7 days · worked 7"); if those days are simply in a cycle period that is not generated yet, generate that period on the Production Payroll instead.
+- **Inactive**: inactive employees who worked in the month or have a payroll of it. They are never mixed into the Missed list.
+- **Not cleared**: employees already IN the month's payroll but not marked Cleared. Listed only so you can check them (link to Payroll Details); they cannot be generated here, which would pay them twice.
+- **Processed**: everyone with figures on this page, by status.
+
+**The steps (tick one or many; the bar shows only what fits each person):**
+1. **Generate**: works the pay out exactly as the Staff / Production Payroll would now (attendance, OT, Excess, PF / ESI / TDS, late deductions, advance instalments) and keeps it on this page. Nothing is written to the payroll. **Figures** shows the breakdown; generate again any time while it is only Generated. **Remove** drops it.
+2. **Clear**: you checked the figures; they are frozen (**Undo clear** to change them).
+3. **Done** (a login for all units): the figures become the employee's payroll and salary slip for the month, marked Cleared, in the month's Staff Payroll list, totals and Salary Statement with the remark **MISSED PAYROLL** (also after Payroll Done). A held salary or a parked new joiner is released into the month with the new figures; no second row is made. The month's advance instalment is taken now, once.
+4. **Paid** (a login for all units): the day it was paid (today or earlier). Staff get the usual "salary paid" phone notification once; production gets none.
+
+A payroll added here is managed **only here**: the Staff / Production Payroll never works it out again, Payroll Details cannot change it, and the month's bank file and Mark as Paid leave it out, so it is never paid twice. Pay it with this page's **Bank file** (only Done, not yet paid, with bank details; the page shows who is in and who is left out first). **Files**: Payroll report (Excel), Salary statement (PDF / Excel) and Bank file, for the ticked employees or the whole list.
+
+**Attendance** on a row opens the employee's month calendar on the page itself; pick a day to see the punches and propose a change. As everywhere, the Department Head and then HR approve it; then press **Generate again** (while the figures are only Generated).
+
 ### 4.7 Settlement (Advances & Loans)
 
 **What it's for:** Managing cash advances and term loans given to employees, with automatic monthly repayment through payroll deduction.
@@ -2276,7 +2296,17 @@ The pipeline is unchanged: Department Head first, then HR; nothing changes until
 
 **The "!" mark: who changed what.** Every day with an HR attendance edit (waiting, applied or rejected; the latest one of that day) carries a **!**: on the HR payroll Details calendar and table, in the mobile app's Attendance calendar and in the Employee Web App's calendar. Clicking or tapping it shows: what HR changed, the change ("Absent (0 shifts) → Casual Leave · Full day (1 shift)"), the reason, who raised it and when, where it stands ("Waiting for Department Head (Suresh Raj)", "Applied - approved by … on 02 Nov 2026", "Rejected by … : comment"), who decided and the comment. In the employee apps an **applied** edit also colours the whole day **indigo** (outline and tint; legend "Edited by HR"); a waiting edit has an amber !, a rejected one a rose !, and those days keep their own colour. A "Revert to automatic" on the day removes the mark.
 
-**Casual Leave: 12 days a year.**
+**Settings → Casual Leave: the Casual Leave policy (21 Nov 2026).** Nothing about Casual Leave is fixed in the program any more: HR sets it on **Settings → Casual Leave** (`/hr/settings?tab=casual_leave`, its own permission *Settings → Casual Leave*; a unit login can read it but only a login for all units can change it). The tab shows the whole policy as one sentence at the top and a **"How a year works out"** strip that works an example employee's year out month by month from the values on screen, before saving.
+- **Service before Casual Leave:** a number of **months** or of **days** after joining (default 6 months; 0 = from the day they join). The balance starts on the day the service is complete; asking is judged on the day of asking, as before. The examples show the day someone who joined on a given date may start.
+- **How the days are given:** **Earned every month** (the default: each month adds its days, e.g. 1, 1.5 or 2, from the month the service is complete; a month's days cannot be used before that month) or **The whole year at once** (e.g. 12 days, the rule from 2 Nov to 21 Nov 2026).
+- **Carry forward unused days** (monthly only, default on): a month's unused days stay for later months of the year **with no monthly limit** (someone who used nothing from January to May may take all of it in June). Off: each month's days end with the month. A Casual Leave already asked for in a later month keeps its days, so an earlier month cannot use them.
+- **Half days** (default on): off = the apps offer Full day only and a half-day request is refused (requests already made stay as they are).
+- **31 December:** unused days **lapse** (default) or **move into the next year**, optionally at most N days. Moving needs carry forward on.
+- **Policy starts on** (2 Nov 2026): Casual Leave dated earlier is never counted (it kept the one-per-month rule).
+- Saving applies at once to every balance (the HR Casual Leave page, the employee apps, Attendance Edit's Casual Leave and Carry Forward), because balances are worked out from the policy each time. Approved Casual Leave stays approved and paid; someone who has already used more than a new rule gives has nothing left until later months add days. Every save is in the activity log with each change ("Days a month 1 -> 2").
+- The HR Casual Leave page's heading says the policy ("1 day a month (a half day counts 0.5) · eligible after 6 months of service · **Policy**", the link opens the tab); a balance history now also lists each month's days as they are added, a month's unused days ending (carry forward off) and days moved into the next year.
+
+**Casual Leave: 12 days a year (2 Nov to 21 Nov 2026; now the "whole year at once" choice of the policy above).**
 - Every staff employee who is eligible (6 months of service, as before) has **12 CL days for the calendar year**. A half-day counts 0.5. Approved and waiting CL both count; a rejected one gives the days back. A CL that HR gives through an attendance edit counts too (it holds its days while waiting).
 - The balance started fresh at **12 for everyone on 2 Nov 2026** (nothing taken earlier counts). Unused days **lapse on 31 December**; a fresh 12 starts on 1 January. Nothing is carried into the next year.
 - Any number of CL in a month while the balance lasts. The same half of the same date cannot be taken twice. Production employees still have no CL; the request window, the approval route and the Casual Leave workflow switch are unchanged.
@@ -2284,7 +2314,7 @@ The pipeline is unchanged: Department Head first, then HR; nothing changes until
 - **HR**: the Casual Leave page's board has a **CL balance** column ("11 of 12 left", with used and waiting under it); clicking it opens that employee's balance history for the year. "No CL left" is a reason and a filter on the Not eligible tab, and the board export has a "CL left this year" column.
 - The Report Center's *Leave Report* and *Individual Employee Overall Leave Report* (Reports → Attendance since 19 Nov 2026; they replace the retired *Casual Leave Eligibility & Usage* report) follow the same rule for November 2026 onwards: Casual Leave counts against the year's balance (a half day is 0.5). A Casual Leave before November 2026 is still judged by the old one-per-month rule.
 
-**Casual Leave → Carry Forward (4 Nov 2026).** A fifth tab on the HR Casual Leave page (`/hr/casual-leave?tab=carry-forward`; HR portal only, nothing changed in the mobile app). The Casual Leave balance stays **12 days a year**: no days can be added.
+**Casual Leave → Carry Forward (4 Nov 2026).** A fifth tab on the HR Casual Leave page (`/hr/casual-leave?tab=carry-forward`; HR portal only, nothing changed in the mobile app). The Casual Leave balance is the policy's (Settings → Casual Leave): no days can be added here. Since 21 Nov 2026 the picked days must fit what is left **now** (this month's balance); with carry forward off, each picked date's month must still hold its own days (a date before the employee's start counts in the start's month).
 - **Balances** lists every staff member with *A year* (12), *Used*, *Waiting* and **Left now** ("10 of 12" with a bar). Search, branch and department filters, the pills *All staff / CL left / None left*, and an Excel export. The clock icon opens the employee's balance history. Staff under 6 months show "Under 6 months". Tick several employees to do them in one go (**Assign CL for them**).
 - **Assign CL** opens **Deduct days**, which turns the days an employee was marked **Absent**, **On Leave** or **Half Day** into Casual Leave, a **full day or a half day** each:
   1. **How many days at most?** Enter a number (or use − / +); half days are allowed (e.g. 2.5) and a half day counts 0.5. It is only the **most** that may be picked, never a deduction by itself, and it cannot be more than the employee has left. The bar at the top shows the 12 days (used, waiting, picked now, left) and "12 → 9.5 of 12 left" as dates are picked.

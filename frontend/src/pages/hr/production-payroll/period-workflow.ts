@@ -219,8 +219,9 @@ export function movedOutPaid(row: Pick<MovedOutRow, "lastPaidThrough" | "paidPer
  * The rows the period's bank file pays (owner 2026-11-16, staff's rules): every row in the period's payroll, whatever
  * the filters on screen show, never a worker waiting in New Joiners.
  */
-export const periodBankRows = <T extends Pick<ProductionPayrollItem, "newJoinerParked">>(runs: readonly T[]): T[] =>
-  runs.filter((r) => !r.newJoinerParked);
+export const periodBankRows = <T extends Pick<ProductionPayrollItem, "newJoinerParked"> & { source?: string | null }>(
+  runs: readonly T[],
+): T[] => runs.filter((r) => !r.newJoinerParked && r.source !== "missed_payroll"); // Missed Payroll pays its own rows
 
 // ── draft payslips of other periods (owner 2026-11-16: a Generated payslip is a draft) ──
 

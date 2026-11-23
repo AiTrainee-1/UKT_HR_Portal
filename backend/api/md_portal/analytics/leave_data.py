@@ -355,6 +355,7 @@ def load_facts(scope: Scope, lo: date, hi: date) -> Facts:
 
 # ─── Casual Leave: portions, carry-forward and the yearly balance (cl_balance.py, read directly) ─────────────────
 
+# the yearly allocation's starting value; the Casual Leave policy in Settings decides now (cl_balance.policy())
 CL_ENTITLEMENT = 12
 CL_HALF_PORTIONS = ("first_half", "second_half")
 CL_PORTION_LABEL = {"full": "Full day", "first_half": "Half day (first half)", "second_half": "Half day (second half)"}
@@ -393,10 +394,14 @@ class ClBalance:
     assigned_days: float = 0.0  # of `used`: given by HR for absent / on-leave dates (Carry Forward)
     assigned_dates: list[str] = field(default_factory=list)
     half_days: int = 0  # half-day Casual Leave pieces among them
+    given: float = 0.0  # what the policy has given so far this year (carried in + the months so far, or the year's days)
+    left: float | None = None  # what may still be asked for now (cl_balance's own reading)
 
     @property
     def remaining(self) -> float:
-        return max(0.0, CL_ENTITLEMENT - self.used - self.pending)
+        if self.left is not None:
+            return self.left
+        return max(0.0, self.given - self.used - self.pending)
 
 
 _PEOPLE_VALUES = (
@@ -412,15 +417,26 @@ _PEOPLE_VALUES = (
 
 
 def load_cl_balances(scope: Scope, year: int) -> tuple[list[ClBalance], dict]:
-    """The Casual Leave balance of every active staff member in ``scope`` for ``year`` (cl_balance.balance_json's rule:
-    12 days; approved + pending days dated in the year count from max(cut-over, 1 January), a Carry Forward Casual Leave
-    whatever its date; a half day 0.5). Four queries (settings, people, Casual Leave, pending HR proposals). A Casual Leave
-    on a not-worked birthday under the new birthday rule uses no balance in the HRMS; it is not told apart here.
-    Returns (rows, meta) with meta = {"cutOver", "since", "tracked"}."""
+    """The Casual Leave balance of every active staff member in ``scope`` for ``year``. used / pending / Carry Forward /
+    half days are counted here (approved + pending days dated in the year from max(cut-over, 1 January), a Carry Forward
+    Casual Leave whatever its date; a half day 0.5); what the policy gave and what is left come from cl_balance itself
+    (the Casual Leave policy in Settings: days a month or a year, carry forward, the employee's own start after their
+    service), so the MD sees the HRMS's own balance. A Casual Leave on a not-worked birthday under the new birthday rule
+    uses no balance in the HRMS; the used figure here does not tell it apart.
+    Returns (rows, meta) with meta = {"cutOver", "since", "tracked", "allocationText", "yearDays"}."""
     cut_over = cl_cut_over()
     first = max(cut_over, date(year, 1, 1))
     last = date(year, 12, 31)
-    meta = {"cutOver": cut_over.isoformat(), "since": first.isoformat() if first <= last else None, "tracked": first <= last}
+    from api import cl_balance
+
+    pol = cl_balance.policy()
+    meta = {
+        "cutOver": cut_over.isoformat(),
+        "since": first.isoformat() if first <= last else None,
+        "tracked": first <= last,
+        "allocationText": pol.allocation_text(),
+        "yearDays": float(pol.monthly * 12 if pol.monthly_mode else pol.yearly),
+    }
     rows: dict[int, ClBalance] = {}
     for p in scope.employees().exclude(employment_type="production").order_by("id").values(*_PEOPLE_VALUES):
         shim = {f"employee__{k}": v for k, v in p.items() if k != "id"}
@@ -456,6 +472,10 @@ def load_cl_balances(scope: Scope, year: int) -> tuple[list[ClBalance], dict]:
         requested_values__option="casual_leave",
     ).values("employee_id", "requested_values"):
         rows[req["employee_id"]].pending += portion_days((req["requested_values"] or {}).get("portion"))
+    for emp_id, led in cl_balance.ledgers(list(rows), year, cut_over, pol).items():
+        block = cl_balance.balance_json(led, cut_over)
+        rows[emp_id].given = float(block["total"])
+        rows[emp_id].left = float(block["remaining"])
     return list(rows.values()), meta
 
 

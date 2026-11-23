@@ -602,6 +602,7 @@ def mark_paid(cycle: str, start: date, end: date, paid_on: date, actor: str) -> 
             period_rows(cycle, start, end)
             .filter(MAIN_Q)
             .exclude(payment_status=Payroll.PAYMENT_PAID)
+            .exclude(source=Payroll.SOURCE_MISSED_PAYROLL)  # paid on the Missed Payroll page (2026-11-23)
             .values_list("id", flat=True)
         )
         Payroll.objects.filter(id__in=ids).update(

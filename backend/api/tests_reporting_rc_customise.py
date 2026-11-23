@@ -102,6 +102,10 @@ class _World(TestCase):
     @classmethod
     def setUpTestData(cls):
         _ensure_production_seed()
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         config = ProductionShiftConfig.get()
         config.rules_effective_from = EFFECTIVE
         config.save()

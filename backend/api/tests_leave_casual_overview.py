@@ -11,6 +11,7 @@ from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
 
+from . import cl_balance
 from .casual_leave_views import board_reference_date, eligible_from
 from .jwt_utils import sign_token
 from .models import (
@@ -25,6 +26,8 @@ from .models import (
 )
 
 TODAY = date(2026, 10, 15)
+# the policy's starting service rule (Settings -> Casual Leave decides; these tests pin it, no database)
+SIX_MONTHS = cl_balance.Policy(basis="months", service=6)
 
 
 def _bearer(payload: dict) -> dict:
@@ -33,22 +36,35 @@ def _bearer(payload: dict) -> dict:
 
 class EligibleFromTests(SimpleTestCase):
     def test_six_calendar_months_after_joining(self):
-        self.assertEqual(eligible_from(date(2026, 4, 15)), date(2026, 10, 15))
-        self.assertEqual(eligible_from(date(2025, 12, 1)), date(2026, 6, 1))
-        self.assertEqual(eligible_from(date(2026, 1, 31)), date(2026, 7, 31))
+        self.assertEqual(eligible_from(date(2026, 4, 15), SIX_MONTHS), date(2026, 10, 15))
+        self.assertEqual(eligible_from(date(2025, 12, 1), SIX_MONTHS), date(2026, 6, 1))
+        self.assertEqual(eligible_from(date(2026, 1, 31), SIX_MONTHS), date(2026, 7, 31))
 
     def test_joining_on_a_day_the_target_month_lacks_moves_to_the_first_day_that_counts_six_months(self):
         # 31 Aug + 6 months has no 31 Feb: the count is still five on 28 Feb, six on 1 Mar
-        self.assertEqual(eligible_from(date(2026, 8, 31)), date(2027, 3, 1))
-        self.assertEqual(eligible_from(date(2023, 8, 31)), date(2024, 3, 1))  # leap year: 29 Feb is still five
+        self.assertEqual(eligible_from(date(2026, 8, 31), SIX_MONTHS), date(2027, 3, 1))
+        # leap year: 29 Feb is still five
+        self.assertEqual(eligible_from(date(2023, 8, 31), SIX_MONTHS), date(2024, 3, 1))
 
     def test_the_date_is_exactly_the_first_one_the_service_count_reaches_six(self):
         from .casual_leave_views import _months_between
 
         for joined in (date(2026, 4, 15), date(2026, 8, 31), date(2025, 11, 30), date(2026, 2, 28)):
-            on = eligible_from(joined)
+            on = eligible_from(joined, SIX_MONTHS)
             self.assertGreaterEqual(_months_between(joined, on), 6, joined)
             self.assertLess(_months_between(joined, date.fromordinal(on.toordinal() - 1)), 6, joined)
+
+
+class EligibleFromDaysTests(SimpleTestCase):
+    def test_a_policy_counting_days_adds_that_many_days(self):
+        days = cl_balance.Policy(basis="days", service=180)
+        self.assertEqual(eligible_from(date(2026, 1, 1), days), date(2026, 6, 30))
+        self.assertEqual(
+            eligible_from(date(2026, 12, 31), cl_balance.Policy(basis="days", service=1)), date(2027, 1, 1)
+        )
+        self.assertEqual(
+            eligible_from(date(2026, 4, 15), cl_balance.Policy(basis="months", service=0)), date(2026, 4, 15)
+        )
 
 
 class ReferenceDateTests(SimpleTestCase):

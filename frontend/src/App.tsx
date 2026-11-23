@@ -103,6 +103,7 @@ const ProductionEmployees = lazy(() => import("@/pages/hr/ProductionEmployees"))
 const FactoryEmployees = lazy(() => import("@/pages/hr/FactoryEmployees"));
 const Settlement = lazy(() => import("@/pages/hr/Settlement"));
 const SalarySlipCenter = lazy(() => import("@/pages/hr/SalarySlipCenter"));
+const MissedPayroll = lazy(() => import("@/pages/hr/MissedPayroll"));
 const Compensation = lazy(() => import("@/pages/hr/Compensation"));
 const Reports = lazy(() => import("@/pages/hr/Reports"));
 const CustomReportBuilder = lazy(() => import("@/pages/hr/report-center/customise/CustomReportBuilderPage"));
@@ -556,6 +557,11 @@ function Router() {
         {/* Salary Slip (2026-11-20): slips for any employee, independent of payroll; gated by `salary_slip_center` */}
         <Route path="/hr/salary-slip">
           {() => <ProtectedRoute component={SalarySlipCenter} allowedRoles={["hr"]} />}
+        </Route>
+        {/* Missed Payroll (2026-11-23): employees the regular payroll missed; Done adds them to the month's payroll; gated
+          by `missed_payroll` */}
+        <Route path="/hr/missed-payroll">
+          {() => <ProtectedRoute component={MissedPayroll} allowedRoles={["hr"]} />}
         </Route>
         <Route path="/hr/notifications">
           {() => <ProtectedRoute component={HrNotifications} allowedRoles={["hr"]} />}

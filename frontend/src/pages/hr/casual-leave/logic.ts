@@ -3,7 +3,7 @@
 // (staff only, six months of service; since 2026-11-02 a yearly balance of 12 days, before that one a month; pending or
 // approved counts); this only reads back what the API decided and words it.
 
-import type { CasualLeaveBalance } from "@/lib/api-client/custom-hooks";
+import type { CasualLeaveBalance, CasualLeavePolicy } from "@/lib/api-client/custom-hooks";
 import type { ApprovalProgress } from "@/lib/approval-workflow";
 import {
   ALL,
@@ -30,6 +30,8 @@ export type ClRule = "yearly_balance" | "one_per_month";
 export type BoardRow = PersonFields & {
   joinDate?: string | null;
   serviceMonths: number | null;
+  /** Added 2026-11-21: service in days (the policy may count days). */
+  serviceDays?: number | null;
   eligible: boolean;
   reason?: string | null;
   reasonCode?: ReasonCode | null;
@@ -55,7 +57,8 @@ export type BoardRow = PersonFields & {
 export type ClBoard = {
   month: number;
   year: number;
-  eligibilityMonths: number;
+  /** The months of service the policy asks for; null when it counts days (see `policy`). */
+  eligibilityMonths: number | null;
   referenceDate?: string;
   monthStart?: string;
   monthEnd?: string;
@@ -65,7 +68,27 @@ export type ClBoard = {
   rule?: ClRule;
   cutOver?: string;
   yearlyEntitlement?: number;
+  /** Added 2026-11-21: the policy of Settings -> Casual Leave. */
+  policy?: CasualLeavePolicy;
 };
+
+/** The service the policy asks for before Casual Leave: N months, or N days. */
+export type ServiceRule = { basis: "months" | "days"; value: number };
+
+/** The board's service rule (an older server knew months only). */
+export function serviceRule(board: Pick<ClBoard, "eligibilityMonths" | "policy"> | null | undefined): ServiceRule {
+  if (board?.policy) return { basis: board.policy.eligibilityBasis, value: board.policy.eligibilityValue };
+  return { basis: "months", value: board?.eligibilityMonths ?? 6 };
+}
+
+/** "6 months" / "180 days" / "1 month". */
+export function serviceWords(rule: ServiceRule): string {
+  const unit = rule.basis === "days" ? "day" : "month";
+  return `${rule.value} ${unit}${rule.value === 1 ? "" : "s"}`;
+}
+
+const ruleOf = (service: number | ServiceRule): ServiceRule =>
+  typeof service === "number" ? { basis: "months", value: service } : service;
 
 /** The board's month follows the yearly balance. */
 export const isYearlyRule = (board: Pick<ClBoard, "rule"> | null | undefined): boolean =>
@@ -165,15 +188,32 @@ function reasonWithoutCode(row: BoardRow): ReasonCode | null {
 }
 
 /** Why an employee cannot take Casual Leave this month, in words HR can read out; null when they can. Someone who is
- *  under six months is told the day they qualify. The server's `eligible` decides: under the yearly rule someone who took
- *  Casual Leave this month is still eligible while their balance lasts, so "used this month" alone never makes a reason. */
-export function whyNot(row: BoardRow, months = 6): Why | null {
+ *  still too new is told the day they qualify. The server's `eligible` decides: under the balance rule someone who took
+ *  Casual Leave this month is still eligible while their balance lasts, so "used this month" alone never makes a reason.
+ *  `service`: the policy's service rule (a number = months, as before). */
+export function whyNot(row: BoardRow, service: number | ServiceRule = 6): Why | null {
   if (row.eligible) return null;
   const code = row.reasonCode ?? reasonWithoutCode(row);
   switch (code) {
     case "no_balance": {
       const b = row.balance;
       const waiting = b?.pending ? ` (${days(b.pending)} of them waiting for approval)` : "";
+      if (b && b.tracked && b.allocation === "monthly") {
+        // earned month by month (Settings -> Casual Leave): the next month adds its days
+        const month = Number((b.asOf ?? "").slice(5, 7)) || 0;
+        const next =
+          month > 0 && month < 12 && b.perMonth
+            ? `Next month adds ${days(b.perMonth)}.`
+            : "A new year's days start on 1 January.";
+        return {
+          code,
+          title: "No Casual Leave left this month",
+          detail: b.carryForward
+            ? `All ${days(b.total)} days given so far in ${b.year} are used or asked for${waiting}. ${next}`
+            : `This month's ${days(b.perMonth ?? 0)} days are used or asked for${waiting}. ${next}`,
+          tone: "info",
+        };
+      }
       return {
         code,
         title: "No Casual Leave left this year",
@@ -199,12 +239,13 @@ export function whyNot(row: BoardRow, months = 6): Why | null {
         tone: "danger",
       };
     case "under_service": {
-      const done = row.serviceMonths ?? 0;
+      const rule = ruleOf(service);
+      const done = (rule.basis === "days" ? row.serviceDays : row.serviceMonths) ?? 0;
       const from = row.eligibleFrom ? ` Becomes eligible on ${longDate(row.eligibleFrom)}.` : "";
       return {
         code,
-        title: `Under ${months} months of service`,
-        detail: `${done} of ${months} months completed.${from}`,
+        title: `Under ${serviceWords(rule)} of service`,
+        detail: `${done} of ${serviceWords(rule)} completed.${from}`,
         tone: "warning",
       };
     }

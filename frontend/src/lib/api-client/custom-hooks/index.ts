@@ -46,9 +46,12 @@ export * from "./staff-payslips";
 export * from "./payroll-excess";
 // The standalone Salary Slip page (/hr/salary-slip, 2026-11-20): slips for any employee, statement, bank file, Hold
 export * from "./salary-slip-center";
+// The Missed Payroll page (/hr/missed-payroll, 2026-11-23): employees the regular payroll missed; Generate, Clear, Done, Paid
+export * from "./missed-payroll";
 export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";
+export * from "./casual-leave-policy";
 export * from "./shifts";
 export * from "./system";
 export * from "./whatsapp";

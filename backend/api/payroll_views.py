@@ -10,6 +10,12 @@ so every rupee can be explained to the employee.
 """
 
 
+# A payroll added from the Missed Payroll page (Payroll.source "missed_payroll") belongs to that page (2026-11-23).
+MISSED_PAYROLL_OWNS = (
+    "Added to this month's payroll from the Missed Payroll page: it is managed there and not worked out again here."
+)
+
+
 class PayrollSkip(Exception):
     """Raised by the payroll engines with a precise, user-facing reason an
     employee was skipped -so the Generate Payroll result always tells HR
@@ -507,10 +513,17 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
     for this month (no salary configured, no working days, etc).
 
     A month finalized with Payroll Done (payroll_month_workflow.py) is locked: this raises MonthLocked and writes
-    nothing. `allow_locked` is only for the skip check's dry run, which is always rolled back.
+    nothing. `allow_locked` is only for the dry runs (skip check, Missed Payroll), which are always rolled back.
+
+    A payroll added from the Missed Payroll page (source "missed_payroll", 2026-11-23) is that page's: it is never worked
+    out again here (PayrollSkip), whoever calls the engine.
     """
     if not allow_locked:
         month_workflow.assert_open(month, year)
+    if Payroll.objects.filter(
+        employee=emp, month=month, year=year, week_number=None, source=Payroll.SOURCE_MISSED_PAYROLL
+    ).exists():
+        raise PayrollSkip(MISSED_PAYROLL_OWNS)
     if not emp.salary_amount:
         raise PayrollSkip("No Salary Amount set on this employee's profile")
 
@@ -1052,6 +1065,7 @@ def _generate_production_payroll(
     prod_config=None,
     pay_ranges=None,
     replace_drafts: bool = False,
+    allow_locked: bool = False,
 ) -> dict:
     """
     Shift-based payroll for production employees -completely separate from
@@ -1090,13 +1104,20 @@ def _generate_production_payroll(
     A payroll HR marked Cleared STAYS Cleared when it is generated again
     (owner 2026-11-05/06, as on Staff Payroll): only the figures are worked
     out again.
+
+    `allow_locked` (2026-11-23) is only for the Missed Payroll page's dry run, which is always rolled back. A payroll that
+    page added (source "missed_payroll") is never worked out again here.
     """
     from . import production_period_workflow as period_workflow
 
     # A period finalized with Payroll Done is locked for good, and a salary marked Paid is never worked out again (owner
     # 2026-11-16, production_period_workflow.py): checked here too, whoever calls the engine.
-    if pay_cycle and period_workflow.is_locked(pay_cycle, period_start, period_end):
+    if pay_cycle and not allow_locked and period_workflow.is_locked(pay_cycle, period_start, period_end):
         raise PayrollSkip(period_workflow.locked_message(pay_cycle, period_start, period_end))
+    if Payroll.objects.filter(
+        employee=emp, period_start=period_start, period_end=period_end, source=Payroll.SOURCE_MISSED_PAYROLL
+    ).exists():
+        raise PayrollSkip(MISSED_PAYROLL_OWNS)
     if Payroll.objects.filter(
         employee=emp, period_start=period_start, period_end=period_end, payment_status=Payroll.PAYMENT_PAID
     ).exists():
@@ -1976,6 +1997,8 @@ def patch_production_payroll(request: Request, p: Payroll) -> Response:
 
     if period_workflow.level(request, period_workflow.KEY_SECTION) != "edit":
         return _error("You do not have access to this section.", 403)
+    if p.source == Payroll.SOURCE_MISSED_PAYROLL:
+        return _error(month_workflow.MISSED_PAYROLL_HERE, 409)
     if period_workflow.row_locked(p):
         return _error(period_workflow.row_locked_message(p), 409)
     if p.payment_status == Payroll.PAYMENT_PAID:
@@ -2048,6 +2071,9 @@ def payroll_detail(request: Request, pk: int) -> Response:
     ).filter(pk=pk).first()
     if not p:
         return _error("Not found", 404)
+    if p.source == Payroll.SOURCE_MISSED_PAYROLL:
+        # added from the Missed Payroll page (2026-11-23): managed there only
+        return _error(month_workflow.MISSED_PAYROLL_HERE, 409)
     if p.period_start is not None and p.salary_mode == Payroll.SALARY_MODE_SHIFT:
         # a production period row follows the Production Payroll rights and its period's lock (2026-11-16), also here
         return patch_production_payroll(request, p)

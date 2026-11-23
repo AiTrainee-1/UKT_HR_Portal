@@ -93,7 +93,12 @@ export type LvToday = MdEnvelope & {
 };
 
 export type LvCasual = {
+  /** The days a full year gives (the Casual Leave policy in Settings). */
   entitlement: number;
+  /** "1 day a month" / "12 days a year" (added 2026-11-21; absent on an older server). */
+  allocationText?: string;
+  /** What the policy has given so far this year, all staff together. */
+  given?: number;
   tracked: boolean;
   since: string | null;
   cutOver: string;

@@ -77,6 +77,10 @@ def ist(y, m, d, hh=10, mm=0):
 class _Base(TestCase):
     @classmethod
     def setUpTestData(cls):
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         ps = PayrollSettings.get()
         ps.cl_balance_since = date(2026, 3, 10)
         ps.permission_monthly_cap = 3

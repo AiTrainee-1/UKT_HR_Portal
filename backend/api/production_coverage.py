@@ -240,6 +240,7 @@ _ROW_FIELDS = (
     "status",
     "payment_status",
     "final_salary",
+    "source",
 )
 
 
@@ -278,8 +279,14 @@ def spans_for_employees(employee_ids) -> dict[int, list[PaidSpan]]:
         .values_list(*_ROW_FIELDS)
     )
     is_final = FinalRule()
-    for pk, emp_id, mode, month, year, start, end, ranges, cycle, status, payment, net in rows:
-        final = True if start is None or end is None else is_final(cycle, start, end, payment)
+    for pk, emp_id, mode, month, year, start, end, ranges, cycle, status, payment, net, source in rows:
+        # a row added from the Missed Payroll page (2026-11-23) is final: Done put it in the month's payroll for good, so
+        # no period ever replaces it as a draft or pays its days again
+        final = (
+            True
+            if start is None or end is None or source == Payroll.SOURCE_MISSED_PAYROLL
+            else is_final(cycle, start, end, payment)
+        )
         out[emp_id].extend(
             spans_of_row(
                 payroll_id=pk,

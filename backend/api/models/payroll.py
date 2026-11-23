@@ -415,6 +415,12 @@ class Payroll(models.Model):
     RELEASED_FROM_HOLD = "hold"
     RELEASED_FROM_NEW_JOINER = "new_joiner"
     released_from = models.TextField(null=True, blank=True, db_column="released_from")
+    # Who wrote the row (2026-11-23): "" = the regular Staff / Production Payroll; "missed_payroll" = Done on the Missed
+    # Payroll page (api/missed_payroll/). Such a row is in the month's records and statement, but the page pays it: the
+    # month's bank file and Mark as Paid leave it out, and the regular engines never work it out again.
+    SOURCE_PAYROLL = ""
+    SOURCE_MISSED_PAYROLL = "missed_payroll"
+    source = models.TextField(blank=True, default="", db_default="", db_column="source")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

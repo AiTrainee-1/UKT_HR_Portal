@@ -49,6 +49,8 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   "/hr/analytics",
   // Salary Slip puts the Refresh button in its title row, beside the month
   "/hr/salary-slip",
+  // Missed Payroll puts the Refresh button in its title row, beside the month
+  "/hr/missed-payroll",
   "/hr/account-management",
   "/hr/user-management",
   "/hr/notifications",

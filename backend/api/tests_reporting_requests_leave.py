@@ -132,6 +132,10 @@ def data_rows(body):
 class Base(TestCase):
     @classmethod
     def setUpTestData(cls):
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         cls.b1 = Branch.objects.create(name="Unit 1", code="RLB1")
         cls.b2 = Branch.objects.create(name="Unit 2", code="RLB2")
         cls.cutting = Department.objects.create(name="CUTTING", branch=cls.b1)

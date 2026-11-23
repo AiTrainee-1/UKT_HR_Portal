@@ -47,6 +47,10 @@ class _Staff(TestCase):
 
     def setUp(self):
         approval.clear_cache()
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
         for target in (
             "api.casual_leave_views.ist_today",
             "api.request_window.ist_today",

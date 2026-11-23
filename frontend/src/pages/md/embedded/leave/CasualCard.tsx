@@ -55,7 +55,7 @@ export default function CasualCard({
       title={`Casual Leave ${year ?? ""}`.trim()}
       subtitle={
         c
-          ? `${num(c.entitlement)} days a year for each of ${num(c.employees)} staff, from ${dayLong(c.since ?? c.cutOver)}; waiting requests hold days too`
+          ? `${c.allocationText ?? `${num(c.entitlement)} days a year`} for each of ${num(c.employees)} staff, from ${dayLong(c.since ?? c.cutOver)}; waiting requests hold days too`
           : undefined
       }
       loading={query.isPending}

@@ -350,7 +350,8 @@ class BirthdayWorkedTests(eng.ClaimsEngineBase):
         return cl_balance.parts([self.emp.id], date(2026, 1, 1), date(2026, 12, 31))[self.emp.id]
 
     def balance(self):
-        return cl_balance.balance_json(self.held(), 2026, date(2026, 1, 1))
+        cut_over = date(2026, 1, 1)
+        return cl_balance.balance_json(cl_balance.ledger(self.emp, 2026, cut_over=cut_over), cut_over)
 
     def outcome(self):
         return effects.birthday_outcome(self.emp, THU, refresh=True)

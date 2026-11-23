@@ -23,6 +23,7 @@ Modules (each only imports from ones listed before it):
   factory      Employees -> Factory Employees: the page's labels (Driver, Housekeeping, Chef ...).
   payroll_excess Staff Payroll -> Excess tab: amounts HR adds to (Excess) or takes off (Detection) a month's salary.
   salary_slip_center HR -> Payroll -> Salary Slip: standalone salary slips (no payroll) and the page's own Hold switch.
+  missed_payroll HR -> Payroll -> Missed Payroll: payroll for employees the regular payroll missed (Done writes Payroll).
 """
 
 from .core import (
@@ -46,6 +47,7 @@ from .leave import (
     EmployeeRequest,
     CasualLeaveRequest,
     CasualLeaveAdjustment,
+    CasualLeavePolicy,
     EmployeePermission,
 )
 from .attendance import (
@@ -216,5 +218,6 @@ from .attendance_notify import (
 )
 from .report_center import SavedCustomReport
 from .salary_slip_center import StandaloneSalaryHold, StandaloneSalarySlip
+from .missed_payroll import MissedPayroll
 from .payroll_excess import PayrollExcessEntry, PayrollExcessHistory
 from .factory import FactoryLabel

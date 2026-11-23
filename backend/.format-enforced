@@ -442,6 +442,7 @@ api/models/hod_reminders.py
 api/tests_hod_reminders.py
 api/cl_adjustment_views.py
 api/tests_cl_adjustments.py
+api/tests_cl_policy.py
 api/salary_slip_figures.py
 api/tests_salary_slip_figures.py
 api/reporting/definitions/hr_reports_salary_statement_files.py
@@ -599,6 +600,15 @@ api/salary_slip_center/statement.py
 api/salary_slip_center/bank_file.py
 api/salary_slip_center/views.py
 api/salary_slip_center/urls.py
+api/models/missed_payroll.py
+api/missed_payroll/__init__.py
+api/missed_payroll/engine.py
+api/missed_payroll/lists.py
+api/missed_payroll/service.py
+api/missed_payroll/exports.py
+api/missed_payroll/views.py
+api/missed_payroll/urls.py
+api/tests_missed_payroll.py
 api/tests_salary_slip_center.py
 api/models/payroll_excess.py
 api/payroll_excess.py

@@ -19,6 +19,7 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   production_shifts: "settings.production_shifts",
   late_detection: "settings.late_detection",
   compensation: "settings.compensation",
+  casual_leave: "settings.casual_leave",
   devices: "settings.devices",
   idcard: "settings.idcard",
   documents: "settings.documents",

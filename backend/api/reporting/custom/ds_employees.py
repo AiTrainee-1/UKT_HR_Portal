@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from datetime import date
 
 
-from api.cl_balance import ENTITLEMENT, balance_json, parts, since
+from api.cl_balance import balance_json, ledgers, parts, since
 from api.models import EmployeePermission, MissingPunchRequest, OnDutySession
 from api.models.payroll import CL_BALANCE_DEFAULT_SINCE
 from api.payroll_insights import assignments_on
@@ -138,7 +138,7 @@ FIELDS = (
         "att.cl_balance",
         "CL balance left (year)",
         NUMBER,
-        f"Of the {ENTITLEMENT} Casual Leave days of the month's year (staff)",
+        "What is left of the Casual Leave in the month (the policy in Settings; staff)",
         "cl_balance",
         None,
         ("attendance", "casual_leave"),
@@ -378,6 +378,8 @@ def _attendance(ctx, employees, start: date, end: date, needs: set[str]):
         # the Casual Leave of the whole year in one read (two queries): the month's days and the year's balance
         cut_over = _cut_over(data.settings if data is not None else None)
         held = parts(ids, date(start.year, 1, 1), date(start.year, 12, 31))
+        # the balance as it stood in the report's month, by the policy in Settings
+        year_ledgers = ledgers(ids, start.year, cut_over) if "cl_balance" in needs else {}
         for emp in employees:
             items = held.get(emp.id, [])
             if "cl" in needs:
@@ -392,7 +394,7 @@ def _attendance(ctx, employees, start: date, end: date, needs: set[str]):
                     )
                 )
             if "cl_balance" in needs:
-                block = balance_json(items, start.year, cut_over)
+                block = balance_json(year_ledgers[emp.id], cut_over, today=end)
                 staff = not A.is_production(emp)
                 out[emp.id]["att.cl_balance"] = block["remaining"] if staff and block["tracked"] else None
     if "onduty" in needs and employees:

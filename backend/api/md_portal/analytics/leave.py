@@ -1078,12 +1078,12 @@ def leave_balances(scope: Scope, year: int | None = None, limit: int = LIST_DEFA
 
 
 def _casual_balance(scope: Scope, year: int, limit: int) -> dict:
-    """Casual Leave's own year: 12 days each, used / waiting / left, who has used it up or is close, and the days HR turned
-    into Casual Leave on the Carry Forward tab."""
+    """Casual Leave's own year by the policy in Settings (days a month or a year): given so far, used / waiting / left,
+    who has used it up or is close, and the days HR turned into Casual Leave on the Carry Forward tab."""
     rows, meta = D.load_cl_balances(scope, year)
     used = round(sum(r.used for r in rows), 1)
     pending = round(sum(r.pending for r in rows), 1)
-    entitled = D.CL_ENTITLEMENT * len(rows)
+    entitled = sum(r.given for r in rows)
     exhausted = [r for r in rows if r.remaining <= 0]
     low = [r for r in rows if 0 < r.remaining <= D.CL_LOW_DAYS]
     assigned = [r for r in rows if r.assigned_days]
@@ -1100,17 +1100,20 @@ def _casual_balance(scope: Scope, year: int, limit: int) -> dict:
 
     by_dept: dict[str, dict] = {}
     for r in rows:
-        d = by_dept.setdefault(r.who.dept, {"label": r.who.dept, "employees": 0, "used": 0.0, "pending": 0.0})
+        d = by_dept.setdefault(
+            r.who.dept, {"label": r.who.dept, "employees": 0, "used": 0.0, "pending": 0.0, "given": 0.0}
+        )
         d["employees"] += 1
         d["used"] += r.used
         d["pending"] += r.pending
+        d["given"] += r.given
     dept_rows = sorted(
         (
             {
-                **d,
+                **{k: v for k, v in d.items() if k != "given"},
                 "used": round(d["used"], 1),
                 "pending": round(d["pending"], 1),
-                "usedPct": pct(d["used"], D.CL_ENTITLEMENT * d["employees"]),
+                "usedPct": pct(d["used"], d["given"]),
                 "usedPerEmployee": round(d["used"] / d["employees"], 2) if d["employees"] else None,
             }
             for d in by_dept.values()
@@ -1119,7 +1122,10 @@ def _casual_balance(scope: Scope, year: int, limit: int) -> dict:
     )
     ranked = sorted(rows, key=lambda r: (r.remaining, -r.used, r.who.code))
     return {
-        "entitlement": D.CL_ENTITLEMENT,
+        # the days a full year gives (the policy in Settings) and the policy in words
+        "entitlement": meta["yearDays"],
+        "allocationText": meta["allocationText"],
+        "given": round(entitled, 1),
         "tracked": meta["tracked"],
         "since": meta["since"],
         "cutOver": meta["cutOver"],
@@ -1148,13 +1154,13 @@ def _casual_provenance(scope: Scope, year: int, casual: dict) -> dict:
         "Casual Leave balance",
         dataset="Casual leave requests, attendance edits waiting (a proposed Casual Leave), payroll settings",
         definition=(
-            f"Every active staff member has {D.CL_ENTITLEMENT} Casual Leave days a calendar year from the cut-over "
-            f"({casual['cutOver']}); unused days lapse on 31 December. Approved and waiting requests both hold days (so "
-            "nobody can ask for more than is left), a half day is 0.5. Casual Leave HR gives for an absent or on-leave date "
-            "on the Casual Leave page's Carry Forward tab counts against the year whatever its date: it is shown as 'carry "
-            "forward'. The 12 is fixed: no extra days are ever added."
+            f"Casual Leave follows the policy in Settings ({casual['allocationText']}) from the cut-over "
+            f"({casual['cutOver']}) and from the day each employee completes the service the policy asks for. Approved "
+            "and waiting requests both hold days (so nobody can ask for more than is left), a half day is 0.5. Casual "
+            "Leave HR gives for an absent or on-leave date on the Casual Leave page's Carry Forward tab counts against "
+            "the year whatever its date: it is shown as 'carry forward'. No extra days are ever added."
         ),
-        formula="left = 12 − (approved + waiting Casual Leave days dated in the year, on/after the cut-over)",
+        formula="left = days given so far − (approved + waiting Casual Leave days that count), as the HRMS works it out",
         rows=casual["employees"],
         filters=[str(year), scope.describe()],
         caveats=[

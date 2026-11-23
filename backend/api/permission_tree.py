@@ -1299,6 +1299,21 @@ SALARY_SLIP_CENTER = N(
     inherits="salary_slip",
 )
 
+# HR -> Payroll -> Missed Payroll (/hr/missed-payroll, api/missed_payroll/): payroll for employees the regular Staff /
+# Production Payroll missed; Done writes into the month's payroll (owner 2026-11-23). Until a role sets it, it follows Staff
+# Payroll, whose payroll it adds to.
+MISSED_PAYROLL = N(
+    "missed_payroll",
+    "Missed Payroll",
+    "page",
+    "Employees the regular payroll missed for a month (staff and production): generate, Clear, Done (adds them to the "
+    "month's payroll), Paid, reports and bank file. Edit = generate and change status; Done and Paid also need a login "
+    "for all units.",
+    api=["missed-payroll"],
+    routes=["/hr/missed-payroll"],
+    inherits="payroll",
+)
+
 _REPORT_GROUPS = (
     ("hr", "HR Reports", "Ready-made HR registers (time card, punching, strength, salary statement ...)."),
     (
@@ -1923,6 +1938,13 @@ SETTINGS = N(
         viewCheck=True,
     ),
     N("settings.compensation", "Compensation", "tab", "OT and compensation rules."),
+    N(
+        "settings.casual_leave",
+        "Casual Leave",
+        "tab",
+        "Who may take Casual Leave, how many days, carry forward and year end.",
+        api=["casual-leave-policy"],
+    ),
     N("settings.devices", "Devices", "tab", "The biometric devices and how they connect."),
     N(
         "settings.payroll",
@@ -2059,7 +2081,15 @@ GROUPS: list[dict] = [
     {
         "id": "payroll",
         "label": "Payroll",
-        "children": [STAFF_PAYROLL, PRODUCTION_PAYROLL, COMPENSATION, SETTLEMENT, SALARY_SLIP_CENTER, REPORTS],
+        "children": [
+            STAFF_PAYROLL,
+            PRODUCTION_PAYROLL,
+            COMPENSATION,
+            SETTLEMENT,
+            SALARY_SLIP_CENTER,
+            MISSED_PAYROLL,
+            REPORTS,
+        ],
     },
     {"id": "recruitment", "label": "Recruitment", "children": [RECRUITMENT]},
     {

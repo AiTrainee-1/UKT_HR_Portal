@@ -69,6 +69,7 @@ describe("the Compensation group", () => {
       "Compensation",
       "Settlement",
       "Salary Slip",
+      "Missed Payroll",
       "Reports",
     ]);
   });

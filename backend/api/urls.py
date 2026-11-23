@@ -235,7 +235,7 @@ from .system_settings_views import (
 )
 from .casual_leave_views import (
     casual_leaves, casual_leave_detail, casual_leave_eligibility, my_casual_leave_eligibility,
-    casual_leave_history, casual_leave_policy,
+    casual_leave_history, casual_leave_policy, casual_leave_settings,
 )
 from .cl_adjustment_views import casual_leave_absent_dates, casual_leave_adjustments, casual_leave_assign
 from .missing_punch_views import (
@@ -669,6 +669,8 @@ urlpatterns = [
     # the yearly balance (2026-11-02): its running history, and the entitlement + cut-over day (a setting)
     path("casual-leaves/history", casual_leave_history),
     path("casual-leaves/policy", casual_leave_policy),
+    # Settings -> Casual Leave (2026-11-21): the whole policy (eligibility, allocation, carry forward, year end, half days)
+    path("casual-leave-policy", casual_leave_settings),
     # Carry Forward (2026-11-04): HR adds carried-forward days to / deducts days from a balance, and the log of it
     path("casual-leaves/adjustments", casual_leave_adjustments),
     # ... and the absent dates HR may turn into Casual Leave, and turning them
@@ -1054,6 +1056,8 @@ urlpatterns = [
     path("", include("api.urls_attendance_notify")),
     # ── HR -> Payroll -> Salary Slip: standalone slips, statement and bank file (no payroll; api/salary_slip_center/) ──
     path("salary-slip-center/", include("api.salary_slip_center.urls")),
+    # ── HR -> Payroll -> Missed Payroll: employees the regular payroll missed; Done writes Payroll (api/missed_payroll/) ──
+    path("missed-payroll/", include("api.missed_payroll.urls")),
     # ── Staff Payroll: Excess tab, Not included view, Payslip tab (payroll_excess_views.py; 2026-11-20) ──
     path("", include("api.urls_payroll_excess")),
     # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──

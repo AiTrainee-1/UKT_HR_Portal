@@ -373,20 +373,35 @@ export type CasualLeaveEligibility = {
  * `since` null) for a year wholly before the cut-over day, when no balance was kept.
  */
 export type CasualLeaveBalance = {
+  /** What has been given so far: carried in + every month's days up to the month shown (the year's days at once with
+   *  the yearly allocation). */
   total: number;
   used: number;
   pending: number;
+  /** What may still be asked for now (this month's, with the monthly allocation). */
   remaining: number;
   year: number;
   since: string | null;
   endsOn: string;
   cutOver: string;
   tracked: boolean;
+  // added 2026-11-21 (Settings -> Casual Leave); absent on an older server
+  /** The month the figures are for (YYYY-MM). */
+  asOf?: string;
+  allocation?: "monthly" | "yearly";
+  perMonth?: number | null;
+  perYear?: number | null;
+  carriedIn?: number;
+  carryForward?: boolean;
+  yearEnd?: "lapse" | "carry";
+  leftAtYearEnd?: number;
 };
 
 /** One line of an employee's Casual Leave year, oldest first: "12 → 11 on 05 Nov: Casual Leave approved (Full day, 05 Nov 2026)". */
 export type CasualLeaveHistoryEntry = {
-  kind: "opening" | "approved" | "pending" | "rejected" | "lapsed";
+  /** "allocated" = a month's days given, "month_lapsed" = a month's unused days ending with it (no carry forward),
+   *  "carried_out" = unused days moved into the next year (all added 2026-11-21, Settings -> Casual Leave). */
+  kind: "opening" | "allocated" | "approved" | "pending" | "rejected" | "month_lapsed" | "carried_out" | "lapsed";
   on: string;
   date: string | null;
   portion: "full" | "first_half" | "second_half" | null;

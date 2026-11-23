@@ -165,6 +165,10 @@ class World(MdApiTestCase):
     @classmethod
     def setUpTestData(cls):
         build_world(cls)
+        # these tests follow the 12-days-a-year policy (Settings -> Casual Leave, allocation yearly)
+        from .models import CasualLeavePolicy
+
+        CasualLeavePolicy.objects.update_or_create(pk=1, defaults={"allocation": "yearly"})
 
     def setUp(self):
         super().setUp()

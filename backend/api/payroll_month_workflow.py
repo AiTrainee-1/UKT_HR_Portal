@@ -82,6 +82,11 @@ class MonthLocked(Exception):
     """A write to a finalized staff month: answered as a 409 with this plain message."""
 
 
+MISSED_PAYROLL_HERE = (
+    "This salary was added from the Missed Payroll page: it is managed there (Clear, Done, Paid), not on this page."
+)
+
+
 def month_close(month: int, year: int) -> PayrollMonthClose | None:
     return PayrollMonthClose.objects.filter(month=month, year=year).first()
 
@@ -167,6 +172,9 @@ def payroll_flags(p: Payroll) -> dict:
         "paymentPaidAt": _iso(p.payment_paid_at),
         "paymentPaidBy": p.payment_paid_by or None,
         "releasedFrom": p.released_from or None,
+        # "missed_payroll": added from the Missed Payroll page (2026-11-23) - in the records and the statement, but that
+        # page pays it (never in the month's bank file nor its Mark as Paid); null for every other payroll
+        "source": p.source or None,
     }
 
 
@@ -308,8 +316,11 @@ def month_status(request, month: int, year: int) -> dict:
 
 
 def set_hold(payroll: Payroll, hold: bool, actor: str) -> Payroll:
-    """Hold or Unhold one staff payroll of an open month. Raises MonthLocked once the month is finalized."""
+    """Hold or Unhold one staff payroll of an open month. Raises MonthLocked once the month is finalized, and for a
+    payroll added from the Missed Payroll page (managed there, 2026-11-23)."""
     assert_open(payroll.month, payroll.year)
+    if payroll.source == Payroll.SOURCE_MISSED_PAYROLL:
+        raise MonthLocked(MISSED_PAYROLL_HERE)
     now = timezone.now()
     Payroll.objects.filter(pk=payroll.pk).update(on_hold=hold, hold_changed_at=now, hold_changed_by=actor)
     payroll.on_hold, payroll.hold_changed_at, payroll.hold_changed_by = hold, now, actor
@@ -416,7 +427,13 @@ def mark_paid(month: int, year: int, actor: str) -> tuple[PayrollMonthClose, lis
         now = timezone.now()
         close.paid_at, close.paid_by = now, actor
         close.save(update_fields=["paid_at", "paid_by"])
-        eligible = staff_month(month, year).filter(MAIN_PAYROLL_Q).exclude(payment_status=Payroll.PAYMENT_PAID)
+        # a payroll added from the Missed Payroll page is paid there (owner 2026-11-23), never by the month's Mark as Paid
+        eligible = (
+            staff_month(month, year)
+            .filter(MAIN_PAYROLL_Q)
+            .exclude(payment_status=Payroll.PAYMENT_PAID)
+            .exclude(source=Payroll.SOURCE_MISSED_PAYROLL)
+        )
         ids = list(eligible.values_list("id", flat=True))
         Payroll.objects.filter(id__in=ids).update(
             payment_status=Payroll.PAYMENT_PAID, payment_paid_at=now, payment_paid_by=actor

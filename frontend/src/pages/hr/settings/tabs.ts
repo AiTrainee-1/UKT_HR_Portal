@@ -2,6 +2,7 @@ import { lazy, type ComponentType } from "react";
 import {
   AlertTriangle,
   Building2,
+  CalendarCheck,
   Clock,
   CreditCard,
   Database,
@@ -119,6 +120,19 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
       { label: "Compensation", to: "/hr/compensation/ot-detection" },
       { label: "Staff Attendance", to: "/hr/attendance/staff" },
       { label: "Staff Payroll", to: "/hr/payroll" },
+      { label: "Employee apps" },
+    ],
+  },
+  {
+    id: "casual_leave",
+    label: "Casual Leave",
+    group: "time",
+    icon: CalendarCheck,
+    purpose:
+      "Staff only: who may take Casual Leave (months or days of service), how many days they get (earned each month or the whole year at once), carry forward, what happens on 31 December, and half days.",
+    usedBy: [
+      { label: "Casual Leave", to: "/hr/casual-leave" },
+      { label: "Attendance Edit" },
       { label: "Employee apps" },
     ],
   },
@@ -256,6 +270,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   production_shifts: () => import("./ProductionShiftsTab"),
   late_detection: () => import("./LateDetectionTab"),
   compensation: () => import("./CompensationTab"),
+  casual_leave: () => import("./CasualLeaveTab"),
   devices: () => import("./DevicesTab"),
   payroll: () => import("./PayrollTab"),
   production_payroll: () => import("./ProductionPayrollTab"),

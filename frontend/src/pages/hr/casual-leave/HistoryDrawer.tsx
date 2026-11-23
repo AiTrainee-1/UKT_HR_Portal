@@ -9,16 +9,21 @@ import { balanceDetail, balanceText } from "./logic";
 /** What each kind of line is called, and its tint. */
 const KIND: Record<CasualLeaveHistoryEntry["kind"], { label: string; tone: string }> = {
   opening: { label: "Opening", tone: TONE.info },
+  allocated: { label: "Added", tone: TONE.info },
   approved: { label: "Approved", tone: TONE.success },
   pending: { label: "Waiting", tone: TONE.warning },
   rejected: { label: "Rejected", tone: TONE.neutral },
+  month_lapsed: { label: "Month ended", tone: TONE.neutral },
+  carried_out: { label: "To next year", tone: TONE.info },
   lapsed: { label: "Lapsed", tone: TONE.neutral },
 };
 
 /**
- * One employee's Casual Leave year as a running balance (GET /api/casual-leaves/history): the fresh 12, then a line for every
- * Casual Leave that counts ("12 → 11 on 05 Nov: Casual Leave approved (Full day, 05 Nov 2026)"), oldest first, and once the
- * year is over the unused days lapsing on 31 December. Read-only.
+ * One employee's Casual Leave year as a running balance (GET /api/casual-leaves/history), oldest first, by the policy of
+ * Settings -> Casual Leave: what the year opens with, each month's days as they are added (monthly allocation), a line for
+ * every Casual Leave that counts ("2 → 1 on 05 Nov: Casual Leave approved (Full day, 05 Nov 2026)"), a month's unused days
+ * ending with it when nothing carries forward, and once the year is over the days moving into the next year or lapsing.
+ * Read-only.
  */
 export default function HistoryDrawer({
   target,
