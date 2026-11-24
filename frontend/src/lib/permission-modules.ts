@@ -163,6 +163,8 @@ const BASE_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/casual-leave": "casual_leave",
   "/hr/missing-punch": "missing_punch",
   "/hr/requests": "requests",
+  // Employee Enquiries (2026-11-24): the same right as the Requests page
+  "/hr/enquiries": "requests",
   "/hr/promotion": "promotion",
   "/hr/increment": "increment",
   "/hr/bonus": "bonus",

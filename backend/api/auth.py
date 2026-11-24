@@ -43,7 +43,14 @@ def _authenticate(view_func, allowed_roles: tuple[str, ...]):
         # Only HR tokens carry a jti (see hr_login in views.py) -employee
         # tokens never set one, so this is a no-op on the employee/mobile path.
         jti = request.jwt_user.get("jti")
-        if jti:
+        # An employee's mobile-app session (employee_sessions.py): its own table, ended by sign-out or by HR.
+        from . import employee_sessions
+
+        if jti and employee_sessions.is_employee_session(request.jwt_user):
+            refused = employee_sessions.check(request.jwt_user)
+            if refused:
+                return Response({"error": refused}, status=401)
+        elif jti:
             from django.utils import timezone
 
             from .models import LoginSession

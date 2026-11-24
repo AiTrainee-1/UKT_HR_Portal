@@ -78,7 +78,7 @@ from .date_span import DaySpanError, parse_day_span
 from .hod_scope import manager_may_act_on, managers_to_notify
 from .models import (
     AttendanceLog, Employee, LiveLocationPing, Notification,
-    OnDutyPunchVerification, OnDutySession, OutpassRequest,
+    OnDutyOvertimePunch, OnDutyPunchVerification, OnDutySession, OutpassRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -167,20 +167,26 @@ def _slot_punch_type(slot: int) -> str:
     return AttendanceLog.PUNCH_IN if slot % 2 == 1 else AttendanceLog.PUNCH_OUT
 
 
-def _taken_slots(emp: Employee, d) -> dict[int, str]:
-    """{slot number: what holds it} for one employee-day.
+def _taken_slot_details(emp: Employee, d) -> dict[int, dict]:
+    """{slot number: {status, punchTime, source, sessionId, verificationId}} for one employee-day.
 
     On-duty punches carry an explicit punch_number, so they hold exactly the
     slot the employee chose -including out of order. Punches from any other
     source (biometric, Office Geo Punch) have no slot of their own, so they
     fill the lowest free slots in time order."""
-    taken: dict[int, str] = {}
+    taken: dict[int, dict] = {}
     for v in OnDutyPunchVerification.objects.filter(
         employee=emp, punch_date=d,
         status__in=[OnDutyPunchVerification.STATUS_PENDING, OnDutyPunchVerification.STATUS_APPROVED],
     ):
         if v.punch_number in ON_DUTY_SLOTS:
-            taken[v.punch_number] = v.status  # "pending" | "approved"
+            taken[v.punch_number] = {
+                "status": v.status,  # "pending" | "approved"
+                "punchTime": v.punch_time.strftime("%H:%M:%S") if v.punch_time else None,
+                "source": "on_duty",
+                "sessionId": v.session_id,
+                "verificationId": v.id,
+            }
 
     others = (
         AttendanceLog.objects
@@ -188,27 +194,83 @@ def _taken_slots(emp: Employee, d) -> dict[int, str]:
         .exclude(source="on_duty:approved")  # already counted above, via its verification
         .order_by("punch_time")
     )
-    for _ in others:
+    for log in others:
         for n in ON_DUTY_SLOTS:
             if n not in taken:
-                taken[n] = "recorded"
+                taken[n] = {
+                    "status": "recorded",
+                    "punchTime": log.punch_time.strftime("%H:%M:%S") if log.punch_time else None,
+                    "source": log.source or "",
+                    "sessionId": None,
+                    "verificationId": None,
+                }
                 break
     return taken
+
+
+def _taken_slots(emp: Employee, d) -> dict[int, str]:
+    """{slot number: what holds it} for one employee-day (see _taken_slot_details)."""
+    return {n: detail["status"] for n, detail in _taken_slot_details(emp, d).items()}
+
+
+# The four On-Duty punches by name (owner 2026-11-24), in slot order. Each is still an IN/OUT slot of the day's
+# 4-punch model (_slot_punch_type); the name and the expected time are what the employee reads.
+SLOT_NAMES = {1: "Morning Punch", 2: "Lunch Out", 3: "Lunch In", 4: "Night Punch"}
+# When the employee has no shift on that day: the factory's usual day.
+DEFAULT_SLOT_TIMES = {1: time(9, 0), 2: time(13, 0), 3: time(14, 0), 4: time(18, 0)}
+
+
+def _plus_minutes(t: time, minutes: int) -> time:
+    return (datetime.combine(date(2000, 1, 1), t) + timedelta(minutes=minutes)).time()
+
+
+def expected_slot_times(emp: Employee, d) -> tuple[dict[int, time], str]:
+    """({slot: expected time}, "shift" | "default") for the employee's shift on day `d`:
+    Morning Punch = shift start, Lunch Out = the end of the first half (the middle of the shift when the shift has no
+    lunch break set), Lunch In = Lunch Out + the shift's lunch duration, Night Punch = shift end."""
+    try:
+        from .shift_engine import _get_shift_for_date
+
+        shift = _get_shift_for_date(emp, d)
+    except Exception:
+        logger.exception("Could not read the shift of employee %s for the On-Duty punch times", emp.pk)
+        shift = None
+    if shift is None or not shift.start_time or not shift.end_time:
+        return dict(DEFAULT_SLOT_TIMES), "default"
+    start, end = shift.start_time, shift.end_time
+    lunch_minutes = shift.lunch_duration_minutes or 60
+    if getattr(shift, "first_half_end", None):
+        lunch_out = shift.first_half_end
+    else:
+        span = (datetime.combine(date(2000, 1, 1), end) - datetime.combine(date(2000, 1, 1), start)).total_seconds()
+        if span <= 0:  # a night shift that crosses midnight
+            span += 24 * 3600
+        lunch_out = _plus_minutes(start, int(span // 120) - lunch_minutes // 2)
+    return {1: start, 2: lunch_out, 3: _plus_minutes(lunch_out, lunch_minutes), 4: end}, "shift"
 
 
 def _slot_dicts(emp: Employee, d) -> list[dict]:
     """All 4 slots with their state, for the app to render one row each —
     a filled slot shows its status, a free one offers "add my punch"."""
-    taken = _taken_slots(emp, d)
-    return [
-        {
+    taken = _taken_slot_details(emp, d)
+    expected, expected_source = expected_slot_times(emp, d)
+    rows = []
+    for n in ON_DUTY_SLOTS:
+        detail = taken.get(n) or {}
+        rows.append({
             "punchNumber": n,
             "punchType": _slot_punch_type(n),
-            "status": taken.get(n, "available"),
+            "name": SLOT_NAMES[n],
+            "expectedTime": expected[n].strftime("%H:%M") if expected.get(n) else None,
+            "expectedSource": expected_source,
+            "status": detail.get("status", "available"),
             "available": n not in taken,
-        }
-        for n in ON_DUTY_SLOTS
-    ]
+            "punchTime": detail.get("punchTime"),
+            "punchSource": detail.get("source"),
+            "sessionId": detail.get("sessionId"),
+            "verificationId": detail.get("verificationId"),
+        })
+    return rows
 
 
 def _end_on_duty_session(session: OnDutySession, reason: str) -> bool:
@@ -340,6 +402,10 @@ def _approve_session_punches(session: OnDutySession, reviewer_name: str) -> int:
     )
     for v in pending:
         resolve_on_duty_punch_hr(v, "approved", reviewer_name, None, notify=False)
+    # The OT punches follow the request (never attendance: they only count for overtime, see OnDutyOvertimePunch).
+    session.overtime_punches.filter(status=OnDutyOvertimePunch.STATUS_PENDING).update(
+        status=OnDutyOvertimePunch.STATUS_APPROVED
+    )
     return len(pending)
 
 
@@ -352,6 +418,9 @@ def _void_session_punches(session: OnDutySession, reviewer_name: str, stage: str
     on_duty_punch_verification_hr_status refuses to run it while the session
     is provisional). So voiding here invalidates the day's punches without
     ever having to delete real attendance rows."""
+    session.overtime_punches.exclude(status=OnDutyOvertimePunch.STATUS_REJECTED).update(
+        status=OnDutyOvertimePunch.STATUS_REJECTED
+    )
     pending = list(session.punch_verifications.filter(status=OnDutyPunchVerification.STATUS_PENDING))
     if not pending:
         return 0
@@ -452,6 +521,18 @@ def _on_duty_session_dict(
         "createdAt": session.created_at.isoformat() if session.created_at else None,
         # Who the request waits for under the approval pipeline, and how far it has got (approval_workflow.py).
         "approval": approval.progress(WORKFLOW, session, cfg),
+        # Overtime punches after the four (OnDutyOvertimePunch, never attendance) and how far past the shift end.
+        **_ot_summary(session),
+    }
+
+
+def _ot_summary(session: OnDutySession) -> dict:
+    """{otPunches, otMinutes} for a session dict. Reads the prefetched list when the caller prefetched it (HR list)."""
+    punches = [p for p in session.overtime_punches.all() if p.status != OnDutyOvertimePunch.STATUS_REJECTED]
+    punches.sort(key=lambda p: p.sequence)
+    return {
+        "otPunches": [_ot_punch_dict(p) for p in punches],
+        "otMinutes": overtime_minutes(session.employee, punches[-1].punch_date, punches[-1].punch_time) if punches else 0,
     }
 
 
@@ -489,14 +570,69 @@ def _on_duty_punch_verification_dict(v: OnDutyPunchVerification) -> dict:
     }
 
 
+def _gate_pass_json(gate_pass: OutpassRequest | None) -> dict | None:
+    """The pass as the Gate Outpass page shows it (outpass_request_views._outpass_request_json), or None."""
+    if gate_pass is None:
+        return None
+    from .outpass_request_views import _outpass_request_json
+
+    return _outpass_request_json(gate_pass, with_employee=True)
+
+
+def _raise_gate_pass_for(session: OnDutySession) -> OutpassRequest:
+    """The gate pass of an On-Duty request, raised the moment the request is SUBMITTED (owner 2026-11-24): pending
+    while the On-Duty waits for its approval, yet already valid at the gate (outpass_request_views.pass_window /
+    pass_presentable), because the employee starts working -and leaves- at once. One pass per On-Duty request: an
+    existing one is returned as it is."""
+    existing = OutpassRequest.objects.filter(on_duty_session=session).order_by("id").first()
+    if existing is not None:
+        return existing
+    return OutpassRequest.objects.create(
+        employee=session.employee,
+        destination=session.destination,
+        reason=session.destination,
+        status=OutpassRequest.STATUS_PENDING,
+        source=OutpassRequest.SOURCE_ON_DUTY,
+        on_duty_session=session,
+        approver_role="system",
+    )
+
+
+def _void_gate_pass_of(session: OnDutySession, reviewer_name: str) -> int:
+    """A rejected On-Duty voids its gate pass (the QR stops working). An exit already made stays on record."""
+    return OutpassRequest.objects.filter(
+        on_duty_session=session, status=OutpassRequest.STATUS_PENDING,
+    ).update(
+        status=OutpassRequest.STATUS_REJECTED,
+        approved_by=reviewer_name,
+        review_comment="The On-Duty request was rejected.",
+        updated_at=timezone.now(),
+    )
+
+
 def _create_outpass_from_on_duty(session: OnDutySession, reviewer_name: str) -> None:
     """Called once, only from resolve_on_duty_session's final-approval branch —
-    On-Duty's own status/fields are never touched here, this only ever adds a
-    new, already-approved OutpassRequest + its matching OutpassRecord (the
-    same row shape a QR-scan or a manual Outpass request produces) so the
-    employee has something to show at the gate."""
+    On-Duty's own status/fields are never touched here. The pass raised at
+    submission (_raise_gate_pass_for) becomes approved and gets its matching
+    OutpassRecord (the same row shape a QR-scan or a manual Outpass request
+    produces); a session submitted before passes were raised at submission
+    gets a new, already-approved pass, as before."""
     from .outpass_visitor_views import _create_outpass_record_for
 
+    existing = OutpassRequest.objects.filter(on_duty_session=session).order_by("id").first()
+    if existing is not None:
+        if existing.status == OutpassRequest.STATUS_APPROVED:
+            return
+        existing.status = OutpassRequest.STATUS_APPROVED
+        existing.approver_role = "system"
+        existing.approved_by = reviewer_name
+        existing.approved_at = timezone.now()
+        if existing.outpass_record_id is None:
+            existing.outpass_record = _create_outpass_record_for(
+                session.employee, session.destination, source="request"
+            )
+        existing.save()
+        return
     record = _create_outpass_record_for(session.employee, session.destination, source="request")
     OutpassRequest.objects.create(
         employee=session.employee,
@@ -556,10 +692,8 @@ def resolve_on_duty_session(
         # captured under it as real attendance.
         approved = _approve_session_punches(session, reviewer_name)
         # Data-collection only, no attendance/payroll link -see
-        # outpass_visitor_views.py's module docstring. Generated here (final
-        # On-Duty approval), never at submission time, per the explicit
-        # requirement that an Outpass must not appear before the On-Duty
-        # request itself has actually been approved.
+        # outpass_visitor_views.py's module docstring. The pass was raised at
+        # submission (owner 2026-11-24); the approval marks it approved.
         _create_outpass_from_on_duty(session, reviewer_name)
         message = approval.notice_for(what, outcome)
         message += (
@@ -574,6 +708,7 @@ def resolve_on_duty_session(
         voided = _void_session_punches(session, reviewer_name, approval.ROLE_PHRASE[role])
         # Tracking stops with the rejection; what was collected so far is kept (owner decision 2026-10-28).
         _end_track_safely(session, "rejected")
+        _void_gate_pass_of(session, reviewer_name)
         message = approval.notice_for(what, outcome)
         if voided:
             message += f" The {voided} punch(es) you recorded under it are not valid and have not been counted."
@@ -831,6 +966,236 @@ def geo_punch(request: Request) -> Response:
     return Response({"status": "already_recorded", "punchNumber": punch_num, "punchType": punch_type})
 
 
+# ── Offline captures (owner 2026-11-24) ─────────────────────────────────────
+# The app may keep an On-Duty punch / "End On-Duty" made with no internet in a queue on the phone and send it later
+# (src/offline in the app, with an Idempotency-Key so a re-send is harmless). Such a call says WHEN it happened
+# (`capturedAt`, the phone's clock) and for WHICH session (`sessionId`). The server trusts that time only within
+# limits: not in the future (CAPTURE_SKEW for clock drift), not older than CAPTURE_MAX_AGE, and on the session's own
+# day, before the session ended. A call without `capturedAt` is a live one, judged exactly as before.
+CAPTURE_SKEW = timedelta(minutes=5)
+CAPTURE_MAX_AGE = timedelta(hours=72)
+
+
+class CaptureError(Exception):
+    def __init__(self, message: str, status: int = 400, code: str = "invalid_capture"):
+        super().__init__(message)
+        self.message, self.status, self.code = message, status, code
+
+    def response(self) -> Response:
+        return Response({"error": self.message, "code": self.code}, status=self.status)
+
+
+def _captured_at(data):
+    """The aware datetime the phone says the action happened at, or None for a live call. Raises CaptureError."""
+    raw = data.get("capturedAt", data.get("captured_at"))
+    if raw in (None, ""):
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    except ValueError:
+        raise CaptureError("capturedAt must be a date and time (ISO 8601)")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=FACTORY_TZ)  # a time without a zone is India time, like every punch
+    now = timezone.now()
+    if value > now + CAPTURE_SKEW:
+        raise CaptureError("The time of this punch is in the future. Please check the date and time of your phone.",
+                           code="capture_in_future")
+    if value < now - CAPTURE_MAX_AGE:
+        raise CaptureError("This was recorded more than 3 days ago and can no longer be sent. Please contact HR.",
+                           409, "capture_too_old")
+    return value
+
+
+def _session_end(session: OnDutySession):
+    return session.employee_ended_at or (session.completed_at if session.status == OnDutySession.STATUS_COMPLETED else None)
+
+
+def _session_for(emp: Employee, data, captured) -> OnDutySession:
+    """The session a punch / an "End On-Duty" belongs to. Live call: the employee's open session (as before).
+    Offline call: the session it names (`sessionId`), else the one that was open on that day at that time."""
+    raw_id = data.get("sessionId", data.get("session_id"))
+    if captured is None:
+        session = _punchable_on_duty_session(emp)
+        if session is None or (raw_id not in (None, "") and str(session.id) != str(raw_id)):
+            raise CaptureError("You don't have an active On-Duty session", 404, "no_active_session")
+        return session
+    day = captured.astimezone(FACTORY_TZ).date()
+    if raw_id not in (None, ""):
+        try:
+            session = OnDutySession.objects.filter(pk=int(raw_id), employee=emp).first()
+        except (TypeError, ValueError):
+            session = None
+    else:
+        # The session of that day that was open at that time; when the On-Duty request itself was also kept on the
+        # phone and reached the server only now (after this punch was taken), the first session of that day after it.
+        same_day = [
+            s for s in OnDutySession.objects.filter(
+                employee=emp, created_at__gte=captured - timedelta(days=1), created_at__lte=timezone.now(),
+            ).exclude(status=OnDutySession.STATUS_REJECTED).order_by("created_at")
+            if s.created_at.astimezone(FACTORY_TZ).date() == day
+        ]
+        before = [s for s in same_day if s.created_at <= captured + CAPTURE_SKEW]
+        after = [s for s in same_day if s.created_at > captured + CAPTURE_SKEW]
+        session = before[-1] if before else (after[0] if after else None)
+    if session is None:
+        raise CaptureError("The On-Duty session of this punch was not found.", 404, "no_active_session")
+    if session.status == OnDutySession.STATUS_REJECTED:
+        raise CaptureError("This On-Duty request was rejected, so its punches cannot be recorded.", 409,
+                           "session_rejected")
+    if session.created_at.astimezone(FACTORY_TZ).date() != day:
+        raise CaptureError("This punch was made on a different day from its On-Duty session.", 409, "wrong_day")
+    ended = _session_end(session)
+    if ended is not None and captured > ended + CAPTURE_SKEW:
+        raise CaptureError("This punch was made after the On-Duty session had ended.", 409, "session_ended")
+    return session
+
+
+# ── Overtime punches (owner 2026-11-24) ─────────────────────────────────────
+
+def _ot_punch_dict(p: OnDutyOvertimePunch) -> dict:
+    return {
+        "id": p.id,
+        "sessionId": p.session_id,
+        "sequence": p.sequence,
+        "punchDate": str(p.punch_date),
+        "punchTime": p.punch_time.strftime("%H:%M:%S"),
+        "latitude": float(p.latitude),
+        "longitude": float(p.longitude),
+        "accuracyM": p.accuracy_m,
+        "isMocked": p.is_mocked,
+        "hasPhoto": bool(p.photo),
+        "hasPhoto2": bool(p.photo2),
+        "status": p.status,
+        "isOvertime": True,
+        "createdAt": p.created_at.isoformat() if p.created_at else None,
+    }
+
+
+def overtime_minutes(emp: Employee, d, last_ot_time) -> int:
+    """Minutes the last OT punch of day `d` is past the employee's shift end (the Night Punch's expected time)."""
+    if last_ot_time is None:
+        return 0
+    expected, _source = expected_slot_times(emp, d)
+    end = expected.get(4)
+    if end is None:
+        return 0
+    delta = datetime.combine(d, last_ot_time) - datetime.combine(d, end)
+    return max(0, int(delta.total_seconds() // 60))
+
+
+def _overtime_block(session: OnDutySession) -> dict:
+    punches = list(session.overtime_punches.exclude(status=OnDutyOvertimePunch.STATUS_REJECTED).order_by("sequence"))
+    day = session.created_at.astimezone(FACTORY_TZ).date() if session.created_at else ist_today()
+    regular_done = all(not s["available"] for s in _slot_dicts(session.employee, day))
+    return {
+        "otPunches": [_ot_punch_dict(p) for p in punches],
+        "otMinutes": overtime_minutes(session.employee, punches[-1].punch_date, punches[-1].punch_time) if punches else 0,
+        "regularPunchesDone": regular_done,
+    }
+
+
+@api_view(["POST"])
+@parser_classes([MultiPartParser, FormParser])
+@require_auth
+def on_duty_ot_punch_request(request: Request) -> Response:
+    """
+    POST /api/on-duty-sessions/ot-punch -multipart: latitude, longitude, accuracy?, isMocked?, photo, photo2 (when HR asks
+    for two photos), capturedAt? and sessionId? (a punch kept offline on the phone).
+
+    An OVERTIME punch: only after the day's four punches are in and while the On-Duty is still open (the employee chose
+    "Continue Duty"). Never written to attendance (OnDutyOvertimePunch); it counts for overtime once the On-Duty is
+    approved.
+    """
+    emp = _employee_from_token(request)
+    if not emp:
+        return _error("Employee authentication required", 403)
+    data = request.data
+    try:
+        captured = _captured_at(data)
+        session = _session_for(emp, data, captured)
+    except CaptureError as exc:
+        return exc.response()
+
+    when = captured.astimezone(FACTORY_TZ) if captured is not None else None
+    day = when.date() if when is not None else ist_today()
+    if any(slot["available"] for slot in _slot_dicts(emp, day)):
+        return Response(
+            {"error": "Record your four punches first. OT punches are for work after the Night Punch.",
+             "code": "regular_punches_missing"},
+            status=409,
+        )
+    try:
+        lat = float(data.get("latitude"))
+        lng = float(data.get("longitude"))
+    except (TypeError, ValueError):
+        return _error("latitude and longitude are required")
+    accuracy = data.get("accuracy")
+    try:
+        accuracy = float(accuracy) if accuracy not in (None, "") else None
+    except (TypeError, ValueError):
+        accuracy = None
+    photo = request.FILES.get("photo")
+    if not photo:
+        return _error("A selfie photo is required to verify this punch")
+    problem = _photo_problem(photo)
+    if problem:
+        return _error(problem)
+    photo2 = request.FILES.get("photo2")
+    if photo2 is None and geo_settings.punch_photos() == 2:
+        return Response(
+            {"error": "Two photos are required: please update the app", "code": "PHOTO2_REQUIRED"}, status=400
+        )
+    if photo2 is not None:
+        problem = _photo_problem(photo2)
+        if problem:
+            return _error(problem)
+
+    with transaction.atomic():
+        locked = OnDutySession.objects.select_for_update().get(pk=session.pk)
+        last = locked.overtime_punches.order_by("-sequence").values_list("sequence", flat=True).first() or 0
+        p = OnDutyOvertimePunch(
+            session=locked, employee=emp, sequence=last + 1, punch_date=day,
+            punch_time=(when.time().replace(microsecond=0) if when is not None else ist_time()),
+            latitude=lat, longitude=lng, accuracy_m=accuracy, is_mocked=_get_is_mocked(data),
+            # A request already approved: the OT punch is approved with it; otherwise it waits for the same decision.
+            status=(OnDutyOvertimePunch.STATUS_PENDING if _is_provisional(locked) else OnDutyOvertimePunch.STATUS_APPROVED),
+        )
+        p.photo.save(photo.name, ContentFile(photo.read()), save=False)
+        if photo2 is not None:
+            p.photo2.save(photo2.name, ContentFile(photo2.read()), save=False)
+        p.save()
+    return Response({
+        "otPunch": _ot_punch_dict(p),
+        "otMinutes": overtime_minutes(emp, p.punch_date, p.punch_time),
+        "message": f"OT punch {p.sequence} recorded.",
+    }, status=201)
+
+
+@api_view(["GET"])
+@require_auth
+def on_duty_ot_punch_photo(request: Request, pk: int) -> Response:
+    """GET /api/on-duty-overtime-punches/<pk>/photo?n=1|2 -the owner, branch-scoped HR, or the employee's HOD."""
+    p = OnDutyOvertimePunch.objects.select_related("employee").filter(pk=pk).first()
+    if not p:
+        return _error("OT punch not found", 404)
+    viewer = get_token_employee_id(request)
+    if viewer == p.employee_id:
+        allowed = True
+    elif is_hr(request):
+        allowed = scope_to_branch(Employee.objects, request).filter(pk=p.employee_id).exists()
+    else:
+        allowed = bool(viewer) and manager_may_act_on(viewer, p.employee)
+    if not allowed:
+        return _error("Access denied", 403)
+    which = (request.query_params.get("n") or "1").strip()
+    if which not in ("1", "2"):
+        return _error("n must be 1 or 2")
+    image = p.photo2 if which == "2" else p.photo
+    if not image:
+        return _error("Photo not found", 404)
+    return FileResponse(image.open("rb"))
+
+
 # ── Employee-facing: On-Duty session lifecycle ──────────────────────────────
 
 @api_view(["POST"])
@@ -863,6 +1228,17 @@ def on_duty_session_request(request: Request) -> Response:
     destination = (request.data.get("destination") or "").strip()
     if not destination:
         return _error("A destination is required")
+    try:
+        captured = _captured_at(request.data)
+    except CaptureError as exc:
+        return exc.response()
+    if captured is not None and captured.astimezone(FACTORY_TZ).date() != ist_today():
+        # Kept on the phone (offline) since an earlier day: a new day's On-Duty must be asked for again.
+        return Response({
+            "error": "This On-Duty request was made on an earlier day and was not sent in time. "
+                     "Please submit a new one for today.",
+            "code": "stale_request",
+        }, status=409)
 
     try:
         approval.require_enabled(WORKFLOW)
@@ -882,6 +1258,8 @@ def on_duty_session_request(request: Request) -> Response:
                 geo_sessions.start_track(session)
         except Exception:
             logger.exception("Could not start geo-tracking for on-duty session %s", session.pk)
+        # Its gate pass, at once (owner 2026-11-24): shown on the Gate Outpass and On-Duty pages while it waits.
+        gate_pass = _raise_gate_pass_for(session)
     if approval.HOD in first:
         _notify_hod_approvers(session)
 
@@ -896,6 +1274,7 @@ def on_duty_session_request(request: Request) -> Response:
         "canPunch": True,
         "sessionId": session.id,
         "session": _on_duty_session_dict(session, for_employee=True),
+        "gatePass": _gate_pass_json(gate_pass),
         "message": "Your On-Duty session has started -you can begin punching. HR approval will follow.",
     }, status=201)
 
@@ -909,11 +1288,22 @@ def on_duty_session_complete(request: Request) -> Response:
     if not emp:
         return _error("Employee authentication required", 403)
 
-    session = _punchable_on_duty_session(emp)
-    if not session:
-        return _error("You don't have an active On-Duty session", 404)
+    try:
+        captured = _captured_at(request.data)
+        session = _session_for(emp, request.data, captured)
+    except CaptureError as exc:
+        raw_id = request.data.get("sessionId", request.data.get("session_id"))
+        ended = None
+        if raw_id not in (None, "") and exc.code in ("no_active_session", "session_ended"):
+            ended = OnDutySession.objects.filter(pk=raw_id, employee=emp).first() if str(raw_id).isdigit() else None
+        if ended is not None and _session_end(ended) is not None:
+            # Already over (marked Done elsewhere, or the day-end job closed it): nothing left to do.
+            return Response({**_on_duty_session_dict(ended, for_employee=True), "alreadyEnded": True})
+        return exc.response()
+    if _session_end(session) is not None or session.status not in PUNCHABLE_STATUSES:
+        return Response({**_on_duty_session_dict(session, for_employee=True), "alreadyEnded": True})
 
-    now = timezone.now()
+    now = max(captured, session.created_at) if captured is not None else timezone.now()
     with transaction.atomic():
         session.employee_ended_at = now
         if _is_provisional(session):
@@ -956,6 +1346,10 @@ def on_duty_session_status(request: Request) -> Response:
         # the app renders one row per slot rather than a single next-punch
         # button, so a missed punch never blocks the ones after it.
         "punchSlots": _slot_dicts(emp, ist_today()),
+        # The session's gate pass (raised at submission), for the card + QR on the On-Duty page.
+        "gatePass": _gate_pass_json(OutpassRequest.objects.filter(on_duty_session=session).order_by("id").first()),
+        # Overtime punches after the four (OnDutyOvertimePunch) and how far past the Night Punch's time they go.
+        **_overtime_block(session),
     })
 
 
@@ -977,11 +1371,13 @@ def on_duty_punch_request(request: Request) -> Response:
     if not emp:
         return _error("Employee authentication required", 403)
 
-    session = _punchable_on_duty_session(emp)
-    if not session:
-        return _error("You don't have an active On-Duty session", 404)
-
     data = request.data
+    try:
+        captured = _captured_at(data)
+        session = _session_for(emp, data, captured)
+    except CaptureError as exc:
+        return exc.response()
+
     try:
         lat = float(data.get("latitude"))
         lng = float(data.get("longitude"))
@@ -1014,8 +1410,12 @@ def on_duty_punch_request(request: Request) -> Response:
         if problem:
             return _error(problem)
 
-    today = ist_today()
-    now_time = ist_time()
+    if captured is not None:
+        local = captured.astimezone(FACTORY_TZ)
+        today, now_time = local.date(), local.time().replace(microsecond=0)
+    else:
+        today = ist_today()
+        now_time = ist_time()
 
     taken = _taken_slots(emp, today)
     available = [n for n in ON_DUTY_SLOTS if n not in taken]
@@ -1057,8 +1457,13 @@ def on_duty_punch_request(request: Request) -> Response:
 
     # Four punches is a full day -close the session now, at capture, rather
     # than waiting for HR to approve the fourth. The employee is done.
+    # Since 2026-11-24 the app sends autoEnd=false: after the 4th punch it asks "Complete Duty" (it then ends the session)
+    # or "Continue Duty" (the session stays open for OT punches). An app that does not send it keeps the old behaviour.
+    raw_auto_end = data.get("autoEnd", data.get("auto_end"))
+    auto_end = str(raw_auto_end).strip().lower() not in ("false", "0", "no") if raw_auto_end not in (None, "") else True
+    all_in = len(available) == 1
     session_ended = False
-    if len(available) == 1:
+    if all_in and auto_end:
         session_ended = _end_on_duty_session(session, OnDutySession.COMPLETION_AUTO_4TH_PUNCH)
         from . import push_recipients
 
@@ -1079,6 +1484,8 @@ def on_duty_punch_request(request: Request) -> Response:
         "status": "pending_hr_approval", "verificationId": v.id,
         "punchNumber": punch_num, "punchType": punch_type,
         "sessionEnded": session_ended,
+        # All four of the day's punches are in and the session is still open: the app asks Complete / Continue Duty.
+        "allPunchesIn": all_in,
         "punchSlots": _slot_dicts(emp, today),
     }, status=201)
 
@@ -1200,7 +1607,10 @@ def on_duty_sessions_hr(request: Request) -> Response:
         qs = qs.filter(status=status_filter)
     if span is not None:
         qs = qs.filter(span.instant_q("created_at"))
-    qs = with_pending_punch_count(qs).order_by("-created_at")[:200]
+    # The OT punches of every listed session in one query (shown on each card, _on_duty_session_dict).
+    qs = with_pending_punch_count(qs).prefetch_related(
+        Prefetch("overtime_punches", queryset=OnDutyOvertimePunch.objects.order_by("sequence"))
+    ).order_by("-created_at")[:200]
     cfg = approval.get_config(WORKFLOW)
     return Response([_on_duty_session_dict(s, cfg=cfg) for s in qs])
 

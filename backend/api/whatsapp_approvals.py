@@ -284,6 +284,37 @@ def _employee_request(r) -> Summary:
 # ── the one call every approval workflow makes ─────────────────────────────────
 
 
+def decision_message(
+    module: str, obj, decision: str, *, approver: str = "", role: str = "", comment: str | None = None
+):
+    """(employee, message type, variables, dedupe key) of the decision message about `module` request `obj`: what
+    notify_decision sends on WhatsApp and hands to the phone (push_messages.announce). The automatic rejection of waiting
+    requests (request_auto_reject) hands the same message to the phone only. Raises for an unknown module / decision."""
+    if decision not in ("approved", "rejected"):
+        raise ValueError(f"not a decision: {decision!r}")
+    summary = _BUILDERS[module](obj)
+    approved = decision == "approved"
+    comment = (comment or "").strip()
+    details = _join(summary.details, summary.next_step, sep=". ") if approved else summary.details
+    # the variables of the Meta template (hrms_approval_approved / _rejected), each on one line: a reason or a
+    # comment typed over several lines is joined into one
+    params = _flat(
+        {
+            "employee_name": _name(summary.employee),
+            "request_type": summary.request_type,
+            "date": summary.date,
+            "time": summary.time,
+            "details": details,
+            "approver": approver_label(approver, role),
+            "comment": comment,
+            "requested_on": summary.requested_on,
+            "reason": summary.reason,
+        }
+    )
+    document_type = "approval_approved" if approved else "approval_rejected"
+    return summary.employee, document_type, params, f"approval:{module}:{obj.pk}:{decision}"
+
+
 def notify_decision(module: str, obj, decision: str, *, approver: str = "", role: str = "", comment: str | None = None):
     """WhatsApp the employee that their `module` request `obj` was approved or rejected.
     Returns the log row (or None when nothing was sent: switched off, not configured, already sent).
@@ -291,30 +322,14 @@ def notify_decision(module: str, obj, decision: str, *, approver: str = "", role
     try:
         if decision not in ("approved", "rejected"):
             return None
-        summary = _BUILDERS[module](obj)
-        approved = decision == "approved"
-        comment = (comment or "").strip()
-        details = _join(summary.details, summary.next_step, sep=". ") if approved else summary.details
-        # the variables of the Meta template (hrms_approval_approved / _rejected), each on one line: a reason or a
-        # comment typed over several lines is joined into one
-        params = _flat(
-            {
-                "employee_name": _name(summary.employee),
-                "request_type": summary.request_type,
-                "date": summary.date,
-                "time": summary.time,
-                "details": details,
-                "approver": approver_label(approver, role),
-                "comment": comment,
-                "requested_on": summary.requested_on,
-                "reason": summary.reason,
-            }
+        employee, document_type, params, dedupe_key = decision_message(
+            module, obj, decision, approver=approver, role=role, comment=comment
         )
         return whatsapp_service.send_notification(
-            summary.employee,
-            "approval_approved" if approved else "approval_rejected",
+            employee,
+            document_type,
             params,
-            dedupe_key=f"approval:{module}:{obj.pk}:{decision}",
+            dedupe_key=dedupe_key,
             document_ref_id=obj.pk,
             related_module=module,
         )

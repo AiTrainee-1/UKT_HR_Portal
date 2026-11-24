@@ -383,20 +383,16 @@ export default function OtpTab({ access, go }: { access: WaAccess; go: (tab: WaT
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 text-[13px]">
               <p>
-                Employee code and password sign-in is{" "}
-                <b className={password.enabled ? VALUE_TINT.good : VALUE_TINT.warn}>
-                  {password.enabled ? "ON" : "OFF"}
-                </b>
-                .
+                Employee code and password sign-in is <b className={VALUE_TINT.good}>always ON</b>.
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Turned off, it is refused only while a code can actually be sent for sign-in, by WhatsApp or SMS. If
-                neither can, password sign-in comes back by itself, so nobody is ever locked out.
+                It is the default way to sign in to the mobile app. Sign-in codes by WhatsApp and SMS are offered next to
+                it as extra options; one that is switched off shows as locked in the app.
               </p>
             </div>
             <Switch
-              checked={password.enabled}
-              disabled={!canEdit || update.isPending}
+              checked
+              disabled
               onCheckedChange={(v) => save({ passwordLoginEnabled: v }, `Password sign-in: ${v ? "ON" : "OFF"}`)}
               aria-label="Password sign-in"
               data-testid="toggle-passwordLoginEnabled"

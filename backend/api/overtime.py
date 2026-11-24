@@ -67,6 +67,7 @@ from .models import (
     Employee,
     EmployeeShiftAssignment,
     HolidayWorkClaim,
+    OnDutyOvertimePunch,
     OvertimeRecord,
     PayrollSettings,
 )
@@ -98,6 +99,36 @@ def _month_records(year: int, month: int, employees=None):
     if employees is not None:
         qs = qs.filter(employee__in=employees)
     return list(qs.order_by("-date", "employee__employee_code"))
+
+
+def approved_ot_punch_ends(employee_ids, date_from: date_type, date_to: date_type) -> dict:
+    """{(employee_id, date): the latest APPROVED On-Duty overtime punch} (OnDutyOvertimePunch, owner 2026-11-24). An OT
+    punch is never attendance; here, and only here, it extends the day's OT end when it is later than the last punch."""
+    ends: dict = {}
+    for emp_id, day, at in OnDutyOvertimePunch.objects.filter(
+        employee_id__in=list(employee_ids),
+        punch_date__gte=date_from,
+        punch_date__lte=date_to,
+        status=OnDutyOvertimePunch.STATUS_APPROVED,
+    ).values_list("employee_id", "punch_date", "punch_time"):
+        key = (emp_id, day)
+        if key not in ends or at > ends[key]:
+            ends[key] = at
+    return ends
+
+
+def with_ot_punch(extra: int, last_punch, ot_end, shift) -> tuple[int, object]:
+    """(extra minutes, last punch) of a day once its approved OT punches are counted: the OT punch wins only when it is
+    past the attendance's own figure (a day shift; an after-midnight OT punch is not stretched across days)."""
+    if ot_end is None:
+        return extra, last_punch
+    end = comp.shift_end_secs(shift)
+    if end is None or end >= 86400:
+        return extra, last_punch
+    ot_extra = rules.extra_minutes(_t2s(ot_end), end)
+    if ot_extra > extra:
+        return ot_extra, ot_end
+    return extra, last_punch
 
 
 def extra_for_record(rec: AttendanceDayRecord, shift) -> int:
@@ -266,6 +297,7 @@ def sync_overtime(
     )
     existing = _snapshot(ids, date_from, date_to)
     claimed = _claimed_record_ids(existing.values())
+    ot_ends = approved_ot_punch_ends(ids, date_from, date_to)
 
     wanted: dict[tuple, dict] = {}  # (employee_id, date) -> the row this day should be
     for rec in day_records:
@@ -276,14 +308,16 @@ def sync_overtime(
             continue
         if comp.is_off_day(emp, rec.date, emp_assignments):
             continue  # work on a Sunday / holiday is not OT: it is Compensation Leave (holiday work)
-        extra = extra_for_record(rec, shift)
+        extra, last_out = with_ot_punch(
+            extra_for_record(rec, shift), rec.last_punch, ot_ends.get((rec.employee_id, rec.date)), shift
+        )
         if extra <= 0:
             continue
         kind = classify_day(extra, shift, rec.date, config, allowance_rules, shift_rules)
         if kind is not None:
             wanted[(rec.employee_id, rec.date)] = {
                 "shift_end_time": shift.end_time,
-                "last_punch_out": rec.last_punch,
+                "last_punch_out": last_out,
                 "ot_minutes": extra,
                 **kind,
             }

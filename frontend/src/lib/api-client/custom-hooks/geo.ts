@@ -47,6 +47,30 @@ export type OnDutySessionItem = {
   createdAt: string | null;
   /** Where the request is in its approval pipeline and who can act on it (see lib/approval-workflow.ts). */
   approval?: ApprovalProgress | null;
+  /** Overtime punches the employee recorded after the day's four (mobile "Continue Duty", 2026-11-24). They are never
+   *  attendance: they follow this request's decision and, once approved, the last one is the day's OT end for overtime
+   *  detection. Absent on an older backend. */
+  otPunches?: OnDutyOtPunchItem[];
+  /** Minutes the last OT punch is past the employee's shift end. */
+  otMinutes?: number;
+};
+
+/** One overtime punch of an On-Duty session (backend OnDutyOvertimePunch). */
+export type OnDutyOtPunchItem = {
+  id: number;
+  sessionId: number;
+  sequence: number;
+  punchDate: string;
+  punchTime: string;
+  latitude: number;
+  longitude: number;
+  accuracyM: number | null;
+  isMocked: boolean;
+  hasPhoto: boolean;
+  hasPhoto2: boolean;
+  status: "pending" | "approved" | "rejected";
+  isOvertime: true;
+  createdAt: string | null;
 };
 
 /** Days to narrow a list to (from / to, YYYY-MM-DD, India: the HR portal's date filter, 2026-11-24). */

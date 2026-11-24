@@ -496,17 +496,10 @@ def _login_ready(snap: _Snapshot) -> list[str]:
 
 
 def password_login_block_message() -> str | None:
-    """The refusal for a password sign-in when HR has switched password login off while code sign-in really works, else
-    None. Never locks everyone out: while no channel can send a sign-in code right now (switched off, not configured,
-    paused / capped for the moment) password sign-in stays open."""
-    snap = _Snapshot()
-    if snap.wa.password_login_enabled:
-        return None
-    ready = _login_ready(snap)
-    if not ready:
-        return None
-    article = "an" if ready[0] == CHANNEL_SMS else "a"
-    return f"Password sign-in is turned off. Please sign in with {article} {_names(ready)} code."
+    """The refusal for a password sign-in: never, since 2026-11-24 (owner: "Employee Code + Password is the default and
+    always-accessible login method"; the one-time codes by SMS / WhatsApp are extra ways in). WhatsAppSettings.
+    password_login_enabled is kept in the database but no longer read here, and the HR portal shows it as always on."""
+    return None
 
 
 def login_options() -> dict:
@@ -527,7 +520,7 @@ def login_options() -> dict:
         "otpLogin": bool(lists[EmployeeOtp.PURPOSE_LOGIN]),
         "otpReset": bool(lists[EmployeeOtp.PURPOSE_RESET]),
         "otpActivate": bool(lists[EmployeeOtp.PURPOSE_ACTIVATE]),
-        "passwordLogin": bool(snap.wa.password_login_enabled or not _login_ready(snap)),
+        "passwordLogin": True,  # always (2026-11-24): see password_login_block_message
         "otpChannel": first,
         "codeLength": code_length(first),
         "otpChannels": lists,

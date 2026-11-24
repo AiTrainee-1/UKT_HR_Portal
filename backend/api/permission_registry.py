@@ -199,6 +199,10 @@ _BASE_URL_MODULE_MAP: dict[str, str] = {
     "missing-punch-requests": "missing_punch",
 
     "employee-requests": "requests",
+    # Employee Enquiries (2026-11-24): whoever may see / handle the Requests page may do the same on Enquiries.
+    "enquiries": "requests",
+    # An On-Duty overtime punch's photos (2026-11-24): the same right as the On-Duty punch photos.
+    "on-duty-overtime-punches": "geo_attendance.verifications",
     "permissions": "requests",
     "outpass-requests": "requests",
     # The Requests page's unified list, its HoD's and its Notify tabs are requests.list / .hods / .notify

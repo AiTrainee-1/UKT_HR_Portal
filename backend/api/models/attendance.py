@@ -530,6 +530,50 @@ class OnDutyPunchVerification(models.Model):
         ordering = ["-created_at"]
 
 
+class OnDutyOvertimePunch(models.Model):
+    """
+    An OVERTIME punch of an On-Duty day (owner 2026-11-24): after the day's four punches the employee chose "Continue
+    Duty" and records extra punches (selfie + GPS, like an on-duty punch) for the work done beyond the shift.
+
+    Kept apart from the four punches on purpose: an OT punch is NEVER written to AttendanceLog, so the 4-punch attendance
+    engine (day status, late / early, payroll) is exactly what it was. Its only effect is on overtime: once the On-Duty
+    request is approved, the last OT punch of the day is the day's OT end for overtime detection (overtime.py), when it is
+    later than the attendance's own last punch.
+
+    `status` follows the On-Duty request: pending while the request waits, approved with its final approval (or at once
+    when the request was already approved), rejected with it.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_APPROVED = "approved"
+    STATUS_REJECTED = "rejected"
+    STATUS_CHOICES = [(STATUS_PENDING, "Pending"), (STATUS_APPROVED, "Approved"), (STATUS_REJECTED, "Rejected")]
+
+    session = models.ForeignKey(
+        OnDutySession, on_delete=models.CASCADE, db_column="session_id", related_name="overtime_punches"
+    )
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="on_duty_overtime_punches"
+    )
+    sequence = models.PositiveSmallIntegerField(db_column="sequence")  # 1, 2, 3 ... within the session
+    punch_date = models.DateField(db_column="punch_date")
+    punch_time = models.TimeField(db_column="punch_time")
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="latitude")
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, db_column="longitude")
+    accuracy_m = models.FloatField(null=True, blank=True, db_column="accuracy_m")
+    is_mocked = models.BooleanField(default=False, db_column="is_mocked")
+    photo = models.FileField(upload_to="on_duty_overtime_punches/%Y/%m/", db_column="photo")
+    photo2 = models.FileField(upload_to="on_duty_overtime_punches/%Y/%m/", db_column="photo2", null=True, blank=True)
+    status = models.TextField(choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "on_duty_overtime_punches"
+        ordering = ["session_id", "sequence"]
+        constraints = [models.UniqueConstraint(fields=["session", "sequence"], name="uniq_ot_punch_session_sequence")]
+        indexes = [models.Index(fields=["employee", "punch_date"])]
+
+
 class MissingPunchRequest(models.Model):
     """
     Employee self-service "I forgot to punch" request -date + time + reason,

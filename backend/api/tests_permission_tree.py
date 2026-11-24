@@ -114,6 +114,12 @@ NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"missed-payroll(/.*)?", "payroll"),
     # Employees -> Investigation, 2026-11-23: follows "Activate / deactivate an employee" until a role sets it
     (r"employee-investigation(/.*)?", "employees"),
+    # Settings -> Auto-Reject Requests, 2026-11-24: follows Settings until a role sets it
+    (r"request-auto-reject(/.*)?", "settings"),
+    # Employee Enquiries, 2026-11-24: follows the Requests page until a role sets it
+    (r"enquiries(/.*)?", "requests"),
+    # On-Duty overtime punch photos, 2026-11-24: follow Geo Attendance (Punch Verifications)
+    (r"on-duty-overtime-punches(/.*)?", "geo_attendance"),
 )
 
 

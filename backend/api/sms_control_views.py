@@ -274,11 +274,6 @@ def _warnings(s: SmsSettings) -> list[str]:
             out.append(f"SMS codes are switched on but this server cannot send them: {reason}")
     if not (s.otp_login_enabled or s.otp_reset_enabled or s.otp_activate_enabled):
         out.append("SMS codes are switched on but all three code switches are off, so no SMS is sent.")
-    if not WhatsAppSettings.get().password_login_enabled:
-        out.append(
-            "Password sign-in is switched off (WhatsApp Control): keep at least one code channel working. If no code can "
-            "be sent (a limit is used up, 2Factor fails) the system opens password sign-in again by itself until it works."
-        )
     paused, until = sms_service.circuit()
     if paused:
         out.append(

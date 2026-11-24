@@ -13,8 +13,10 @@ import { GEO_BASE, GEO_SECTIONS, GEO_SECTION_LABEL, geoPath } from '@/pages/hr/g
 import { useQuery } from '@tanstack/react-query';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import { customFetch } from '@/lib/api-client/custom-fetch';
-import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests } from '@/lib/api-client/custom-hooks';
+import { usePayrollSettings, useOnDutySessionsHR, useOnDutyPunchVerificationsHR, useListOutpassRequests, useEnquirySummary } from '@/lib/api-client/custom-hooks';
+import { useToast } from '@/hooks/use-toast';
 import {
+  MessageCircleQuestion,
   LayoutDashboard, Users, Clock, Calendar, CheckCircle2, IndianRupee, Factory,
   Wallet, BarChart3, Shield, Activity, Settings, FileText, LogOut,
   ChevronRight, Search, X, Command, UserCheck, UserMinus,
@@ -118,6 +120,7 @@ export const navGroups: NavGroupData[] = [
       { path: '/hr/leave', label: 'Leave & Holiday', icon: Calendar },
       { path: '/hr/casual-leave', label: 'Casual Leave', icon: CalendarHeart },
       { path: '/hr/requests', label: 'Requests', icon: CheckCircle2 },
+      { path: '/hr/enquiries', label: 'Enquiries', icon: MessageCircleQuestion },
       { path: '/hr/promotion', label: 'Promotion', icon: Award },
       { path: '/hr/increment', label: 'Increment', icon: TrendingUp },
       { path: '/hr/bonus', label: 'Bonus', icon: Gift },
@@ -685,6 +688,35 @@ function HrSidebarView({
   // used to download every leave / permission / resignation / advance ever raised (up to 2,000 rows each, every 30 s)
   // just to count the handful still pending. The counting below is unchanged.
   const { data: leaveData }  = useListLeaveRequests({ status: 'pending' }, { query: { refetchInterval: 30_000, enabled: canSeeRequests } } as any);
+  // Employee Enquiries (2026-11-24): the waiting count on the Enquiries row, and a toast when a new one arrives while HR
+  // is in the portal (HR has no phone push: this badge + toast is how HR hears about a new enquiry).
+  const { data: enquirySummary } = useEnquirySummary(canSeeRequests);
+  const pendingEnquiryCount = enquirySummary?.pending ?? 0;
+  const { toast: showEnquiryToast } = useToast();
+  const lastEnquiryId = useRef<number | null>(null);
+  React.useEffect(() => {
+    const latest = enquirySummary?.latest;
+    if (!latest) return;
+    let seen: number | null = lastEnquiryId.current;
+    if (seen === null) {
+      try {
+        seen = Number(sessionStorage.getItem('hr.lastEnquiryId') || 0);
+      } catch {
+        seen = 0;
+      }
+    }
+    if (seen && latest.id > seen) {
+      showEnquiryToast({ title: 'New enquiry', description: `${latest.employeeName}: ${latest.subject}` });
+    }
+    lastEnquiryId.current = Math.max(latest.id, seen ?? 0);
+    try {
+      sessionStorage.setItem('hr.lastEnquiryId', String(lastEnquiryId.current));
+    } catch {
+      /* private mode: the toast then only shows within this page */
+    }
+    // only when a newer enquiry arrives (the toast function is stable)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enquirySummary?.latest?.id]);
   const { data: permData }   = useListPermissions({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeRequests } as any);
   const { data: resignData } = useListResignations('pending,dept_approved', { refetchInterval: 30_000, enabled: canSeeResignations } as any);
   const { data: advanceData } = useListAdvances({ status: 'pending' }, { refetchInterval: 30_000, enabled: canSeeSettlement } as any);
@@ -782,6 +814,8 @@ function HrSidebarView({
   const withBadges = (item: NavItemData): NavItemData =>
     item.path === '/hr/requests'
       ? { ...item, badge: pendingCount || undefined }
+      : item.path === '/hr/enquiries'
+      ? { ...item, badge: pendingEnquiryCount || undefined }
       : item.path === '/hr/settlement'
       ? { ...item, badge: pendingAdvancesCount || undefined }
       : item.path === '/hr/notifications'

@@ -2,9 +2,13 @@ import { cn } from "@/lib/utils";
 import { barBreaks, barOrigin, barPercent, barTicks, labelsThatFit, type LadderPoint } from "./summary";
 import { atText } from "./time";
 
-/** The stripes of an unpaid break on a bar. */
-export const BREAK_HATCH =
-  "repeating-linear-gradient(135deg, rgba(71, 85, 105, 0.55) 0 2px, rgba(255, 255, 255, 0.75) 2px 5px)";
+/**
+ * The stripes of an unpaid break on a bar, as a class (not an inline style) so a theme can restyle it: the Clean
+ * Professional theme draws every page flat, so there the break is a solid neutral band (themes/clean/areas/
+ * settings-reports.css, `.shift-break`; 2026-11-24).
+ */
+export const BREAK_FILL =
+  "shift-break bg-[repeating-linear-gradient(135deg,rgba(71,85,105,0.55)_0_2px,rgba(255,255,255,0.75)_2px_5px)]";
 
 /** Labels near an edge of the bar hang inwards, so they never stick out of it. */
 function anchor(percent: number): string {
@@ -81,8 +85,8 @@ export function ShiftTimeline({
             {barBreaks(origin, spans).map(([from, to]) => (
               <div
                 key={`${from}-${to}`}
-                className="absolute inset-y-0"
-                style={{ ...band(from, to), backgroundImage: BREAK_HATCH }}
+                className={cn("absolute inset-y-0", BREAK_FILL)}
+                style={band(from, to)}
                 data-part="break"
               />
             ))}
@@ -134,7 +138,7 @@ export function TimelineKey({ className }: { className?: string }) {
         <span className={cn(swatch, "bg-sky-300")} /> Paid time after the end
       </li>
       <li className="flex items-center gap-1.5">
-        <span className={swatch} style={{ backgroundImage: BREAK_HATCH }} /> Unpaid break
+        <span className={cn(swatch, BREAK_FILL)} /> Unpaid break
       </li>
       <li className="flex items-center gap-1.5">
         <span className="inline-block h-3 w-0.5 rounded-full bg-slate-800" /> Paid leaving time (shifts above it)

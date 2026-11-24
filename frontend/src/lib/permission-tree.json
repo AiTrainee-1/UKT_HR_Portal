@@ -2746,6 +2746,13 @@
               "enforce": "server"
             },
             {
+              "key": "settings.request_auto_reject",
+              "label": "Auto-Reject Requests",
+              "type": "tab",
+              "help": "Requests nobody decided within a number of days of being submitted are rejected every night (never resignations); the switch, the days, Run now and the history.",
+              "enforce": "server"
+            },
+            {
               "key": "settings.devices",
               "label": "Devices",
               "type": "tab",

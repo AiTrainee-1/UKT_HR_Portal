@@ -38,6 +38,8 @@ const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/casual-leave": "casual_leave",
   "/hr/missing-punch": "missing_punch",
   "/hr/requests": "requests",
+  // Enquiries (2026-11-24) is a new page whose key is requests: whoever could open Requests opens it the same way
+  "/hr/enquiries": "requests",
   "/hr/promotion": "promotion",
   "/hr/increment": "increment",
   "/hr/bonus": "bonus",

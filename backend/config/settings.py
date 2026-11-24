@@ -69,6 +69,8 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     # Keeps the request being served reachable for absolute API links (employee photo links, api/employee_photo.py).
     "api.request_context.RequestContextMiddleware",
+    # A write carrying an Idempotency-Key header is done once however often it is sent (the mobile app's offline queue).
+    "api.idempotency.IdempotencyMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -284,7 +286,12 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_URLS_REGEX = r"^/(?!api/shared/).*$"
 # Lets the browser clients see that a capped list was cut short (view_common.paginate), and read the
 # server-chosen filename of a downloaded report/export (Vercel and Railway are different origins).
-CORS_EXPOSE_HEADERS = ["X-Truncated", "Content-Disposition"]
+CORS_EXPOSE_HEADERS = ["X-Truncated", "Content-Disposition", "Idempotent-Replayed"]
+# The Employee Web App sends an Idempotency-Key with every write it may retry after a dropped connection
+# (api/idempotency.py); a browser only sends a custom header the preflight allows.
+from corsheaders.defaults import default_headers as _cors_default_headers  # noqa: E402
+
+CORS_ALLOW_HEADERS = (*_cors_default_headers, "idempotency-key")
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"],

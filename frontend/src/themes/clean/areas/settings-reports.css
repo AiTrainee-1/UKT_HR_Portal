@@ -16,6 +16,16 @@
 
 /* ── 1. Settings (src/pages/hr/settings/settings-skin.css) ────────────────────────────────────────────────────────── */
 
+/* the Production Shifts timeline: an unpaid break is striped in the other themes (ShiftTimeline.tsx BREAK_FILL); flat here,
+   a solid neutral band with white edges, still unlike the blue shift time and the light-blue paid time after it */
+html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .shift-break {
+  background-image: none;
+  background-color: var(--clean-n-400);
+  box-shadow:
+    inset 1px 0 0 rgb(var(--clean-white) / 85%),
+    inset -1px 0 0 rgb(var(--clean-white) / 85%);
+}
+
 /* the menu text was a fixed slate: the neutral ramp's own step */
 html[data-theme="clean"][data-clean-theme]:not([data-md-theme]) .settings-skin .settings-nav-item {
   color: var(--clean-n-700);

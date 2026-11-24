@@ -96,6 +96,7 @@ const Branches = lazy(() => import("@/pages/hr/Branches"));
 const ManageShift = lazy(() => import("@/pages/hr/ManageShift"));
 const LeaveHoliday = lazy(() => import("@/pages/hr/LeaveHoliday"));
 const ApprovedRequests = lazy(() => import("@/pages/hr/ApprovedRequests"));
+const Enquiries = lazy(() => import("@/pages/hr/Enquiries"));
 const ProductionPayrollWeekly = lazy(() => import("@/pages/hr/ProductionPayrollWeekly"));
 const ProductionPayrollBiweekly = lazy(() => import("@/pages/hr/ProductionPayrollBiweekly"));
 const ProductionPayrollMonthly = lazy(() => import("@/pages/hr/ProductionPayrollMonthly"));
@@ -463,6 +464,7 @@ function Router() {
         <Route path="/hr/shifts">{() => <ProtectedRoute component={ManageShift} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/leave">{() => <ProtectedRoute component={LeaveHoliday} allowedRoles={["hr"]} />}</Route>
         <Route path="/hr/requests">{() => <ProtectedRoute component={ApprovedRequests} allowedRoles={["hr"]} />}</Route>
+        <Route path="/hr/enquiries">{() => <ProtectedRoute component={Enquiries} allowedRoles={["hr"]} />}</Route>
         {/* One payroll's details page (a page of its own, not a dialog): staff under /hr/payroll, production under
           /hr/production-payroll, each gated by its own permission module through the path prefix. Exact paths, so
           these never shadow the list pages below. */}

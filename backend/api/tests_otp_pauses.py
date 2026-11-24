@@ -93,8 +93,8 @@ class WhatsAppAccountFailureTests(Base):
 
     def test_an_expired_token_reopens_password_sign_in_and_the_first_time_setup(self):
         # codes work: HR's "password sign-in off" holds, and a first password needs a code
-        self.assertFalse(self.options()["passwordLogin"])
-        self.assertEqual(self.password_login().status_code, 403)
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
+        self.assertEqual(self.password_login().status_code, 200)
         self.assertTrue(otp_service.activation_required())
 
         self.break_the_token()
@@ -134,8 +134,8 @@ class WhatsAppAccountFailureTests(Base):
         r, _ = self.ask()
         self.assertEqual(r.status_code, 200)
         self.assertIsNone(whatsapp_dispatcher.account_problem())
-        self.assertFalse(self.options()["passwordLogin"])
-        self.assertEqual(self.password_login().status_code, 403)
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
+        self.assertEqual(self.password_login().status_code, 200)
         self.assertTrue(otp_service.activation_required())
 
     def test_a_request_without_a_channel_goes_to_sms_while_whatsapp_is_paused(self):
@@ -145,10 +145,8 @@ class WhatsAppAccountFailureTests(Base):
         # an older app reads otpChannel / codeLength and sends no channel: both must point at SMS now
         self.assertEqual((body["otpChannel"], body["codeLength"]), ("sms", 4))
         self.assertEqual(body["otpChannels"]["login"], ["whatsapp", "sms"])
-        self.assertFalse(body["passwordLogin"])  # SMS really works, so HR's choice holds
-        self.assertEqual(
-            self.password_login().json()["error"], "Password sign-in is turned off. Please sign in with an SMS code."
-        )
+        self.assertTrue(body["passwordLogin"])  # password sign-in is always on since 2026-11-24
+        self.assertEqual(self.password_login().status_code, 200)
         r, sms_called = self.ask()
         self.assertEqual(r.status_code, 200)
         self.assertTrue(sms_called)
@@ -165,7 +163,7 @@ class WhatsAppAccountFailureTests(Base):
         self.assertEqual(r.status_code, 502)
         self.assertIsNone(otp_service.pause_reason("whatsapp"))
         self.assertIsNone(otp_service.account_problem("whatsapp"))
-        self.assertFalse(self.options()["passwordLogin"])
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
 
 
 class WhatsAppCodeLimitTests(Base):
@@ -194,7 +192,7 @@ class WhatsAppCodeLimitTests(Base):
         # the hour rolls over: codes and HR's choice are back
         self.age(EmployeeOtp, 61)
         self.assertIsNone(otp_service.pause_reason("whatsapp"))
-        self.assertFalse(self.options()["passwordLogin"])
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
 
     @override_settings(WHATSAPP_OTP_DAILY_CAP=2)
     def test_the_daily_limit_on_all_whatsapp_codes(self):
@@ -252,7 +250,7 @@ class SmsAccountFailureTests(Base):
             return self.post("otp/request", {"employeeCode": "E100", "purpose": "login"})
 
     def test_a_refused_key_keeps_password_sign_in_open_beyond_the_breaker(self):
-        self.assertFalse(self.options()["passwordLogin"])
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
         self.assertEqual(self.ask_sms(provider_error("Invalid API Key", 401)).status_code, 502)
         self.assertEqual(SmsMessageLog.objects.get().error_code, "auth")
         self.assertTrue(self.options()["passwordLogin"])
@@ -266,7 +264,7 @@ class SmsAccountFailureTests(Base):
         # the next send works (the key was fixed): HR's "password sign-in off" holds again
         self.assertEqual(self.ask_sms(provider_ok()).status_code, 200)
         self.assertIsNone(sms_service.account_problem())
-        self.assertFalse(self.options()["passwordLogin"])
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
         self.assertTrue(otp_service.activation_required())
 
     def test_an_empty_balance_and_a_refused_template_count_too_but_a_bad_number_does_not(self):
@@ -280,4 +278,4 @@ class SmsAccountFailureTests(Base):
                 self.ask_sms(provider_error(details))
                 self.assertEqual(SmsMessageLog.objects.get().error_code, kind)
                 self.assertEqual(sms_service.account_problem() is not None, account)
-                self.assertEqual(self.options()["passwordLogin"], account)
+                self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24

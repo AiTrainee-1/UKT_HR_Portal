@@ -768,13 +768,14 @@ class OnDutyPipelineTests(Base):
         self.assertEqual(self.hr_decide(s.id).status_code, 200)
         s.refresh_from_db()
         self.assertEqual((s.status, s.started_at), ("pending_hod", None))
-        self.assertFalse(
-            OutpassRequest.objects.filter(on_duty_session=s).exists()
-        )  # the pass comes with the final approval
+        # Since 2026-11-24 the gate pass is raised at submission (usable at the gate while it waits) and only approved
+        # with the final approval.
+        self.assertEqual(OutpassRequest.objects.get(on_duty_session=s).status, "pending")
         self.assertEqual(self.hod_decide(s.id).status_code, 200)
         s.refresh_from_db()
         self.assertEqual(s.status, "active")
-        self.assertTrue(OutpassRequest.objects.filter(on_duty_session=s).exists())
+        self.assertEqual(OutpassRequest.objects.filter(on_duty_session=s).count(), 1)
+        self.assertEqual(OutpassRequest.objects.get(on_duty_session=s).status, "approved")
 
     def test_the_employee_keeps_working_under_a_request_that_is_still_waiting(self):
         self.configure("on_duty", HR_THEN_HOD)

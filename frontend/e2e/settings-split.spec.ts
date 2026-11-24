@@ -360,7 +360,7 @@ test("saving a late rule from Late Detection and a period rule from Production P
 
   // 5. and the Production Payroll Overview reads both from the one server answer
   await openSettings(page, "/hr/settings?tab=production_payroll", '[data-testid="production-cycle-summary-weekly"]');
-  await expect(page.getByTestId("production-cycle-summary-weekly")).toContainText("Wednesday weeks");
+  await expect(page.getByTestId("production-cycle-summary-weekly")).toContainText("Wednesday → Tuesday"); // the summary reads "Week runs Wednesday → Tuesday"
   await expect(page.getByTestId("production-cycle-summary-weekly")).toContainText("(shared)");
   await resetCycles(page);
 });

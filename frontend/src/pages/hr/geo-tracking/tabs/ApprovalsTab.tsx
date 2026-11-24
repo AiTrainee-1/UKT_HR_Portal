@@ -2,7 +2,7 @@
 // Verifications tab). Each request is one card: who, where to, how far it got through the approval pipeline, and the decision.
 // What HR may decide follows the approval pipeline (User Management -> Approval Workflow Control), not the status label.
 import { useState, type ReactNode } from "react";
-import { CalendarClock, CheckCircle2, Clock, MapPin, MapPinned, ShieldAlert, XCircle } from "lucide-react";
+import { CalendarClock, Camera, CheckCircle2, Clock, ClockArrowUp, MapPin, MapPinned, ShieldAlert, XCircle } from "lucide-react";
 import { PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
 import { DateRangeBar, OutsideRangeNote, useDateRange } from "@/components/date-range";
 import { EmptyNote } from "@/components/payroll/kit/parts";
@@ -10,7 +10,13 @@ import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
-import { useOnDutySessionsHR, useUpdateOnDutySessionHR, type OnDutySessionItem } from "@/lib/api-client/custom-hooks";
+import {
+  useOnDutySessionsHR,
+  useUpdateOnDutySessionHR,
+  type OnDutyOtPunchItem,
+  type OnDutySessionItem,
+} from "@/lib/api-client/custom-hooks";
+import PunchPhotosDialog, { type PhotoPunch } from "../PunchPhotos";
 import { chooseDays, dayInRange, earliestDay, istDayOf } from "@/lib/date-range";
 import DecisionDialog from "../DecisionDialog";
 import { fmtDateTime } from "../logic";
@@ -32,6 +38,95 @@ const EMPTY_HINT: Record<Filter, string> = {
   completed: "Requests whose duty was marked Done, or ended with the 4th punch, appear here.",
   rejected: "Requests that were turned down appear here.",
 };
+
+/** "1 h 20 min" / "45 min". */
+function minutesText(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (!h) return `${m} min`;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+const OT_STATUS: Record<OnDutyOtPunchItem["status"], { label: string; className: string }> = {
+  pending: { label: "Waits for this request", className: "bg-amber-50 text-amber-800" },
+  approved: { label: "Approved", className: "bg-green-50 text-green-700" },
+  rejected: { label: "Rejected", className: "bg-red-50 text-red-700" },
+};
+
+/**
+ * The overtime punches of a session (mobile "Continue Duty" after the four, 2026-11-24): time, place accuracy, photos.
+ * They never become attendance; they follow this request's decision, and once approved the last one is the day's OT end
+ * for overtime detection (Compensation -> Overtime).
+ */
+function OvertimePunches({ session }: { session: OnDutySessionItem }) {
+  const [open, setOpen] = useState<PhotoPunch | null>(null);
+  const punches = session.otPunches ?? [];
+  if (!punches.length) return null;
+  const minutes = session.otMinutes ?? 0;
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/40 px-3 py-2.5" data-testid="ot-punches">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Eyebrow>
+          <span className="inline-flex items-center gap-1">
+            <ClockArrowUp size={12} className="text-amber-700" /> Overtime punches ({punches.length})
+          </span>
+        </Eyebrow>
+        {minutes > 0 && (
+          <span className="text-[11px] font-semibold text-amber-800">{minutesText(minutes)} past the shift end</span>
+        )}
+      </div>
+      <ul className="mt-1.5 divide-y divide-amber-100">
+        {punches.map((p) => {
+          const tone = OT_STATUS[p.status] ?? OT_STATUS.pending;
+          return (
+            <li key={p.id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-1.5 text-xs" data-testid="ot-punch">
+              <span className="rounded bg-amber-100 px-1.5 py-0.5 font-bold text-amber-800">OT {p.sequence}</span>
+              <span className="font-semibold text-gray-900">{p.punchTime.slice(0, 5)}</span>
+              <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${tone.className}`}>{tone.label}</span>
+              {p.isMocked && <span className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">Mock location</span>}
+              {p.accuracyM != null && <span className="text-gray-500">±{Math.round(p.accuracyM)} m</span>}
+              <a
+                className="text-[#006496] underline-offset-2 hover:underline"
+                href={`https://www.google.com/maps?q=${p.latitude},${p.longitude}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Map
+              </a>
+              {(p.hasPhoto || p.hasPhoto2) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto h-7 gap-1 text-[11px]"
+                  onClick={() =>
+                    setOpen({
+                      id: p.id,
+                      hasPhoto: p.hasPhoto,
+                      hasPhoto2: p.hasPhoto2,
+                      employeeName: session.employeeName,
+                      punchNumber: p.sequence,
+                      punchType: "OUT",
+                      punchTime: p.punchTime,
+                      photoBase: "on-duty-overtime-punches",
+                      description: `${session.employeeName}, OT punch ${p.sequence} at ${p.punchTime.slice(0, 5)}`,
+                    })
+                  }
+                >
+                  <Camera size={12} /> Photos
+                </Button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <p className="mt-1 text-[11px] leading-snug text-gray-500">
+        Not attendance: these follow this request&rsquo;s decision; once approved, the last one counts as the day&rsquo;s
+        overtime end.
+      </p>
+      <PunchPhotosDialog verification={open} onClose={() => setOpen(null)} />
+    </div>
+  );
+}
 
 /** One line of the review trail: who looked at the request and what they decided. */
 function ReviewLine({ children }: { children: ReactNode }) {
@@ -116,6 +211,8 @@ function SessionCard({
               )}
             </div>
           )}
+
+          <OvertimePunches session={session} />
 
           {!approval && session.status === "pending_hod" && (
             <Note tone="warn" icon={ShieldAlert}>

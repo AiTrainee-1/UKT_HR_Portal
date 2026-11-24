@@ -52,6 +52,8 @@ export * from "./recruitment";
 export * from "./reports";
 export * from "./requests";
 export * from "./casual-leave-policy";
+// Settings -> Auto-Reject Requests (2026-11-24): waiting requests rejected after N days, nightly and by Run now
+export * from "./request-auto-reject";
 export * from "./shifts";
 export * from "./system";
 export * from "./whatsapp";
@@ -67,3 +69,5 @@ export * from "./md-admin";
 export * from "./factory-employees";
 // Employees -> Investigation (2026-11-23): employees away 15 / 30+ days in a row, Keep active / Mark inactive, Auto Trigger
 export * from "./employee-investigation";
+// Employee Enquiries (2026-11-24): the mobile app's questions to HR, handled as a to-do list
+export * from "./enquiries";

@@ -161,10 +161,10 @@ class LoginOptionsTests(OtpBase):
         self.assertEqual(self.options()["otpChannels"]["login"], ["whatsapp"])
         self.assertEqual(otp_service.whatsapp_template("login").language, "en_US")
 
-    def test_password_login_can_be_switched_off_only_while_otp_really_works(self):
+    def test_password_login_is_always_offered(self):
+        # 2026-11-24: password sign-in is the default and always-accessible way in, whatever the old switch says.
         whatsapp_settings(password_login_enabled=False)
-        self.assertFalse(self.options()["passwordLogin"])
-        # OTP unavailable -> never lock everyone out.
+        self.assertTrue(self.options()["passwordLogin"])
         self.whatsapp_configured = False
         self.assertTrue(self.options()["passwordLogin"])
 
@@ -471,11 +471,11 @@ class PasswordLoginSwitchTests(OtpBase):
             self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 200
         )
 
-    def test_it_is_refused_when_switched_off_and_otp_is_available(self):
+    def test_it_works_even_with_the_old_switch_off_and_otp_available(self):
+        # 2026-11-24: password sign-in can no longer be switched off.
         whatsapp_settings(password_login_enabled=False)
         r = self.post("employee-login", {"identifier": "E100", "password": "correct-horse"})
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.json()["error"], "Password sign-in is turned off. Please sign in with a WhatsApp code.")
+        self.assertEqual(r.status_code, 200)
 
     def test_it_keeps_working_when_otp_cannot_(self):
         whatsapp_settings(password_login_enabled=False)

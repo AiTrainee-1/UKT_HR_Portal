@@ -469,6 +469,7 @@ describe("the builder's page and its two addresses", () => {
       "/api/notifications",
     ].map((path) => [path, []]),
   );
+  HR_SHELL["/api/enquiries/summary"] = { pending: 0, onHold: 0, done: 0, latest: null } as any;
 
   function Routes() {
     return (

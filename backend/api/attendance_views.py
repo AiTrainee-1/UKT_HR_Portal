@@ -160,6 +160,24 @@ def _punch_entry(log, d: date_type, ptype: str) -> dict:
     return item
 
 
+def punch_kind(source: str | None) -> str:
+    """The family of a punch's source, for the apps' day sheet: biometric | geo | on_duty | ot | missing_punch | hr | auto."""
+    s = str(source or "")
+    if s == "on_duty_ot":
+        return "ot"
+    if s.startswith("on_duty"):
+        return "on_duty"
+    if s.startswith("geo"):
+        return "geo"
+    if s.startswith("missing_punch"):
+        return "missing_punch"
+    if s in ("manual", "punch_view", "hr_edit") or s.startswith("hr") or s.startswith("override"):
+        return "hr"
+    if s.startswith("auto"):
+        return "auto"
+    return "biometric"
+
+
 def _verification_entry(v) -> dict:
     return {
         "date": v.punch_date.isoformat(),
@@ -1006,7 +1024,9 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
         employee_id=pk, date__year=year, date__month=month,
     ).order_by("date", "punch_time")
     by_date: dict[str, list] = defaultdict(list)
+    raw_logs: dict = defaultdict(list)  # date -> AttendanceLog rows, for allPunches below
     for log in logs_qs:
+        raw_logs[log.date].append(log)
         date_key = str(log.date)
         position = len(by_date[date_key])
         by_date[date_key].append({
@@ -1039,6 +1059,42 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
                 cur += timedelta(days=1)
         except Exception:
             pass
+
+    # Every punch of each day with its source, for the apps' day sheet (2026-11-24, additive: the four-punch judgement
+    # above is untouched): the counted attendance punches (biometric, Office Geo Punch, approved On-Duty / Missing Punch,
+    # HR entries ...), the On-Duty punches still waiting for HR (or turned down) and the On-Duty OVERTIME punches, which
+    # are never attendance. Same helpers as the HR portal's every-punch view (_display_punches).
+    month_from, month_to = date_type(year, month, 1), date_type(year, month, days_in_month)
+    held = _held_verifications([emp.id], month_from, month_to)
+    ot_by_date: dict = defaultdict(list)
+    from .models import OnDutyOvertimePunch
+
+    for ot in OnDutyOvertimePunch.objects.filter(
+        employee=emp, punch_date__gte=month_from, punch_date__lte=month_to,
+    ).exclude(status=OnDutyOvertimePunch.STATUS_REJECTED).order_by("punch_date", "punch_time", "id"):
+        ot_by_date[ot.punch_date].append(ot)
+
+    def all_punches_of(d: date_type) -> list[dict]:
+        verifications = held.get((emp.id, d), ())
+        if d in prod_days:
+            rows = _display_punches(d, [log for _secs, log in prod_days[d]], raw_logs.get(d, []), verifications)
+        else:
+            rows = _display_punches(d, raw_logs.get(d, []), None, verifications)
+        for ot in ot_by_date.get(d, ()):
+            rows.append({
+                "date": ot.punch_date.isoformat(),
+                "time": ot.punch_time.strftime("%H:%M:%S"),
+                "type": "OT",
+                "source": "on_duty_ot",
+                "sourceLabel": f"OT Punch {ot.sequence}",
+                "counted": False,
+                "verification": ot.status,
+            })
+        rows.sort(key=lambda r: (r["date"], r["time"]))
+        for r in rows:
+            r["kind"] = punch_kind(r.get("source"))
+            r.setdefault("counted", True)
+        return rows
 
     holidays_by_date, casual_dates = day_calendar_facts(emp, year, month)
     # "HR edited this day" (2026-11-02): the day's latest HR attendance edit and where its approval stands -the apps show a
@@ -1090,6 +1146,11 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "lastPunch":    last_out,
             "totalPunches": len(punches) if cur_date in prod_days else (rec.total_punches if rec else len(punches)),
             "punches":      punches,
+            # Every punch of the day with its source (see all_punches_of), and the shift the day earned (payroll's own
+            # figure: 1.00 full, 0.50 half ...; null for a day still to come).
+            "allPunches":   [] if is_future else all_punches_of(cur_date),
+            "shiftsEarned": (float(rec.shifts_earned) if rec is not None and rec.shifts_earned is not None else None)
+                            if not is_future else None,
             "leaveType":    leave_dates.get(date_str),
             "hoursWorked":  str(manual.hours_worked) if manual and manual.hours_worked else None,
             "source":       (punches[0]["source"] if punches else ("manual" if manual else None)),

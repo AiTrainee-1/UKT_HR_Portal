@@ -72,27 +72,37 @@ def notify_geo_session_approved(session, reviewer_name: str, comment: str | None
     )
 
 
+def geo_session_rejection(
+    session, reviewer_name: str, role: str = "hr", comment: str | None = None, voided: int = 0
+) -> tuple[str, dict, str]:
+    """(message type, variables, dedupe key) of the On-Duty rejection: what notify_geo_session_rejected sends on WhatsApp
+    and hands to the phone. The automatic rejection of waiting requests (request_auto_reject) hands it to the phone only."""
+    emp = session.employee
+    params = flat(
+        {
+            "employee_name": full_name(emp),
+            "destination": session.destination,
+            "requested_on": stamp_str(session.created_at),
+            "rejected_by": approver_label(reviewer_name, role),
+            "comment": comment,
+            "punches_note": f"The {voided} punch(es) you recorded under it were not counted." if voided else "",
+        }
+    )
+    return "geo_rejection", params, f"geo:{session.id}:rejected"
+
+
 @best_effort
 def notify_geo_session_rejected(
     session, reviewer_name: str, role: str = "hr", comment: str | None = None, voided: int = 0
 ):
     """The employee's Geo Attendance (On-Duty) request was rejected -by their Department Head or
     by HR. `voided` is how many punches recorded under it stopped counting."""
-    emp = session.employee
+    document_type, params, dedupe_key = geo_session_rejection(session, reviewer_name, role, comment, voided)
     return whatsapp_service.send_notification(
-        emp,
-        "geo_rejection",
-        flat(
-            {
-                "employee_name": full_name(emp),
-                "destination": session.destination,
-                "requested_on": stamp_str(session.created_at),
-                "rejected_by": approver_label(reviewer_name, role),
-                "comment": comment,
-                "punches_note": f"The {voided} punch(es) you recorded under it were not counted." if voided else "",
-            }
-        ),
-        dedupe_key=f"geo:{session.id}:rejected",
+        session.employee,
+        document_type,
+        params,
+        dedupe_key=dedupe_key,
         document_ref_id=session.id,
         related_module="on_duty",
     )
@@ -123,14 +133,22 @@ def notify_geo_punch_approved(verification, reviewer_name: str, comment: str | N
     )
 
 
+def geo_punch_rejection(verification, reviewer_name: str, comment: str | None = None) -> tuple[str, dict, str]:
+    """(message type, variables, dedupe key) of a rejected On-Duty punch: what notify_geo_punch_rejected sends on WhatsApp
+    and hands to the phone. The automatic rejection of waiting requests (request_auto_reject) hands it to the phone only."""
+    params = flat({**_punch_params(verification), "rejected_by": reviewer_name or "HR", "comment": comment})
+    return "geo_punch_rejection", params, f"geopunch:{verification.id}:rejected"
+
+
 @best_effort
 def notify_geo_punch_rejected(verification, reviewer_name: str, comment: str | None = None):
     """A single captured Geo Attendance punch was rejected; it does not count and can be retried."""
+    document_type, params, dedupe_key = geo_punch_rejection(verification, reviewer_name, comment)
     return whatsapp_service.send_notification(
         verification.employee,
-        "geo_punch_rejection",
-        flat({**_punch_params(verification), "rejected_by": reviewer_name or "HR", "comment": comment}),
-        dedupe_key=f"geopunch:{verification.id}:rejected",
+        document_type,
+        params,
+        dedupe_key=dedupe_key,
         document_ref_id=verification.id,
         related_module="on_duty_punch",
     )

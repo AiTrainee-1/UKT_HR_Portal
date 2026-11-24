@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Building2,
   CalendarCheck,
+  CalendarX2,
   Clock,
   CreditCard,
   Database,
@@ -133,6 +134,20 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     usedBy: [
       { label: "Casual Leave", to: "/hr/casual-leave" },
       { label: "Attendance Edit" },
+      { label: "Employee apps" },
+    ],
+  },
+  {
+    id: "request_auto_reject",
+    label: "Auto-Reject Requests",
+    group: "time",
+    icon: CalendarX2,
+    purpose:
+      "Requests nobody decided within a number of days (45 by default) of being submitted are rejected automatically every night, the way HR's rejection closes them, with the usual notice and phone notification but no WhatsApp. Resignations are never rejected automatically.",
+    usedBy: [
+      { label: "Requests", to: "/hr/requests" },
+      { label: "Leave & Permissions", to: "/hr/leave" },
+      { label: "Missing Punch", to: "/hr/missing-punch" },
       { label: "Employee apps" },
     ],
   },
@@ -271,6 +286,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   late_detection: () => import("./LateDetectionTab"),
   compensation: () => import("./CompensationTab"),
   casual_leave: () => import("./CasualLeaveTab"),
+  request_auto_reject: () => import("./RequestAutoRejectTab"),
   devices: () => import("./DevicesTab"),
   payroll: () => import("./PayrollTab"),
   production_payroll: () => import("./ProductionPayrollTab"),

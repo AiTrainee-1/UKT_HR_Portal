@@ -399,9 +399,9 @@ class LoginOptionsMatrixTests(SmsBase):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"otp_login_enabled": True})
         self.assertFalse(self.options()["otpLogin"])  # SMS's own switch rules SMS
 
-    def test_password_login_can_be_off_only_while_sms_codes_really_work(self):
+    def test_password_login_is_offered_whatever_the_sms_state(self):
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": False})
-        self.assertFalse(self.options()["passwordLogin"])
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
         with override_settings(TWOFACTOR_API_KEY=""):
             self.assertTrue(self.options()["passwordLogin"])
         self.configure(otp_login_enabled=False)
@@ -414,8 +414,7 @@ class LoginOptionsMatrixTests(SmsBase):
         self.emp.save()
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": False})
         r = self.post("employee-login", {"identifier": "E100", "password": "correct-horse"})
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.json()["error"], "Password sign-in is turned off. Please sign in with an SMS code.")
+        self.assertEqual(r.status_code, 200)  # password sign-in is always on since 2026-11-24
         with override_settings(TWOFACTOR_API_KEY=""):
             self.assertEqual(
                 self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 200
@@ -1187,10 +1186,10 @@ class CapAndBreakerNeverLockEverybodyOutTests(SmsBase):
             with self.subTest(state=state):
                 self.configure(hourly_cap=300, daily_cap=1500)
                 SmsMessageLog.objects.all().delete()
-                # codes work: password sign-in is refused (HR switched it off) ...
-                self.assertFalse(self.options()["passwordLogin"])
+                # codes work: password sign-in still works (always on since 2026-11-24) ...
+                self.assertTrue(self.options()["passwordLogin"])
                 self.assertEqual(
-                    self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 403
+                    self.post("employee-login", {"identifier": "E100", "password": "correct-horse"}).status_code, 200
                 )
                 # ... until they cannot be sent: then password sign-in is open again, and advertised
                 self.put_in_state(state)
@@ -1207,8 +1206,8 @@ class CapAndBreakerNeverLockEverybodyOutTests(SmsBase):
         self.put_in_state("hour cap")
         self.assertTrue(self.options()["passwordLogin"])
         self.age_logs(3601, status="sent")  # the hour rolls over: codes work again
-        self.assertFalse(self.options()["passwordLogin"])
-        self.assertIsNotNone(otp_service.password_login_block_message())
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
+        self.assertIsNone(otp_service.password_login_block_message())
 
     def test_an_anonymous_flood_of_code_requests_cannot_lock_everybody_out(self):
         """The attack itself: 'hourly cap' different employee codes, each asking for a code."""

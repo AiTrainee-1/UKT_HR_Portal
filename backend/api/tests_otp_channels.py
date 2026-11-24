@@ -329,23 +329,15 @@ class LockoutTests(ChannelsBase):
         sms_settings(hourly_cap=1)
         SmsMessageLog.objects.create(purpose="login", status="sent", created_at=timezone.now())
 
-    def test_refused_while_either_channel_works_and_the_refusal_names_what_works(self):
-        r = self.password_login()
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(
-            r.json()["error"], "Password sign-in is turned off. Please sign in with a WhatsApp or SMS code."
-        )
-        self.assertFalse(self.options()["passwordLogin"])
+    def test_password_sign_in_works_whichever_channel_works(self):
+        # 2026-11-24: password sign-in is always on (the old "password off" switch no longer refuses it).
+        self.assertEqual(self.password_login().status_code, 200)
+        self.assertTrue(self.options()["passwordLogin"])
         sms_settings(otp_enabled=False)
-        self.assertEqual(
-            self.password_login().json()["error"],
-            "Password sign-in is turned off. Please sign in with a WhatsApp code.",
-        )
+        self.assertEqual(self.password_login().status_code, 200)
         sms_settings(otp_enabled=True)
         whatsapp_settings(otp_enabled=False)
-        self.assertEqual(
-            self.password_login().json()["error"], "Password sign-in is turned off. Please sign in with an SMS code."
-        )
+        self.assertEqual(self.password_login().status_code, 200)
 
     def test_a_paused_sms_alone_opens_password_sign_in(self):
         whatsapp_settings(otp_enabled=False)
@@ -353,12 +345,10 @@ class LockoutTests(ChannelsBase):
         self.assertTrue(self.options()["passwordLogin"])
         self.assertEqual(self.password_login().status_code, 200)
 
-    def test_a_paused_sms_next_to_a_working_whatsapp_keeps_it_closed(self):
+    def test_a_paused_sms_next_to_a_working_whatsapp_keeps_password_open_too(self):
         self.use_up_the_sms_cap()
-        self.assertFalse(self.options()["passwordLogin"])
-        r = self.password_login()
-        self.assertEqual(r.status_code, 403)
-        self.assertEqual(r.json()["error"], "Password sign-in is turned off. Please sign in with a WhatsApp code.")
+        self.assertTrue(self.options()["passwordLogin"])  # password sign-in is always on since 2026-11-24
+        self.assertEqual(self.password_login().status_code, 200)
 
     def test_open_while_no_channel_can_send_a_sign_in_code(self):
         for why, values in (

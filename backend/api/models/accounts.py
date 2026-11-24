@@ -134,6 +134,61 @@ class LoginSession(models.Model):
         indexes = [models.Index(fields=["hr_user", "revoked_at"])]
 
 
+class EmployeeLoginSession(models.Model):
+    """
+    One row per mobile-app sign-in of an employee (password or one-time code), the employee twin of LoginSession.
+
+    An employee token carries `jti` + `kind: "employee_session"`; require_auth (auth.py) looks the row up and refuses
+    the token (401 "Session revoked") once `revoked_at` is set, whatever the JWT's own expiry says. That is what lets the
+    app keep the employee signed in until THEY sign out (POST /auth/logout revokes the row) or the server ends it, while
+    the token itself is renewed by POST /auth/refresh (employee_sessions.py). Tokens issued before this table existed have
+    no jti and keep working until their own 7-day expiry; the app upgrades them through /auth/refresh.
+    """
+
+    employee = models.ForeignKey(
+        Employee, on_delete=models.CASCADE, db_column="employee_id", related_name="login_sessions"
+    )
+    jti = models.TextField(unique=True, db_index=True)
+    device_label = models.TextField(blank=True, default="")
+    user_agent = models.TextField(blank=True, default="")
+    ip_address = models.TextField(null=True, blank=True, db_column="ip_address")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+    last_seen_at = models.DateTimeField(auto_now_add=True, db_column="last_seen_at")
+    revoked_at = models.DateTimeField(null=True, blank=True, db_column="revoked_at")
+    # "logout" (the employee signed out), "hr" (HR ended it), "password" ... free text, for the audit trail only.
+    revoked_reason = models.TextField(blank=True, default="", db_column="revoked_reason")
+
+    class Meta:
+        db_table = "employee_login_sessions"
+        indexes = [models.Index(fields=["employee", "revoked_at"])]
+
+
+class IdempotentRequest(models.Model):
+    """
+    The answer the server gave to one client-keyed write (header `Idempotency-Key`), so the SAME write sent again —
+    the mobile app's offline queue retrying after a lost answer — gets that answer back instead of being done twice.
+    See idempotency.py. Rows are per caller (`owner`, e.g. "employee:42") so two people can never read each other's
+    answers, and are purged after IDEMPOTENCY_TTL_DAYS.
+    """
+
+    STATE_IN_PROGRESS = "in_progress"
+    STATE_DONE = "done"
+
+    owner = models.CharField(max_length=64, db_column="owner")
+    key = models.CharField(max_length=100, db_column="key")
+    method = models.CharField(max_length=10, db_column="method")
+    path = models.TextField(db_column="path")
+    state = models.CharField(max_length=16, default=STATE_IN_PROGRESS, db_column="state")
+    status_code = models.PositiveSmallIntegerField(null=True, blank=True, db_column="status_code")
+    response_body = models.JSONField(null=True, blank=True, db_column="response_body")
+    created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
+
+    class Meta:
+        db_table = "idempotent_requests"
+        constraints = [models.UniqueConstraint(fields=["owner", "key"], name="uniq_idempotent_owner_key")]
+        indexes = [models.Index(fields=["created_at"])]
+
+
 # ──────────────────────────────────────────────
 #  Audit Logs
 # ──────────────────────────────────────────────

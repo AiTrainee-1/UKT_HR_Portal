@@ -34,6 +34,7 @@ const HR_SHELL: Fixtures = {
   "/api/on-duty-punch-verifications": none,
   "/api/outpass-requests": none,
   "/api/notifications": none,
+  "/api/enquiries/summary": { pending: 0, onHold: 0, done: 0, latest: null },
 };
 
 const open = (path: string) =>

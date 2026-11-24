@@ -153,6 +153,8 @@ from .geo_attendance_views import (
     geo_punch, geo_punch_precheck, geo_punch_status, live_location_ping,
     on_duty_session_request, on_duty_session_complete, on_duty_session_status,
     on_duty_punch_request,
+    on_duty_ot_punch_request,
+    on_duty_ot_punch_photo,
     on_duty_sessions_hr, on_duty_session_hr_status, on_duty_session_punches_hr_status,
     on_duty_punch_verifications_hr, on_duty_punch_verification_hr_status, on_duty_punch_verification_photo,
     live_location_team, live_location_trail, live_location_route, on_duty_map,
@@ -324,6 +326,7 @@ urlpatterns = [
     path("auth/otp/activate", otp_activate),
     path("auth/me", views.auth_me),
     path("auth/logout", views.logout),
+    path("auth/refresh", views.refresh_token),
 
     # ── Organisation ────────────────────────────────────────────────────────
     path("branches", branches),
@@ -630,6 +633,8 @@ urlpatterns = [
     path("on-duty-sessions/complete", on_duty_session_complete),
     path("on-duty-sessions/status", on_duty_session_status),
     path("on-duty-sessions/punch", on_duty_punch_request),
+    path("on-duty-sessions/ot-punch", on_duty_ot_punch_request),
+    path("on-duty-overtime-punches/<int:pk>/photo", on_duty_ot_punch_photo),
     path("on-duty-sessions", on_duty_sessions_hr),
     path("on-duty-sessions/<int:pk>/status", on_duty_session_hr_status),
     path("on-duty-sessions/<int:pk>/punches", on_duty_session_punches_hr_status),
@@ -1051,6 +1056,10 @@ urlpatterns = [
     path("", include("api.urls_mobile_settlement")),
     path("", include("api.urls_mobile_reminders")),
     path("", include("api.urls_mobile_approvals")),
+    # ── Mobile round 2026-11-24: withdraw my own Leave / Permission / Casual Leave request ──
+    path("", include("api.urls_mobile_withdraw")),
+    # ── Employee Enquiries (mobile "Enquiries" + the HR portal's Enquiries page) ──
+    path("", include("api.urls_enquiries")),
     # ── HR Requests page: HoD's (pending with each Department Head) and Notify (reminders) ──
     path("", include("api.urls_hod_reminders")),
     path("", include("api.urls_attendance_notify")),
@@ -1060,6 +1069,8 @@ urlpatterns = [
     path("missed-payroll/", include("api.missed_payroll.urls")),
     # ── Employees -> Investigation: continuous absence 15 / 30 days, Keep active / inactive, Auto Trigger ──
     path("employee-investigation/", include("api.investigation.urls")),
+    # ── Settings -> Auto-Reject Requests: waiting requests rejected after N days, nightly + Run now (api/request_auto_reject/) ──
+    path("request-auto-reject/", include("api.request_auto_reject.urls")),
     # ── Staff Payroll: Excess tab, Not included view, Payslip tab (payroll_excess_views.py; 2026-11-20) ──
     path("", include("api.urls_payroll_excess")),
     # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──

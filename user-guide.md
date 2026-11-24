@@ -1329,6 +1329,16 @@ A live **What employees will see** preview shows your entries before you save. T
 
 ---
 
+#### Auto-Reject Requests (24 Nov 2026)
+
+**What it's for:** Requests nobody decided within a number of days (45 by default) of being **submitted** are rejected automatically every night at 01:30. It covers leave, permission, Casual Leave, missing punch, On-Duty requests and their punches, attendance corrections, compensation claims, outpasses, other requests and advances. **Resignations are never rejected automatically.**
+
+- Each request is rejected the way its own page rejects it, with the remark *"Automatically rejected: no decision within 45 days of being submitted (submitted 3 Oct 2026)."* The employee gets the usual in-app notice and phone notification; **no WhatsApp message is sent** for an automatic rejection. A rejected On-Duty request also voids its waiting punches; a rejected Casual Leave marks that day as leave, except in a month whose payroll is already finalized (the day is left as it is).
+- The tab shows the switch (on from the start), the number of days (7 to 365), **Due at the next run** (every request the next run would reject, with how long it has waited; typing another number of days shows the list for it before saving), **Run now** (asks first and says how many will be rejected; it uses the saved number of days) and **Rejected automatically**, the history of everything it rejected and by which run.
+- The switch and the days are one company-wide rule: only a login for all units with the Settings edit right can change them. A unit login with the edit right can press Run now for its own unit's requests.
+
+---
+
 #### Themes (the look of the portal)
 
 **What it's for:** Chooses how every page of the portal looks. **Default Theme** is the glass-and-soft-shadow look the portal has always had. **Clean Professional** is a plain, structured look: light grey pages, white cards with a thin border, one deep blue for buttons, links and tabs, a white menu, flat tables and clear forms, with no glass, shadows or gradients. It is also the theme to use on an older or washed-out monitor: its lines, icons and text are drawn stronger than the default look, so nothing disappears on a weak display. The other themes (Dark, Premium, Black & White ...) only change colours.

@@ -69,18 +69,15 @@ describe("the OTP tab", () => {
     expect(server.patches).toEqual([{ otpEnabled: false }, { otpEnabled: true }]);
   });
 
-  it("switches one use, saves the expiry, and turns password sign-in off", async () => {
+  it("switches one use, saves the expiry, and shows password sign-in as always on", async () => {
     const { server } = await open();
     await page!.click('[data-testid="toggle-otpActivateEnabled"]');
     await page!.type('[data-testid="wa-otp-expiry-input"]', "10");
     await page!.click('[data-testid="wa-otp-expiry-save"]');
-    await page!.click('[data-testid="toggle-passwordLoginEnabled"]');
-    expect(server.patches).toEqual([
-      { otpActivateEnabled: true },
-      { otpExpiryMinutes: 10 },
-      { passwordLoginEnabled: false },
-    ]);
-    expect(el('[data-testid="wa-otp-password"]')!.textContent).toContain("nobody is ever locked out");
+    // 2026-11-24: password sign-in is always on; its switch is shown on and cannot be turned off
+    expect(el('[data-testid="toggle-passwordLoginEnabled"]')!.hasAttribute("disabled")).toBe(true);
+    expect(server.patches).toEqual([{ otpActivateEnabled: true }, { otpExpiryMinutes: 10 }]);
+    expect(el('[data-testid="wa-otp-password"]')!.textContent).toContain("always ON");
   });
 
   it("refuses an expiry outside the server's range", async () => {

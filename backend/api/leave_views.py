@@ -251,6 +251,16 @@ def employee_requests(request: Request) -> Response:
     if request.method == "POST":
         return require_auth(_employee_request_create)(request)
 
+    def _own(req):
+        """An employee's own requests to HR (the mobile app's "Ask HR" page), newest first; HR keeps the full list."""
+        employee_id = get_token_employee_id(req)
+        if employee_id is None:
+            return _get(req)
+        qs = EmployeeRequest.objects.select_related("employee").filter(employee_id=employee_id).order_by("-created_at")
+        if req_status := req.query_params.get("status"):
+            qs = qs.filter(status=req_status)
+        return paginate(req, qs, _req_json)
+
     @require_hr
     def _get(req):
         req_type = req.query_params.get("requestType")
@@ -262,12 +272,19 @@ def employee_requests(request: Request) -> Response:
             qs = qs.filter(status=req_status)
         return paginate(req, qs, _req_json)
 
-    return _get(request)
+    return require_auth(_own)(request)
 
 
 def _employee_request_create(request: Request) -> Response:
     from .models import EmployeeRequest
     data = request.data
+    # The mobile app's API client sends snake_case keys (request_type); the web portals send camelCase. Read both.
+    if hasattr(data, "copy"):
+        data = data.copy()
+    if not data.get("requestType") and data.get("request_type"):
+        data["requestType"] = data.get("request_type")
+    if not data.get("employeeId") and data.get("employee_id"):
+        data["employeeId"] = data.get("employee_id")
     emp_id = data.get("employeeId")
     token_emp_id = get_token_employee_id(request)
     if token_emp_id is not None:
@@ -288,6 +305,12 @@ def _employee_request_create(request: Request) -> Response:
         approval.require_enabled("request")  # HR can switch general requests off in Approval Workflow Control
     except approval.ApprovalError as exc:
         return approval.refusal(exc)
+    # Sensible sizes (the mobile app's "Ask HR" says the same before sending).
+    subject = str(data["subject"]).strip()
+    if len(subject) < 3 or len(subject) > 200:
+        return Response({"error": "The subject must be 3 to 200 characters"}, status=400)
+    if len(str(data.get("description") or "")) > 2000:
+        return Response({"error": "The details can be at most 2000 characters"}, status=400)
 
     er = EmployeeRequest.objects.create(
         employee=emp,

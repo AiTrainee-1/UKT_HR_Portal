@@ -13,7 +13,7 @@ happen to share the word "gate" -see GateDevice's docstring in models.py.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from django.utils import timezone
 from rest_framework.decorators import api_view
@@ -28,6 +28,7 @@ from .gate_credentials import LOGIN_ERRORS, LOGIN_LOCKED, LOGIN_OK, check_gate_l
 from .gate_records import already_scanned_message
 from .jwt_utils import verify_token
 from .models import GateDevice, OutpassGateScan, OutpassRequest
+from .outpass_request_views import pass_presentable, pass_window
 from .outpass_visitor_views import _paginate_params
 from .throttles import throttle
 
@@ -46,7 +47,7 @@ def _today_start():
 
 def _gate_scan_employee_payload(req: OutpassRequest) -> dict:
     emp = req.employee
-    expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
+    _valid_from, expires_at = pass_window(req)
     return {
         "employee": {
             "name": f"{emp.first_name} {emp.last_name}",
@@ -103,7 +104,7 @@ def gate_login(request: Request) -> Response:
 
 def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int]:
     now = timezone.now()
-    expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
+    _valid_from, expires_at = pass_window(req)
 
     if req.exited_at:
         # in India time (the stored message of a scan before 19 Nov 2026 has the UTC clock: gate_records rebuilds it)
@@ -114,8 +115,17 @@ def _resolve_exit_scan(gate: GateDevice, req: OutpassRequest) -> tuple[dict, int
         )
         return {"result": "already_scanned", "scanType": "exit", "message": message, **_gate_scan_employee_payload(req)}, 409
 
-    if req.status != OutpassRequest.STATUS_APPROVED:
-        message = "This Outpass request was not approved."
+    if not pass_presentable(req):
+        if req.status == OutpassRequest.STATUS_PENDING:
+            message = (
+                "This Outpass is waiting for its On-Duty approval."
+                if req.source == OutpassRequest.SOURCE_ON_DUTY else "This Outpass request is waiting for approval."
+            )
+        else:
+            message = (
+                "The On-Duty request of this Outpass was rejected."
+                if req.source == OutpassRequest.SOURCE_ON_DUTY else "This Outpass request was not approved."
+            )
         OutpassGateScan.objects.create(
             gate=gate, outpass_request=req, employee=req.employee, scan_type=OutpassGateScan.SCAN_TYPE_EXIT,
             result=OutpassGateScan.RESULT_NOT_APPROVED, message=message,
@@ -271,7 +281,7 @@ def resolve_gate_scan(gate: GateDevice, qr_token: str) -> tuple[dict, int]:
 
     req_id = payload.get("requestId")
     req = OutpassRequest.objects.select_related(
-        "employee__department", "employee__designation", "exit_gate", "entry_gate"
+        "employee__department", "employee__designation", "exit_gate", "entry_gate", "on_duty_session"
     ).filter(pk=req_id).first()
     if not gate.allow_outpass:
         scan_type = OutpassGateScan.SCAN_TYPE_ENTRY if role == "outpass_return" else OutpassGateScan.SCAN_TYPE_EXIT

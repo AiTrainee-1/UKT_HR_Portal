@@ -157,6 +157,8 @@ const SETTINGS_TABS = [
   "production_shifts",
   "late_detection",
   "compensation",
+  "casual_leave",
+  "request_auto_reject",
   "devices",
   "payroll",
   "production_payroll",

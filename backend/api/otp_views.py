@@ -28,7 +28,6 @@ from rest_framework.response import Response
 
 from . import otp_service
 from .audit_utils import _get_ip
-from .jwt_utils import sign_token
 from .models import EmployeeOtp
 from .serializers import employee_full_name
 from .throttles import throttle
@@ -107,7 +106,10 @@ def otp_login(request: Request) -> Response:
     employee.last_mobile_login_at = timezone.now()
     employee.save(update_fields=["last_mobile_login_at", "updated_at"])
     name = employee_full_name(employee)
-    token = sign_token({"role": "employee", "employeeId": employee.id, "name": name})
+    # A revocable session that lasts until the employee signs out (employee_sessions.py), not a 7-day token.
+    from . import employee_sessions
+
+    token = employee_sessions.issue_token(request, employee)
     return Response({"token": token, "role": "employee", "employeeId": employee.id, "name": name})
 
 

@@ -11,9 +11,20 @@ import { fetchAuthedImageObjectUrl, type OnDutyPunchVerificationItem } from "@/l
 
 type Loaded = { status: "loading" | "ready" | "error"; src: string | null };
 
-/** The address of photo 1 or 2 of a punch. */
-export const photoUrl = (verificationId: number, n: 1 | 2): string =>
-  `/api/on-duty-punch-verifications/${verificationId}/photo${n === 2 ? "?n=2" : ""}`;
+/** The address of photo 1 or 2 of a punch (an On-Duty punch, or an overtime punch with base "on-duty-overtime-punches"). */
+export const photoUrl = (id: number, n: 1 | 2, base = "on-duty-punch-verifications"): string =>
+  `/api/${base}/${id}/photo${n === 2 ? "?n=2" : ""}`;
+
+/** What the dialog needs of a punch: an On-Duty punch verification, or an overtime punch (see otPunchForPhotos). */
+export type PhotoPunch = Pick<
+  OnDutyPunchVerificationItem,
+  "id" | "hasPhoto" | "hasPhoto2" | "employeeName" | "punchNumber" | "punchType" | "punchTime"
+> & {
+  /** "on-duty-overtime-punches" for an overtime punch; the verification photos otherwise. */
+  photoBase?: string;
+  /** Replaces the line under the title ("Ravi, OT punch 2 at 19:40"). */
+  description?: string;
+};
 
 function useAuthedImage(url: string | null): Loaded {
   const { token } = useAuth();
@@ -97,7 +108,7 @@ export default function PunchPhotosDialog({
   verification,
   onClose,
 }: {
-  verification: OnDutyPunchVerificationItem | null;
+  verification: PhotoPunch | null;
   onClose: () => void;
 }) {
   const [enlarged, setEnlarged] = useState<1 | 2 | null>(null);
@@ -114,7 +125,8 @@ export default function PunchPhotosDialog({
           </DialogTitle>
           <DialogDescription className="text-xs">
             {verification
-              ? `${verification.employeeName}, punch #${verification.punchNumber} (${verification.punchType === "IN" ? "check-in" : "check-out"}) at ${verification.punchTime.slice(0, 5)}`
+              ? verification.description ??
+                `${verification.employeeName}, punch #${verification.punchNumber} (${verification.punchType === "IN" ? "check-in" : "check-out"}) at ${verification.punchTime.slice(0, 5)}`
               : ""}
           </DialogDescription>
         </DialogHeader>
@@ -135,7 +147,7 @@ export default function PunchPhotosDialog({
               <div className={two && enlarged === null ? "grid gap-3 sm:grid-cols-2" : "grid gap-3"}>
                 {(enlarged === null || enlarged === 1) && verification.hasPhoto && (
                   <Tile
-                    url={photoUrl(verification.id, 1)}
+                    url={photoUrl(verification.id, 1, verification.photoBase)}
                     label={two ? "Photo 1" : "Photo"}
                     enlarged={enlarged === 1}
                     onToggle={() => setEnlarged(enlarged === 1 ? null : 1)}
@@ -143,7 +155,7 @@ export default function PunchPhotosDialog({
                 )}
                 {(enlarged === null || enlarged === 2) && two && (
                   <Tile
-                    url={photoUrl(verification.id, 2)}
+                    url={photoUrl(verification.id, 2, verification.photoBase)}
                     label="Photo 2"
                     enlarged={enlarged === 2}
                     onToggle={() => setEnlarged(enlarged === 2 ? null : 2)}

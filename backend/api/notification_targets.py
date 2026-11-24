@@ -70,6 +70,7 @@ KINDS = frozenset(
         "approvals",
         "my_requests",
         "request",
+        "enquiry",
         "shift",
         "holidays",
         "profile",
@@ -109,6 +110,7 @@ PAGES: dict[str, Page] = {
     "advance": Page("advance", "View advance"),
     "resignation": Page("resignation", "View resignation"),
     "request": Page("request", "View request"),
+    "enquiry": Page("enquiry", "View enquiry"),
     "chat": Page("chat", "Open chat"),
     "shift": Page("shift", "View shift"),
     "holidays": Page("holidays", "View holidays"),
@@ -192,6 +194,7 @@ TYPE_PAGE: dict[str, str] = {
     "advance": "advance",
     "employee_request": "request",
     "request": "request",
+    "enquiry": "enquiry",
     "approval": "my_requests",
     "salary_slip": "salary_slip",
     "id_card": "id_card",
@@ -447,6 +450,8 @@ def _target(n, context: dict) -> dict | None:
         return _approver(None)
     if key.startswith(GEO_ALERT_PREFIX):
         return _geo_alert(key)
+    if key.startswith("enquiry:"):  # enquiry_views._notify_employee: "enquiry:<id>:<n>"
+        return _self("enquiry", id=_int(key.split(":")[1]))
     if key.startswith("wa:"):
         found = _from_whatsapp_key(n, key[3:])
         if found is not _NO_MATCH:

@@ -14,6 +14,8 @@ const TABS: [id: string, label: string][] = [
   ["production_shifts", "Production Shifts"],
   ["late_detection", "Late Detection"],
   ["compensation", "Compensation"],
+  ["casual_leave", "Casual Leave"],
+  ["request_auto_reject", "Auto-Reject Requests"],
   ["devices", "Devices"],
   ["payroll", "Staff Payroll"],
   ["production_payroll", "Production Payroll"],

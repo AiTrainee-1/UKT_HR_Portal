@@ -37,6 +37,44 @@ from .view_common import paginate
 RETURN_QR_VALID_MINUTES = 60
 
 
+PASS_VALID_MINUTES = 60
+
+
+def is_on_duty_pass(req: OutpassRequest) -> bool:
+    return req.source == OutpassRequest.SOURCE_ON_DUTY and req.on_duty_session_id is not None
+
+
+def pass_window(req: OutpassRequest):
+    """(valid_from, expires_at) of a pass's exit QR, or (None, None) when it has none.
+
+    A manual pass: from its approval, for PASS_VALID_MINUTES (unchanged).
+    A pass of an On-Duty request: the pass itself is raised (and shown, "Pending approval") the moment the On-Duty is
+    submitted, but its QR only exists once the On-Duty is APPROVED (owner 2026-11-24, revised: no QR before HR / HOD
+    approval). From that approval until the session ends or, at the latest, the end of that day (India time).
+    """
+    if is_on_duty_pass(req):
+        from .clock import FACTORY_TZ
+
+        if not req.approved_at:
+            return None, None
+        start = req.approved_at
+        local = start.astimezone(FACTORY_TZ)
+        day_end = local.replace(hour=23, minute=59, second=59, microsecond=0)
+        session = req.on_duty_session
+        ended = session.employee_ended_at or (session.completed_at if session.status == "completed" else None)
+        expires = max(start, min(day_end, ended)) if ended else day_end
+        return start, expires
+    if req.approved_at:
+        return req.approved_at, req.approved_at + timedelta(minutes=PASS_VALID_MINUTES)
+    return None, None
+
+
+def pass_presentable(req: OutpassRequest) -> bool:
+    """Whether the pass's decision allows an exit: only an APPROVED pass (a manual one by its HOD / HR, an On-Duty one with
+    its On-Duty's final approval). A pass still waiting for approval has no QR and is refused at the gate."""
+    return req.status == OutpassRequest.STATUS_APPROVED
+
+
 def _outpass_scan_status(req: OutpassRequest, expires_at, now) -> str:
     if req.entered_at:
         return "completed"
@@ -45,7 +83,7 @@ def _outpass_scan_status(req: OutpassRequest, expires_at, now) -> str:
             return_expires_at = req.return_qr_generated_at + timedelta(minutes=RETURN_QR_VALID_MINUTES)
             return "pending_return" if now < return_expires_at else "return_expired"
         return "exited"
-    if req.status != OutpassRequest.STATUS_APPROVED:
+    if not pass_presentable(req):
         return "not_applicable"
     if expires_at and now >= expires_at:
         return "expired_unscanned"
@@ -59,7 +97,7 @@ def _outpass_request_json(
     req: OutpassRequest, with_employee: bool = False, cfg: approval.Config | None = None, photos: dict | None = None
 ) -> dict:
     """`photos`: photo_links of the listed employees, when the list loaded its rows without the employee's photo."""
-    expires_at = req.approved_at + timedelta(minutes=60) if req.approved_at else None
+    valid_from, expires_at = pass_window(req)
     now = timezone.now()
     scan_status = _outpass_scan_status(req, expires_at, now)
 
@@ -98,7 +136,12 @@ def _outpass_request_json(
         "reviewComment": req.review_comment,
         "approvedAt": req.approved_at.isoformat() if req.approved_at else None,
         "expiresAt": expires_at.isoformat() if expires_at else None,
+        "validFrom": valid_from.isoformat() if valid_from else None,
         "createdAt": req.created_at.isoformat(),
+        # The On-Duty request a pass belongs to (its pass is raised the moment the On-Duty is submitted), and that
+        # On-Duty's own state: the app shows "Waiting for approval" on the card while it is pending.
+        "onDutySessionId": req.on_duty_session_id,
+        "onDutyStatus": req.on_duty_session.status if req.on_duty_session_id else None,
         "qrToken": qr_token,
         "exitGateName": req.exit_gate.name if req.exit_gate_id else None,
         "exitedAt": req.exited_at.isoformat() if req.exited_at else None,
@@ -167,7 +210,7 @@ def outpass_requests(request: Request) -> Response:
         # the employee's photo is never read here (it can be MBs, once per row): the list sends a link to it
         qs = (
             OutpassRequest.objects.select_related(
-                "employee__department", "employee__designation", "exit_gate", "entry_gate"
+                "employee__department", "employee__designation", "exit_gate", "entry_gate", "on_duty_session"
             )
             .defer("employee__photo_url")
             .order_by("-created_at")
@@ -181,6 +224,10 @@ def outpass_requests(request: Request) -> Response:
             qs = qs.filter(employee_id=emp_id)
         if status := request.query_params.get("status"):
             qs = qs.filter(status=status)
+            if status == "pending" and not token_emp_id and request.query_params.get("includeOnDuty") != "1":
+                # HR's decision queue: an On-Duty request's pass waits for its On-Duty, not for an Outpass decision
+                # (raised at submission since 2026-11-24), so it is not listed among the passes to decide.
+                qs = qs.exclude(source=OutpassRequest.SOURCE_ON_DUTY)
         # Optional from / to (YYYY-MM-DD, 2026-11-24: the HR portal's date filter, date_span.py): only the passes FOR
         # those India days -the day the employee went out, or the day it was asked for while they have not gone out.
         # Without them the list is exactly as before (the newest DEFAULT_LIST_CAP).
@@ -255,6 +302,13 @@ def outpass_request_hr_status(request: Request, pk: int) -> Response:
     except OutpassRequest.DoesNotExist:
         return Response({"error": "Outpass request not found"}, status=404)
 
+    if is_on_duty_pass(req):
+        # Its On-Duty request decides it (geo_attendance_views.resolve_on_duty_session): approve or reject the On-Duty.
+        return Response(
+            {"error": "This pass belongs to an On-Duty request: approve or reject the On-Duty request instead.",
+             "code": "decided_with_on_duty"},
+            status=409,
+        )
     status = request.data.get("status")
     if status not in ("approved", "rejected"):
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)

@@ -60,6 +60,7 @@ const PAGES_WITHOUT_REFRESH: (string | RegExp)[] = [
   /^\/hr\/biometric-connectors\/(device-status|devicecontrol)(\/|$)/,
   // These put their own Refresh button in the title row (RefreshButton, or an older one of their own).
   "/hr/requests",
+  "/hr/enquiries",
   "/hr/activity-logs",
   "/hr/login-devices",
   "/hr/mobile-app-login",

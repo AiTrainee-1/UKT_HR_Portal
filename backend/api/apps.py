@@ -187,6 +187,14 @@ class ApiConfig(AppConfig):
             logger.warning("Investigation Auto Trigger scheduler bootstrap skipped: %s", e)
 
         try:
+            # Settings -> Auto-Reject Requests: waiting requests older than N days rejected nightly (01:30), off from its switch
+            from .request_auto_reject import scheduler as request_auto_reject_scheduler
+
+            request_auto_reject_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Auto-Reject Requests scheduler bootstrap skipped: %s", e)
+
+        try:
             # phone pushes still waiting after a restart, stuck pushes, Expo's delivery receipts: every minute
             push_delivery_scheduler.start_scheduler_if_needed()
         except Exception as e:

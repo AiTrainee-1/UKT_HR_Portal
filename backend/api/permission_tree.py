@@ -1956,6 +1956,14 @@ SETTINGS = N(
         "Who may take Casual Leave, how many days, carry forward and year end.",
         api=["casual-leave-policy"],
     ),
+    N(
+        "settings.request_auto_reject",
+        "Auto-Reject Requests",
+        "tab",
+        "Requests nobody decided within a number of days of being submitted are rejected every night (never resignations); "
+        "the switch, the days, Run now and the history.",
+        api=["request-auto-reject"],
+    ),
     N("settings.devices", "Devices", "tab", "The biometric devices and how they connect."),
     N(
         "settings.payroll",

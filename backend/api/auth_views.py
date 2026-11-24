@@ -3,6 +3,7 @@
 import bcrypt
 import uuid
 
+from . import employee_sessions
 from .audit_utils import _get_ip, log_action
 from .auth import get_bearer_token, require_auth
 from .jwt_utils import sign_token, verify_token
@@ -152,7 +153,8 @@ def employee_login(request: Request) -> Response:
     employee.last_mobile_login_at = timezone.now()
     employee.save(update_fields=["last_mobile_login_at", "updated_at"])
     name = employee_full_name(employee)
-    token = sign_token({"role": "employee", "employeeId": employee.id, "name": name})
+    # A revocable session that lasts until the employee signs out (employee_sessions.py), not a 7-day token.
+    token = employee_sessions.issue_token(request, employee)
     return Response(
         {"token": token, "role": "employee", "employeeId": employee.id, "name": name}
     )
@@ -161,10 +163,33 @@ def employee_login(request: Request) -> Response:
 @api_view(["POST"])
 @require_auth
 def logout(request: Request) -> Response:
+    if employee_sessions.revoke(request.jwt_user, "logout"):
+        return Response({"message": "Logged out"})
     jti = request.jwt_user.get("jti")
     if jti:
         LoginSession.objects.filter(jti=jti, revoked_at__isnull=True).update(revoked_at=timezone.now())
     return Response({"message": "Logged out"})
+
+
+@api_view(["POST"])
+@require_auth
+def refresh_token(request: Request) -> Response:
+    """POST /api/auth/refresh -an employee's token renewed for the same sign-in session (employee_sessions.py).
+
+    The app calls it whenever it is online and its token is getting old, so an employee stays signed in until they sign
+    out. A token from before sessions existed (no jti) is upgraded into one. 401 when the session was ended."""
+    if request.jwt_user.get("role") != "employee":
+        return _error("Only an employee sign-in can be renewed here", 403)
+    token, problem = employee_sessions.refresh(request, request.jwt_user)
+    if problem:
+        return _error(problem, 401)
+    return Response({
+        "token": token,
+        "role": "employee",
+        "employeeId": request.jwt_user.get("employeeId"),
+        "name": request.jwt_user.get("name", ""),
+        "expiresInSeconds": int(employee_sessions.TOKEN_LIFETIME.total_seconds()),
+    })
 
 
 @api_view(["POST"])

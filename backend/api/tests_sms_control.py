@@ -463,13 +463,11 @@ class SettingsTests(ControlBase):
             self.assertFalse(SmsSettings.get().otp_enabled)
             self.assertEqual(self.put("settings", {"otpEnabled": True}).status_code, 400)  # and back again: refused
 
-    def test_keeping_password_login_on_is_advised_while_sms_codes_are_on(self):
+    def test_no_password_warning_since_password_sign_in_is_always_on(self):
         self.put("settings", {"otpEnabled": True})
         self.assertEqual(self.get("settings").json()["warnings"], [])
         WhatsAppSettings.objects.update_or_create(pk=1, defaults={"password_login_enabled": False})
-        warnings = self.get("settings").json()["warnings"]
-        self.assertEqual(len(warnings), 1)
-        self.assertIn("Password sign-in is switched off", warnings[0])
+        self.assertEqual(self.get("settings").json()["warnings"], [])  # password sign-in is always on since 2026-11-24
         self.put("settings", {"otpEnabled": False})  # the advice is about SMS codes only
         self.assertEqual(self.get("settings").json()["warnings"], [])
 
