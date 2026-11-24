@@ -1480,11 +1480,38 @@ export type AttendanceEditContext = {
   clBalance?: CasualLeaveBalance | null;
   /** The day's latest HR edit and where its approval stands (null when HR never edited it). */
   hrEdit?: HrEdit | null;
+  /** The day's payroll is finalized (Payroll Done): nothing can be proposed, and every option says so (2026-11-24). */
+  locked?: AttendanceEditLock;
+  /** The employee's compensation balance in shifts (the compensation types use it); null for production (2026-11-24). */
+  compensationBalance?: CompensationBalanceFigures | null;
 };
 
-/** The option groups of the Edit Attendance form, in this order. */
+/** Whether the day's payroll is finalized, and the server's sentence saying so. */
+export type AttendanceEditLock = { locked: boolean; message: string | null };
+
+/** A compensation balance in shifts: earned, used, waiting for approval, available to use, and the balance. */
+export type CompensationBalanceFigures = {
+  earned: number;
+  used: number;
+  pending: number;
+  available: number;
+  balance: number;
+};
+
+/** The option groups of the Edit Attendance form, in this order (the last five added on 2026-11-24). */
 export type AttendanceEditGroupKey =
-  "worked" | "compensation" | "not_worked" | "permission" | "late" | "casual_leave" | "on_duty";
+  | "worked"
+  | "compensation"
+  | "not_worked"
+  | "permission"
+  | "late"
+  | "early_out"
+  | "casual_leave"
+  | "leave"
+  | "on_duty"
+  | "missing_punch"
+  | "penalty_waiver"
+  | "ot_pay";
 
 /** A sub-choice of an option: a permission type, Mark / Unmark Late, a Casual Leave portion. */
 export type AttendanceEditChoice = {
@@ -1520,6 +1547,21 @@ export type AttendanceEditItem = {
   staffOnly: boolean;
   available: boolean;
   unavailableReason: string | null;
+  // ── extras of the options added on 2026-11-24 (absent on an older server) ──
+  /** Leave: the part of the day (full / first_half / second_half), shaped like a choice. */
+  portions?: AttendanceEditChoice[];
+  /** Missing Punch: the punch time must be given (HH:MM). */
+  needsTime?: boolean;
+  /** Compensation types: what the day counts now ("0.50"). */
+  dayShifts?: string;
+  /** Compensation types: the balance that can still be used, in shifts. */
+  balanceAvailable?: number;
+  /** Penalty Waiver: how many minutes early the employee left. */
+  penaltyMinutes?: number;
+  /** OT Pay: the shifts the detected overtime is worth (preselected), or null. */
+  defaultShifts?: string | null;
+  /** OT Pay: the detected overtime in minutes, or null when none was detected. */
+  otMinutes?: number | null;
 };
 
 export type AttendanceEditGroup = {
@@ -1540,20 +1582,26 @@ export const useAttendanceEditContext = (employeeId: number | null, date: string
 export type AttendanceEditProposal = {
   employeeId: number;
   date: string;
-  /** An old type ("half_day", "sunday_compensation" ...) or a newer option: "permission" | "late" | "casual_leave" | "on_duty". */
+  /** An old type ("half_day", "sunday_compensation" ...) or a newer option: "permission" | "late" | "early_out" |
+   *  "casual_leave" | "leave" | "on_duty" | "missing_punch" | "penalty_waiver" | "ot_pay". */
   type: string;
   note: string;
-  /** For the compensation types. */
+  /** For the compensation types (the shift taken from the balance) and OT Pay (the overtime shifts paid). */
   shifts?: string;
   firstPunch?: string | null;
   lastPunch?: string | null;
   isLate?: boolean;
   isEarlyOut?: boolean;
   /** The sub-choice of a newer option: morning_late_in / evening_early_out / middle_permission, mark / unmark,
-   *  full / first_half / second_half. */
+   *  full / first_half / second_half, a leave reason (sick / emergency / personal / other), a missing punch's slot
+   *  (morning_in / lunch_out / lunch_in / evening_out). */
   choice?: string;
   /** On-Duty: where the employee was (optional, up to 200 characters). */
   destination?: string;
+  /** Leave: the part of the day (full / first_half / second_half). */
+  portion?: string;
+  /** Missing Punch: the time of the missing punch ("09:05"). */
+  punchTime?: string;
 };
 
 /** Propose a change. It is NEVER applied by this call: the Department Head approves it, then HR (202 + the request). */

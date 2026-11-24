@@ -332,10 +332,13 @@ test("Journey History lists the journey with its figures, a Live badge and its a
   await expect(journeyRow(page)).toHaveCount(1);
   await page.getByLabel("Clear the employee filter").click();
 
-  // a range that ends before it starts is refused in words
-  await page.locator("#journey-from").fill("2030-01-02");
-  await page.locator("#journey-to").fill("2030-01-01");
-  await expect(page.getByTestId("range-error")).toContainText('"From" date is after the "To" date');
+  // the date filter (This Month by default, in the address): Yesterday asks for yesterday's journeys, Today for today's
+  await page.getByTestId("journey-dates-yesterday").click();
+  await expect(page).toHaveURL(/range=yesterday/);
+  await expect(page.getByTestId("journey-dates-label")).toContainText("Yesterday");
+  await page.getByTestId("journey-dates-today").click();
+  await expect(page).toHaveURL(/range=today/);
+  await expect(journeyRow(page).first()).toBeVisible();
 });
 
 test("one journey: summary, map with a route, a stop, a gap and events, the timeline, the phone", async ({ page }) => {

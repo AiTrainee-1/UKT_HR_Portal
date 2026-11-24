@@ -111,9 +111,8 @@ class EveryTypeNeedsBothApprovalsTests(EditBase):
         "half_day": ("half_shift", "0.50"),
         "quarter_shift": ("present", "0.25"),
         "three_quarter_shift": ("present", "0.75"),
-        "compensation": ("present", "1.00"),
-        "sunday_compensation": ("present", "1.00"),
-        "ot_compensation": ("present", "1.00"),
+        # the compensation types use the compensation balance since 2026-11-24 (an approved use claim + its debit, the
+        # day topped up, not a manual day): tests_attendance_edit_all_options.CompensationUsesTheBalanceTests
         "absent": ("absent", "0.00"),
         "on_leave": ("on_leave", "0.00"),
         "holiday": ("holiday", "0.00"),
@@ -154,13 +153,20 @@ class EveryTypeNeedsBothApprovalsTests(EditBase):
         self.assertEqual(self.hr_ok(pk, "rejected", "not convinced").json()["status"], "rejected")
         self.assertEqual((self.record().status, self.record().source), ("absent", "auto"))
 
-    def test_a_compensation_day_carries_its_marker_and_the_chosen_amount(self):
+    def test_a_compensation_day_uses_the_balance_and_carries_its_marker(self):
+        from .models import CompensationLedger, HolidayWorkClaim
+
+        CompensationLedger.objects.create(
+            employee=self.emp, entry_type="credit", shifts="1.00", date=date(2026, 8, 30), source="holiday_work"
+        )
         self.approve_both("sunday_compensation", shifts="0.50")
         rec = self.record()
-        self.assertEqual((rec.status, f"{rec.shifts_earned:.2f}"), ("present", "0.50"))
+        self.assertEqual(f"{rec.shifts_earned:.2f}", "0.50")
         self.assertEqual(rec.compensation_kind, "relaxation")
-        self.assertIn("Sunday Compensation", rec.compensation_note)
-        self.assertIn("Sunday Compensation", rec.override_note)
+        self.assertIn("compensation balance", rec.compensation_note)
+        claim = HolidayWorkClaim.objects.get(employee=self.emp, kind="use_balance", work_date=DAY)
+        self.assertEqual((claim.status, f"{claim.shifts:.2f}"), ("approved", "0.50"))
+        self.assertTrue(CompensationLedger.objects.filter(claim=claim, entry_type="debit").exists())
 
     def test_a_plain_type_clears_an_old_marker(self):
         AttendanceDayRecord.objects.filter(employee=self.emp, date=DAY).update(

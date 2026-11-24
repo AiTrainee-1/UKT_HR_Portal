@@ -167,8 +167,8 @@ test("Leave, Permission and Requests give HR buttons only on HR's turn, say who 
   await expect(buttons(permissionCard, "Reject")).toHaveCount(0);
   await expect.poll(() => sidebarBadge(page, "Requests")).toBe(all - 2);
 
-  // the Requests page: same request, same answer
-  await page.goto("/hr/requests");
+  // the Requests page: same request, same answer (it lists the requests for the days of its date filter: March 2026)
+  await page.goto("/hr/requests?month=2026-03");
   const requestCard = page.getByTestId(`request-leave-${leaveId}`);
   await expect(requestCard).toContainText("Waiting for HOD");
   await expect(buttons(requestCard, "Approve")).toHaveCount(0);

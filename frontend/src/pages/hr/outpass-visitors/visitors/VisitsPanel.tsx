@@ -1,5 +1,6 @@
 import { useMemo } from "react";
 import { LogOut, Mail, MessageCircle, UserPlus, UsersRound } from "lucide-react";
+import { DateRangeBar } from "@/components/date-range";
 import { Button } from "@/components/ui/button";
 import {
   VISITOR_ADMIN_API,
@@ -8,11 +9,11 @@ import {
   type VisitorDashboardSummary,
   type VisitorVisit,
 } from "@/lib/api-client/custom-hooks";
+import { rangeParams, readDateRange } from "@/lib/date-range";
 import { cn } from "@/lib/utils";
 import {
   ClearFilters,
   DataTable,
-  DateRangeFilter,
   ExportButton,
   FilterBar,
   NONE,
@@ -226,11 +227,9 @@ export function VisitsPanel({
           />
         }
       >
-        <DateRangeFilter
-          range={f.filters.range}
-          from={f.filters.from}
-          to={f.filters.to}
-          onChange={(patch) => f.set(patch)}
+        <DateRangeBar
+          value={readDateRange(f.filters)}
+          onChange={(next) => f.set(rangeParams(next))}
           testId="visitors-dates"
         />
         <SelectFilter

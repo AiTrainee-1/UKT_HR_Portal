@@ -2,6 +2,7 @@
 
   GET  /api/tracking/journeys                        the journey list: filters employeeId, from, to, status, page, pageSize
   GET  /api/tracking/journeys/day-map                ?date=YYYY-MM-DD: every journey of one day with its route, in ONE answer (On-Duty Map)
+                                                     (or ?from=&to=: every journey of those days, 2026-11-24)
   GET  /api/tracking/journeys/<id>/points           the raw fixes, cursor paged: ?after=<pointId>&limit=
   GET  /api/tracking/journeys/<id>/trail             every stored fix, compact, in time order (the whole route for the map)
   GET  /api/tracking/journeys/<id>/export            ?format=xlsx (default) | csv | pdf: summary, segments, events (pdf = the journey report with maps)
@@ -31,6 +32,7 @@ from ..audit_utils import log_action
 from ..auth import require_hr
 from ..branch_scope import get_branch_scope, scope_to_branch
 from ..clock import FACTORY_TZ, ist_today
+from ..date_span import DaySpanError, parse_day_span
 from ..models import DutyTrack, DutyTrackEvent, DutyTrackPoint, DutyTrackSegment, HRUser
 from ..view_common import error_response as _error
 from . import journey, serializers
@@ -83,6 +85,8 @@ def journeys_list(request: Request) -> Response:
 
 #: one map of one day never needs more journeys than this (every employee on duty at once, with room to spare)
 DAY_MAP_MAX_JOURNEYS = 300
+#: a map of several days (from / to) draws at most this many journeys, the latest ones (`truncated` says when it stopped)
+SPAN_MAP_MAX_JOURNEYS = 600
 
 
 @api_view(["GET"])
@@ -96,43 +100,69 @@ def journeys_day_map(request: Request) -> Response:
     A journey is on the day when it started before the day ended and ended (or, while it is still recording, last sent a
     position) on or after the day began, so a track that started at 23:55 and is still recording at 09:00 is on both days.
     Ordered by employee name, then start. Branch scoped like the journey list. Read-only and not audit-logged (the page
-    reads it every 20 s, like /tracking/live)."""
+    reads it every 20 s, like /tracking/live).
+
+    ``?from=YYYY-MM-DD&to=YYYY-MM-DD`` instead of ``date`` (2026-11-24, the HR portal's date filter, date_span.py): every
+    journey that was recording on any of those India days (the same overlap rule), at most SPAN_MAP_MAX_JOURNEYS of them
+    (the latest ones; ``truncated`` is true when more were left out). The reply then carries ``from`` / ``to``, and
+    ``date`` is the last day."""
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return _error(str(exc))
     raw = (request.query_params.get("date") or "").strip()
-    if raw:
+    if span is not None:
+        day = span.end or ist_today()
+        day_start, day_end = span.bounds()
+    elif raw:
         try:
             day = datetime.strptime(raw, "%Y-%m-%d").date()
         except ValueError:
             return _error("date must be a day: YYYY-MM-DD")
     else:
         day = ist_today()
-    day_start = datetime.combine(day, time.min, tzinfo=FACTORY_TZ)
-    day_end = day_start + timedelta(days=1)
+    if span is None:
+        day_start = datetime.combine(day, time.min, tzinfo=FACTORY_TZ)
+        day_end = day_start + timedelta(days=1)
 
     s = geo_settings.get()
     now = serializers.now_utc()
-    tracks = list(
-        scope_to_branch(
-            DutyTrack.objects.select_related("employee__department", "branch", "session").defer(NO_PHOTO), request
-        )
-        .filter(started_at__lt=day_end)
-        .filter(
+    qs = scope_to_branch(
+        DutyTrack.objects.select_related("employee__department", "branch", "session").defer(NO_PHOTO), request
+    )
+    if day_end is not None:
+        qs = qs.filter(started_at__lt=day_end)
+    if day_start is not None:
+        qs = qs.filter(
             Q(ended_at__gte=day_start)
             | Q(ended_at__isnull=True, last_point_at__gte=day_start)
             | Q(ended_at__isnull=True, last_point_at__isnull=True, started_at__gte=day_start)
         )
-        .order_by("employee__first_name", "employee__last_name", "started_at", "id")[:DAY_MAP_MAX_JOURNEYS]
-    )
+    truncated = False
+    if span is None:
+        tracks = list(
+            qs.order_by("employee__first_name", "employee__last_name", "started_at", "id")[:DAY_MAP_MAX_JOURNEYS]
+        )
+    else:
+        # the latest journeys when there are too many, then in the map's own order
+        latest = list(qs.order_by("-started_at", "-id")[: SPAN_MAP_MAX_JOURNEYS + 1])
+        truncated = len(latest) > SPAN_MAP_MAX_JOURNEYS
+        tracks = sorted(
+            latest[:SPAN_MAP_MAX_JOURNEYS],
+            key=lambda t: (t.employee.first_name or "", t.employee.last_name or "", t.started_at, t.id),
+        )
     by_track: dict[int, list[dict]] = {t.pk: [] for t in tracks}
     for seg in DutyTrackSegment.objects.filter(track_id__in=by_track).order_by("track_id", "seq_no"):
         by_track[seg.track_id].append(serializers.segment_dict(seg))
-    return Response(
-        {
-            "date": str(day),
-            "journeys": [
-                {**serializers.track_head(t, now, s.signal_lost_seconds), "segments": by_track[t.pk]} for t in tracks
-            ],
-        }
-    )
+    body = {
+        "date": str(day),
+        "journeys": [
+            {**serializers.track_head(t, now, s.signal_lost_seconds), "segments": by_track[t.pk]} for t in tracks
+        ],
+    }
+    if span is not None:
+        body.update({**span.as_json(), "truncated": truncated})
+    return Response(body)
 
 
 @api_view(["GET"])

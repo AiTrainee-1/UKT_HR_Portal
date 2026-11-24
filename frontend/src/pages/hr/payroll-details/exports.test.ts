@@ -2,15 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dateTime } from "@/components/payroll/kit/format";
 import { cleanDetails, staffDetails } from "./fixtures";
 
-// What the page can export: the columns of the issue files (the date each issue was detected comes first), the items of
-// the two Export menus, and that choosing an item hands the right rows to the right builder.
+// What the page can export: the columns of the workbook's issues sheet (the date each issue was detected comes first),
+// the items of the Export menu, and that choosing an item runs the right builder.
 
-const h = vi.hoisted(() => ({ excel: vi.fn(), csv: vi.fn(), workbook: vi.fn() }));
+const h = vi.hoisted(() => ({ workbook: vi.fn() }));
 
-vi.mock("@/components/payroll/kit/export-table", () => ({ exportTableToExcel: h.excel, exportTableToCsv: h.csv }));
 vi.mock("./workbook", () => ({ exportDetailsWorkbook: h.workbook }));
 
-import { ISSUE_COLUMNS, detailsExportItems, issueExportItems } from "./exports";
+import { ISSUE_COLUMNS, detailsExportItems } from "./exports";
 
 const details = staffDetails();
 
@@ -63,78 +62,26 @@ describe("the issue columns", () => {
   });
 });
 
-describe("the Export menus", () => {
-  it("the page's menu: the workbook, the issues in Excel and CSV, and print", () => {
+describe("the Export menu", () => {
+  it("the page's menu: the workbook and print (no Issues Excel / CSV since 2026-11-24)", () => {
     const items = detailsExportItems({ details, company: "UK Textiles Ltd" });
-    expect(items.map((i) => i.key)).toEqual(["workbook", "issues-xlsx", "issues-csv", "print"]);
-    expect(items.map((i) => i.label)).toEqual([
-      "Details workbook (Excel)",
-      "Issues (Excel)",
-      "Issues (CSV)",
-      "Print this page",
-    ]);
+    expect(items.map((i) => i.key)).toEqual(["workbook", "print"]);
+    expect(items.map((i) => i.label)).toEqual(["Details workbook (Excel)", "Print this page"]);
     expect(items[0].hint).toContain("Summary, earnings & deductions, rules, issues and days");
-    expect(items[2].hint).toContain("All 11 issues detected on this payroll");
     expect(items.every((i) => !i.disabled)).toBe(true);
+    expect(items.some((i) => i.key.startsWith("issues") || i.label.startsWith("Issues"))).toBe(false);
   });
 
-  it("with no issues there is nothing to export in Excel or CSV, but the workbook and print stay", () => {
+  it("with no issues the workbook and print stay", () => {
     const items = detailsExportItems({ details: cleanDetails(), company: "UK Textiles Ltd" });
-    const by = Object.fromEntries(items.map((i) => [i.key, i]));
-    expect(by["issues-xlsx"].disabled).toBe(true);
-    expect(by["issues-csv"].disabled).toBe(true);
-    expect(by["issues-csv"].hint).toBe("There are no issues to export");
-    expect(by.workbook.disabled).toBeFalsy();
-    expect(by.print.disabled).toBeFalsy();
+    expect(items.map((i) => i.key)).toEqual(["workbook", "print"]);
+    expect(items.every((i) => !i.disabled)).toBe(true);
   });
 
   it("the workbook item builds the details workbook for this payroll under the company's name", async () => {
     const [workbook] = detailsExportItems({ details, company: "UK Textiles Ltd" });
     await workbook.run();
     expect(h.workbook).toHaveBeenCalledWith(details, "UK Textiles Ltd");
-  });
-
-  it("the CSV item exports every issue under a file name that says who and when", async () => {
-    const csv = detailsExportItems({ details, company: "UK Textiles Ltd" }).find((i) => i.key === "issues-csv")!;
-    await csv.run();
-    expect(h.csv).toHaveBeenCalledTimes(1);
-    const args = h.csv.mock.calls[0][0];
-    expect(args.rows).toHaveLength(11);
-    expect(args.columns).toBe(ISSUE_COLUMNS);
-    expect(args.filename).toBe("Payroll_Issues_Meena_Subramanian_October_2026");
-  });
-
-  it("the Excel item is titled for the employee and the period", async () => {
-    const xlsx = detailsExportItems({ details, company: "UK Textiles Ltd" }).find((i) => i.key === "issues-xlsx")!;
-    await xlsx.run();
-    expect(h.excel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sheetName: "Issues",
-        company: "UK Textiles Ltd",
-        subtitle: "Meena Subramanian (UKT-0142) · October 2026",
-        title: "Payroll issues",
-        filename: "Payroll_Issues_Meena_Subramanian_October_2026",
-      }),
-    );
-    expect(h.excel.mock.calls[0][0].rows).toHaveLength(11);
-  });
-
-  it("the issues card's menu exports just the issues it was given (the filtered ones)", async () => {
-    const shown = details.issues.filter((i) => i.severity === "critical");
-    const items = issueExportItems({
-      details,
-      issues: shown,
-      company: "UK Textiles Ltd",
-      hint: "The 1 issue shown below",
-      keyPrefix: "",
-    });
-    expect(items.map((i) => i.key)).toEqual(["xlsx", "csv"]);
-    expect(items[0].hint).toBe("The 1 issue shown below");
-    await items[1].run();
-    expect(h.csv.mock.calls[0][0].rows).toEqual(shown);
-    expect(
-      issueExportItems({ details, issues: [], company: "x", hint: "h", keyPrefix: "" }).every((i) => i.disabled),
-    ).toBe(true);
   });
 
   it("print opens the browser's print dialog", async () => {

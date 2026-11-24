@@ -20,7 +20,7 @@ import {
 } from "./harness";
 
 // The Payroll tab of a Production Payroll cycle page in jsdom, with a fake server behind customFetch: the dashboard of the
-// period, the four views (Records, Issues, Skipped, Rules), the records as a table one department at a time (as on Staff
+// period, the views (Records, Skipped, Not included, Rules, Moved: the Issues view went 2026-11-24), the records as a table one department at a time (as on Staff
 // Payroll), the filters, the Export menu (the Report Center's Production Salary Statement), Mark as Cleared, the loaders and
 // the empty and error states, what a View Only role may touch, and the Generate Payroll dialog.
 
@@ -77,13 +77,10 @@ afterEach(() => {
 const WEEKLY = "/hr/production-payroll/weekly";
 const WEEK_PARAM = "2026-02-02_2026-02-08";
 
-/** Opens the Payroll tab and waits until the payslips, the issues and the roster are all in (the views show their counts). */
+/** Opens the Payroll tab and waits until the payslips and the roster are in (the views show their counts). */
 async function openPayroll(url = WEEKLY) {
   mountPage(url);
-  await waitFor(
-    () => !!q("view-records-count") && !!q("view-issues-count") && !!q("view-skipped-count"),
-    "the Payroll tab",
-  );
+  await waitFor(() => !!q("view-records-count") && !!q("view-skipped-count"), "the Payroll tab");
 }
 
 /** The payslips listed, as "payroll-record-<id>" whether they are cards or table rows. */
@@ -100,8 +97,8 @@ describe("the counts of the period", () => {
     await openPayroll();
     expect(q("pcp-dash-root")).toBeNull();
     expect(q("pcp-dash-kpi-net-value")).toBeNull();
-    // 3 detected + 1 skipped: the Issues view counts what it lists; 1 skipped; 1 payslip
-    expect(text(q("view-issues-count"))).toBe("4");
+    // 1 skipped; 1 payslip (no Issues view any more: owner 2026-11-24)
+    expect(q("view-issues")).toBeNull();
     expect(text(q("view-skipped-count"))).toBe("1");
     expect(text(q("view-records-count"))).toBe("1");
   });
@@ -208,11 +205,17 @@ describe("the Records view", () => {
     expect(window.history.state).toEqual({ fromPayroll: true });
   });
 
-  it("opens the details at the issues from the issue badges", async () => {
+  it("opens the details at the attendance from the issue badges (the details page has no Issues section)", async () => {
     await openPayroll();
     await waitFor(() => !!q("payroll-record-issues-11"), "the badges");
     click(must("payroll-record-issues-11"));
-    expect(here()).toBe("/hr/production-payroll/details/11?section=issues");
+    expect(here()).toBe("/hr/production-payroll/details/11?section=attendance");
+  });
+
+  it("an old ?view=issues address opens the Records", async () => {
+    await openPayroll(`${WEEKLY}?view=issues`);
+    await waitFor(() => !!rec(11), "the records");
+    expect(q("issues-list")).toBeNull();
   });
 
   it("marks a payslip paid, and the figures follow", async () => {
@@ -320,48 +323,6 @@ describe("the Skipped view", () => {
     expect(q("skipped-banner-title")).toBeNull();
     release();
     await waitFor(() => !!q("skipped-banner-title"), "the Skipped view");
-  });
-});
-
-describe("the Issues view", () => {
-  it("lists each issue with the day it was detected, and the whole-period ones as such", async () => {
-    await openPayroll(`${WEEKLY}?view=issues`);
-    await waitFor(() => !!q("issues-list"), "the issues");
-    const absent = must("issue-row-11:absent:2026-02-03");
-    expect(text(absent.querySelector('[data-testid="issue-detected"]'))).toBe("Detected on Tue, 3 Feb 2026");
-    expect(absent.querySelector('[data-testid="issue-detected"]')!.getAttribute("data-kind")).toBe("day");
-    expect(text(absent.querySelector('[data-testid="issue-detail"]'))).toContain("no shift was earned");
-    expect(text(absent)).toContain("Asha Worker");
-    const bank = must("issue-row-11:bank_missing:period");
-    expect(bank.querySelector('[data-testid="issue-detected"]')!.getAttribute("data-kind")).toBe("period");
-    expect(text(bank.querySelector('[data-testid="issue-detected"]'))).toContain("Whole period");
-    expect(world.requests()).toContain(
-      "/api/payroll/production/issues?cycle=weekly&periodStart=2026-02-02&periodEnd=2026-02-08",
-    );
-  });
-
-  it("adds the employee the roster says cannot be generated, beside what payroll detected", async () => {
-    await openPayroll(`${WEEKLY}?view=issues`);
-    await waitFor(() => !!q("issue-row-skipped:3"), "the skipped issue");
-    expect(text(q("issue-row-skipped:3"))).toContain("Esha Worker");
-    expect(text(q("issue-row-skipped:3"))).toContain(NO_RATE);
-  });
-
-  it("keeps its filters in the address, apart from the records' filters", async () => {
-    await openPayroll(`${WEEKLY}?view=issues&q=bala`);
-    await waitFor(() => !!q("issues-list"), "the issues");
-    // `q` belongs to the records: the issues are not narrowed by it
-    expect(document.body.querySelectorAll('[data-testid^="issue-row-"]').length).toBe(4);
-    click(must("issues-kpi-warning"));
-    expect(params()).toMatchObject({ view: "issues", q: "bala", isev: "warning" });
-    expect(document.body.querySelectorAll('[data-testid^="issue-row-"]').length).toBe(3);
-  });
-
-  it("opens the payroll's details at its issues", async () => {
-    await openPayroll(`${WEEKLY}?view=issues`);
-    await waitFor(() => !!q("issue-row-11:absent:2026-02-03"), "the issue");
-    click(must("issue-row-11:absent:2026-02-03").querySelector('[data-testid="issue-open-details"]'));
-    expect(here()).toBe("/hr/production-payroll/details/11?section=issues");
   });
 });
 
@@ -574,7 +535,7 @@ describe("a View Only role", () => {
     expect((must("pcp-export") as HTMLButtonElement).disabled).toBe(false);
     expect((must("pcp-skipped-open") as HTMLButtonElement).disabled).toBe(false);
     expect((must("payroll-record-details-11") as HTMLButtonElement).disabled).toBe(false);
-    for (const view of ["records", "issues", "skipped", "rules"]) {
+    for (const view of ["records", "skipped", "rules"]) {
       expect((must(`view-${view}`) as HTMLButtonElement).disabled).toBe(false);
     }
     // the pay-period calendar only chooses what to look at (hidden until shown: its button is not locked either)

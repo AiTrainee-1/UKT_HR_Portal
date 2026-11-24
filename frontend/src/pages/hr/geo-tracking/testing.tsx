@@ -1,4 +1,4 @@
-import type { Mock } from "vitest";
+import { vi, type Mock } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 
 // Shared by the render tests of Journey History, the Live Map, the tracking rules and the punch photos: the DOM helpers the other
@@ -32,6 +32,18 @@ export const apiError = (status: number, body: unknown = null): ApiError =>
   new ApiError(new Response(null, { status, statusText: String(status) }), body, { method: "GET", url: "/x" });
 
 export const copy = <T,>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** The clock of the page tests: 28 Oct 2026, 12:00 in India, the fixtures' day. The pages' date filter opens on This Month
+ *  (lib/date-range), October 2026 here, so the fixtures are in it. Only Date is faked; undo it with vi.useRealTimers(). */
+export const TEST_NOW = "2026-10-28T12:00:00+05:30";
+export function pinClock(at: string = TEST_NOW): void {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(at));
+}
+
+/** Whether a day (YYYY-MM-DD) is inside a request's from / to (the date filter's params; an absent end is open). */
+export const inDays = (day: string, params: URLSearchParams): boolean =>
+  (!params.get("from") || day >= params.get("from")!) && (!params.get("to") || day <= params.get("to")!);
 
 // ── fixtures: what the server sends ────────────────────────────────────────────────────────────────────────────────
 
@@ -522,7 +534,10 @@ export function installWorld(fetchMock: Mock, world: World = newWorld()): World 
     if (method === "GET" && path === "/api/branches") return [];
     if (method === "GET" && path === "/api/on-duty-sessions") return [];
     if (method === "GET" && path === "/api/approval-summary") return {};
-    if (method === "GET" && path === "/api/on-duty-punch-verifications") return copy(world.verifications);
+    if (method === "GET" && path === "/api/on-duty-punch-verifications") {
+      // the date filter's days (by punch date), as the server does (the status is left to each test)
+      return copy(world.verifications.filter((v) => inDays(String(v.punchDate), params)));
+    }
     world.unexpected.push(`${method} ${url}`);
     throw apiError(404, { error: `unexpected request ${method} ${url}` });
   });

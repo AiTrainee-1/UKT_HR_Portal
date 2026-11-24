@@ -65,6 +65,12 @@ def attendance_edit_context(request: Request) -> Response:
     requests = list(AttendanceOverrideRequest.objects.filter(employee=emp, date=d).order_by("-created_at")[:10])
     hr_edit = hr_edit_map(emp, d, d).get(d)
     cl_balance_block = cl_balance.balance(emp, d.year) if emp.employment_type == "staff" else None
+    locked = edit.lock_refusal(emp, d)
+    compensation_balance = None
+    if emp.employment_type == "staff":
+        from .compensation_claims import balance_figures, figures_json
+
+        compensation_balance = figures_json(balance_figures([emp.id]).get(emp.id))
     return Response(
         {
             "employee": {
@@ -102,6 +108,10 @@ def attendance_edit_context(request: Request) -> Response:
             "options": edit.option_catalogue(emp, d, record),
             "clBalance": cl_balance_block,
             "hrEdit": hr_edit,
+            # added 2026-11-24: the day's payroll is finalized (Payroll Done), so nothing of it can change; and the
+            # employee's compensation balance in shifts (staff; the compensation types use it)
+            "locked": {"locked": bool(locked), "message": locked},
+            "compensationBalance": compensation_balance,
         }
     )
 
@@ -132,6 +142,10 @@ def attendance_override_decision(request: Request, pk: int) -> Response:
     status_val = request.data.get("status")
     comment = str(request.data.get("comment") or "").strip() or None
     reviewer = get_hr_display_name(request)
+    if status_val == "approved" and approval.can_act(KEY, req, approval.HR, for_actor=False):
+        # the day's payroll is not finalized, and the module's rules still hold on the day as it is now (2026-11-24)
+        if refusal := edit.approval_refusal(req, approval.HR):
+            return Response({"error": refusal, "code": "edit_refused"}, status=409)
     try:
         outcome = approval.decide(KEY, req, approval.HR, status_val, actor=reviewer, comment=comment)
     except approval.ApprovalError as exc:

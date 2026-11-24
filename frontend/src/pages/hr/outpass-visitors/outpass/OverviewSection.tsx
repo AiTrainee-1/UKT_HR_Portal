@@ -1,20 +1,15 @@
 import { CheckCircle2, FileText, Hourglass, QrCode, Settings2, XCircle } from "lucide-react";
 import { useLocation, useSearch } from "wouter";
+import { DateRangeBar, type DateRange } from "@/components/date-range";
 import { Button } from "@/components/ui/button";
 import { NestedTabs } from "@/components/ui/nested-tabs";
-import {
-  useListOutpassRequests,
-  useOutpassQr,
-  useOutpassRecords,
-  useOutpassSummary,
-  type GateRange,
-} from "@/lib/api-client/custom-hooks";
-import { inGateRange } from "@/lib/gate-range";
+import { useOutpassQr, useOutpassRecordsForDays, useOutpassRequestsForDays } from "@/lib/api-client/custom-hooks";
+import type { DateRangeValue } from "@/lib/date-range";
 import { GateQrDialog } from "../GateQrDialog";
 import { StatRow, StatTile } from "../kit";
 import { gateTabPath, type GateTab } from "../routes";
-import { BranchPicker, PAGE_SIZE, RangeFilter, type useSelectedBranch } from "../shared";
-import type { PassFilterStatus } from "./logic";
+import { BranchPicker, PAGE_SIZE, type useSelectedBranch } from "../shared";
+import { passesForDays, type PassFilterStatus } from "./logic";
 import { ApprovedPassesSection } from "./PassesSection";
 import { QrSubmissionsSection } from "./QrSubmissionsSection";
 
@@ -24,25 +19,21 @@ const GATES_PATH = gateTabPath("outpass", "gates");
 type Branches = ReturnType<typeof useSelectedBranch>;
 export type PassFilters = { status: PassFilterStatus; q: string };
 
-const SUMMARY_KEY: Record<GateRange, "today" | "thisWeek" | "thisMonth"> = {
-  today: "today",
-  week: "thisWeek",
-  month: "thisMonth",
-};
-
 /**
- * Overview: the passes of the range at a glance (tiles that also filter the Passes list), the Today / This Week / This
- * Month filter with the gate tools (the branch's gate QR, and a way to Manage Gates when that tab is open to the role),
- * and under them one section at a time: the passes that go through approval, or the exits logged through the QR form.
- * The tiles and the filter stay above the two sections, so the range you picked is still there when you switch.
+ * Overview: the passes of the dates at a glance (tiles that also filter the Passes list), the HR portal's date filter
+ * (Today / Yesterday / This Month, an earlier month, Custom days; This Month by default) with the gate tools (the branch's
+ * gate QR, and a way to Manage Gates when that tab is open to the role), and under them one section at a time: the passes
+ * that go through approval, or the exits logged through the QR form. A pass is for the day the employee went out (the day
+ * it was asked for until they go); a QR exit for the day it was logged. The server sends only the days' rows, and the
+ * tiles and the filter stay above the two sections, so the dates you picked are still there when you switch.
  */
 export function OverviewSection({
   nested,
   sections,
   isBranchScoped,
   branch,
-  range,
-  onRange,
+  dates,
+  onDates,
   page,
   setPage,
   passesCount,
@@ -55,8 +46,8 @@ export function OverviewSection({
   sections: readonly GateTab[];
   isBranchScoped: boolean;
   branch: Branches;
-  range: GateRange;
-  onRange: (range: GateRange) => void;
+  dates: DateRange;
+  onDates: (next: DateRangeValue) => void;
   page: number;
   setPage: (page: number) => void;
   passesCount: number | undefined;
@@ -70,12 +61,11 @@ export function OverviewSection({
   const { branches, branchId, setBranchId } = branch;
   const effectiveBranchId = isBranchScoped ? undefined : branchId ? Number(branchId) : undefined;
   const { data: qr } = useOutpassQr(effectiveBranchId, { enabled: isBranchScoped || effectiveBranchId !== undefined });
-  const { data: summary, isLoading: summaryLoading } = useOutpassSummary();
-  const { data: records, isLoading: recordsLoading } = useOutpassRecords(range, page, PAGE_SIZE);
+  const { data: records, isLoading: recordsLoading } = useOutpassRecordsForDays(dates.days, page, PAGE_SIZE);
   // the same call as the Passes list and the tab counts (one cache entry): here it fills the tiles
-  const { data: requests, isLoading: requestsLoading } = useListOutpassRequests();
+  const { data: requests, isLoading: requestsLoading } = useOutpassRequestsForDays(dates.days);
 
-  const inRange = requests?.filter((r) => inGateRange(r.createdAt, range));
+  const inRange = requests ? passesForDays(requests, dates.days) : undefined;
   const count = (status: string) => inRange?.filter((r) => r.status === status).length;
   const passesOpen = sections.some((s) => s.value === "passes");
   const go = (path: string) => navigate(`${path}${search ? `?${search}` : ""}`);
@@ -101,7 +91,7 @@ export function OverviewSection({
           icon={FileText}
           loading={requestsLoading}
           testId="overview-tile-passes"
-          title="Every pass asked for in this range"
+          title={`Every pass for ${dates.label}`}
           {...passTile("")}
         />
         <StatTile
@@ -134,10 +124,10 @@ export function OverviewSection({
         />
         <StatTile
           label="Gate QR submissions"
-          value={summary?.[SUMMARY_KEY[range]]}
+          value={records?.total}
           icon={QrCode}
           tone="slate"
-          loading={summaryLoading}
+          loading={recordsLoading}
           testId="overview-tile-qr"
           title="Exits logged through the branch QR form"
           {...(qrOpen ? { onClick: () => go(`${OVERVIEW_BASE}/qr-submissions`) } : {})}
@@ -145,7 +135,7 @@ export function OverviewSection({
       </StatRow>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <RangeFilter value={range} onChange={onRange} />
+        <DateRangeBar value={dates.value} onChange={onDates} testId="overview-dates" />
         <div className="flex flex-wrap items-center gap-2">
           {!isBranchScoped && <BranchPicker branches={branches} branchId={branchId} setBranchId={setBranchId} />}
           {canManageGates && (
@@ -183,14 +173,20 @@ export function OverviewSection({
         >
           {nested === "passes" ? (
             <ApprovedPassesSection
-              key={range}
-              range={range}
+              key={`${dates.days.from}_${dates.days.to}`}
+              days={dates.days}
+              rangeText={dates.label}
               status={passFilters.status}
               q={passFilters.q}
               onFilters={onPassFilters}
             />
           ) : (
-            <QrSubmissionsSection range={range} records={records} isLoading={recordsLoading} setPage={setPage} />
+            <QrSubmissionsSection
+              rangeText={dates.label}
+              records={records}
+              isLoading={recordsLoading}
+              setPage={setPage}
+            />
           )}
         </NestedTabs>
       )}

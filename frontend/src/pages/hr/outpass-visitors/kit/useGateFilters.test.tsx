@@ -169,3 +169,40 @@ describe("a list left open past midnight in India", () => {
     expect(f().dateRange).toEqual({ from: "2026-11-02", to: "2026-11-05" });
   });
 });
+
+describe("useGateFilters with the HR portal's date filter (a `month` key: Visitors, Tea Break)", () => {
+  const PORTAL = { range: "month", month: "", from: "", to: "", status: "" };
+
+  it("opens on This Month: the whole calendar month, nothing in the address, not counted as a filter", () => {
+    const f = mount("/list", PORTAL);
+    expect(f().dateRange).toEqual({ from: "2026-11-01", to: "2026-11-30" });
+    expect(f().params.toString()).toBe("from=2026-11-01&to=2026-11-30&page=1");
+    expect(f().activeCount).toBe(0);
+  });
+
+  it("Yesterday, an earlier month and Custom days go to the API as from / to, never range or month", () => {
+    const yesterday = mount("/list?range=yesterday", PORTAL);
+    expect(yesterday().dateRange).toEqual({ from: "2026-11-17", to: "2026-11-17" });
+    expect(yesterday().activeCount).toBe(1);
+    act(() => yesterday().set({ range: "month", month: "2026-09" }));
+    expect(search()).toBe("?month=2026-09");
+    expect(yesterday().params.toString()).toBe("from=2026-09-01&to=2026-09-30&page=1");
+    expect(yesterday().exportQuery.toString()).toBe("from=2026-09-01&to=2026-09-30");
+    act(() => yesterday().set({ range: "custom", month: "", from: "2026-11-03", to: "2026-11-09" }));
+    expect(yesterday().dateRange).toEqual({ from: "2026-11-03", to: "2026-11-09" });
+    expect(search()).toBe("?range=custom&from=2026-11-03&to=2026-11-09");
+  });
+
+  it("a future month in the address is the current month; Clear brings This Month back", () => {
+    const f = mount("/list?month=2027-04&status=inside", PORTAL);
+    expect(f().dateRange).toEqual({ from: "2026-11-01", to: "2026-11-30" });
+    act(() => f().clear());
+    expect(search()).toBe("");
+  });
+
+  it("the old presets still work on the lists without `month` (In/Out, Manage Gates, the desks)", () => {
+    const f = mount("/list?range=month");
+    // up to today, as before
+    expect(f().dateRange).toEqual({ from: "2026-11-01", to: "2026-11-18" });
+  });
+});

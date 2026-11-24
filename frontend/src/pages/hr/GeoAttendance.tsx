@@ -87,8 +87,14 @@ export default function GeoAttendance() {
   const punches = pendingPunches?.length ?? 0;
 
   const go = useCallback((to: string) => navigate(to), [navigate]);
-  const openJourney = useCallback((id: number | null) => go(id === null ? geoPath("journeys") : journeyPath(id)), [go]);
-  const simulate = useCallback((id: number) => go(simulatePath(id)), [go]);
+  // Journey History keeps its dates in the address (range / month / from / to): a journey and its replay take them along,
+  // so the journey's own Back button returns to the same days (Back in the browser does anyway)
+  const keep = section === "journeys" && search ? `?${search}` : "";
+  const openJourney = useCallback(
+    (id: number | null) => go(`${id === null ? geoPath("journeys") : journeyPath(id)}${keep}`),
+    [go, keep],
+  );
+  const simulate = useCallback((id: number) => go(`${simulatePath(id)}${keep}`), [go, keep]);
   // "Simulate a journey" hidden: no replay is offered anywhere (the picker, a row's button, a journey's button)
   const maySimulate = level("geo_attendance.journeys.simulate") !== "hidden";
 

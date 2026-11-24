@@ -4,7 +4,6 @@ import { PRODUCTION_NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-i
 import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 import type { CyclePeriodRow, PeriodEmployee, ProductionPayrollItem } from "@/lib/api-client/custom-hooks";
 import {
-  ISSUE_URL_DEFAULTS,
   PRODUCTION_TABS,
   PRODUCTION_URL_DEFAULTS,
   PRODUCTION_VIEWS,
@@ -15,8 +14,6 @@ import {
   formatPeriod,
   isProductionTab,
   isProductionView,
-  issueFiltersFromUrl,
-  issueFiltersToUrl,
   parseDay,
   periodFromUrl,
   periodFromValue,
@@ -250,7 +247,6 @@ describe("the page's state in its address", () => {
   it("has a default for every key, and no two parts of the page share one", () => {
     const parts = [
       FILTER_URL_DEFAULTS,
-      ISSUE_URL_DEFAULTS,
       ROSTER_URL_DEFAULTS,
       PRODUCTION_NOT_INCLUDED_URL_DEFAULTS,
       PAYSLIP_URL_DEFAULTS,
@@ -274,21 +270,17 @@ describe("the page's state in its address", () => {
     expect(PRODUCTION_URL_DEFAULTS).toMatchObject({ tab: "payroll", view: "records", period: "", layout: "cards" });
   });
 
-  it("keeps the Issues view's keys the same as the Staff Payroll page's", () => {
-    expect(ISSUE_URL_DEFAULTS).toEqual({
-      iq: "",
-      icode: "",
-      isev: "",
-      idept: "",
-      ifrom: "",
-      ito: "",
-      igroup: "date",
-    });
+  it("keeps no address keys for the Issues view, which is gone (owner 2026-11-24)", () => {
+    for (const key of ["iq", "icode", "isev", "idept", "ifrom", "ito", "igroup"]) {
+      expect(PRODUCTION_URL_DEFAULTS).not.toHaveProperty(key);
+    }
   });
 
   it("knows its tabs and its views", () => {
     expect(PRODUCTION_TABS).toEqual(["payroll", "employees", "salary", "payslip"]);
-    expect(PRODUCTION_VIEWS).toEqual(["records", "issues", "skipped", "not_included", "rules", "moved"]);
+    // no Issues view (owner 2026-11-24): an old ?view=issues is not a view, so the page opens Records
+    expect(PRODUCTION_VIEWS).toEqual(["records", "skipped", "not_included", "rules", "moved"]);
+    expect(isProductionView("issues")).toBe(false);
     expect(isProductionTab("salary")).toBe(true);
     expect(isProductionTab("settings")).toBe(false);
     expect(isProductionTab("")).toBe(false);
@@ -324,45 +316,5 @@ describe("the page's state in its address", () => {
       periodStart: "2026-02-02",
       periodEnd: "2026-02-08",
     });
-  });
-
-  it("round-trips the Issues view's filters through the address", () => {
-    const state = issueFiltersFromUrl({
-      iq: "asha",
-      icode: "absent",
-      isev: "warning",
-      idept: "Weaving",
-      ifrom: "2026-02-03",
-      ito: "2026-02-05",
-      igroup: "employee",
-    });
-    expect(state).toEqual({
-      q: "asha",
-      code: "absent",
-      severity: "warning",
-      dept: "Weaving",
-      from: "2026-02-03",
-      to: "2026-02-05",
-      groupBy: "employee",
-    });
-    expect(issueFiltersToUrl(state)).toEqual({
-      iq: "asha",
-      icode: "absent",
-      isev: "warning",
-      idept: "Weaving",
-      ifrom: "2026-02-03",
-      ito: "2026-02-05",
-      igroup: "employee",
-    });
-    // a change carries only what changed
-    expect(issueFiltersToUrl({ q: "bala" })).toEqual({ iq: "bala" });
-  });
-
-  it("is not thrown by an Issues filter someone typed by hand", () => {
-    const state = issueFiltersFromUrl({ isev: "bogus", igroup: "zzz", ifrom: "yesterday", ito: "tomorrow" });
-    expect(state.severity).toBe("");
-    expect(state.groupBy).toBe("date");
-    expect(state.from).toBe("");
-    expect(state.to).toBe("");
   });
 });

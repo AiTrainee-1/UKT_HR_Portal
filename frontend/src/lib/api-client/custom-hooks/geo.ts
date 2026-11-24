@@ -1,5 +1,5 @@
 // geo: hooks/types split out of the former single custom-hooks.ts (see ./index.ts).
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { customFetch, getApiOrigin } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
 import { invalidateCoEmpQueries } from "./pf-esi";
@@ -49,14 +49,25 @@ export type OnDutySessionItem = {
   approval?: ApprovalProgress | null;
 };
 
+/** Days to narrow a list to (from / to, YYYY-MM-DD, India: the HR portal's date filter, 2026-11-24). */
+export type GeoDays = { from: string; to: string };
+
+/** "&from=...&to=..." for a list that takes the date filter ("" without days). */
+const daysQuery = (days?: GeoDays): string =>
+  days ? `&${new URLSearchParams({ from: days.from, to: days.to }).toString()}` : "";
+
+/** The HR list of On-Duty requests. With `days`, only the requests FOR those days (the day each was made): the Approvals
+ *  tab. Without them, every request of the status (the tab badge and the sidebar). */
 export const useOnDutySessionsHR = (
   status: "pending" | "pending_hod" | "pending_hr" | "active" | "completed" | "rejected" | "all" = "pending",
   enabled = true,
+  days?: GeoDays,
 ) =>
   useQuery<OnDutySessionItem[]>({
-    queryKey: ["/api/on-duty-sessions", status],
-    queryFn: () => customFetch<OnDutySessionItem[]>(`/api/on-duty-sessions?status=${status}`),
+    queryKey: days ? ["/api/on-duty-sessions", status, days.from, days.to] : ["/api/on-duty-sessions", status],
+    queryFn: () => customFetch<OnDutySessionItem[]>(`/api/on-duty-sessions?status=${status}${daysQuery(days)}`),
     refetchInterval: 30_000,
+    placeholderData: days ? keepPreviousData : undefined,
     enabled,
   });
 
@@ -107,13 +118,20 @@ export type OnDutyPunchVerificationItem = {
   createdAt: string | null;
 };
 
+/** The HR list of On-Duty punches. With `days`, only the punches whose punch date is one of them (the Punch
+ *  Verifications tab); without them, every punch of the status (the tab badge and the sidebar). */
 export const useOnDutyPunchVerificationsHR = (
   status: "pending" | "approved" | "rejected" | "all" = "pending",
   enabled = true,
+  days?: GeoDays,
 ) =>
   useQuery<OnDutyPunchVerificationItem[]>({
-    queryKey: ["/api/on-duty-punch-verifications", status],
-    queryFn: () => customFetch<OnDutyPunchVerificationItem[]>(`/api/on-duty-punch-verifications?status=${status}`),
+    queryKey: days
+      ? ["/api/on-duty-punch-verifications", status, days.from, days.to]
+      : ["/api/on-duty-punch-verifications", status],
+    queryFn: () =>
+      customFetch<OnDutyPunchVerificationItem[]>(`/api/on-duty-punch-verifications?status=${status}${daysQuery(days)}`),
+    placeholderData: days ? keepPreviousData : undefined,
     // every 30 s like the other pending lists (the sidebar badge reads it on every HR page)
     refetchInterval: 30_000,
     enabled,
@@ -245,10 +263,16 @@ export type LiveLocationRoute = {
   points: { latitude: number; longitude: number; recordedAt: string; isMocked: boolean }[];
 };
 
-export const useLiveLocationRoute = (employeeId: number | null, date: string) =>
+/** One employee's position pings of a day (`date`), or of the date filter's days (`days`: from / to, 2026-11-24). */
+export const useLiveLocationRoute = (employeeId: number | null, date: string, days?: GeoDays) =>
   useQuery<LiveLocationRoute>({
-    queryKey: ["/api/live-location/route", employeeId, date],
-    queryFn: () => customFetch<LiveLocationRoute>(`/api/live-location/team/${employeeId}/route?date=${date}`),
+    queryKey: days
+      ? ["/api/live-location/route", employeeId, days.from, days.to]
+      : ["/api/live-location/route", employeeId, date],
+    queryFn: () =>
+      customFetch<LiveLocationRoute>(
+        `/api/live-location/team/${employeeId}/route?${days ? daysQuery(days).slice(1) : `date=${date}`}`,
+      ),
     enabled: employeeId != null,
   });
 
@@ -264,14 +288,21 @@ export type OnDutyMapEmployee = {
   routePoints: { latitude: number; longitude: number; recordedAt: string }[];
   session: { id: number; destination: string; status: string };
   punches: { punchNumber: number; punchType: "IN" | "OUT"; punchTime: string; status: string }[];
+  /** With from / to: on how many of the days the employee was On-Duty (`session` / `punches` are their latest day's). */
+  days?: number;
 };
 
-export const useOnDutyMap = (date: string) =>
+/** Who was On-Duty on a day (`date`), or on the date filter's days (`days`: from / to, 2026-11-24). */
+export const useOnDutyMap = (date: string, days?: GeoDays) =>
   useQuery<{ date: string; employees: OnDutyMapEmployee[] }>({
-    queryKey: ["/api/on-duty-map", date],
-    queryFn: () => customFetch<{ date: string; employees: OnDutyMapEmployee[] }>(`/api/on-duty-map?date=${date}`),
+    queryKey: days ? ["/api/on-duty-map", days.from, days.to] : ["/api/on-duty-map", date],
+    queryFn: () =>
+      customFetch<{ date: string; employees: OnDutyMapEmployee[] }>(
+        `/api/on-duty-map?${days ? daysQuery(days).slice(1) : `date=${date}`}`,
+      ),
     // a day's routes, not a live board: every 30 s (the Live Map is the 20-second view)
     refetchInterval: 30_000,
+    placeholderData: days ? keepPreviousData : undefined,
   });
 
 export const useUpdateEmployeeLocationTracking = () => {

@@ -1,8 +1,17 @@
-import type { EmployeeRules, PayrollRulesResponse, RuleGroup } from "@/lib/api-client/custom-hooks";
+import type { EmployeeRules, PayrollRulesResponse, PayrollScope, RuleGroup } from "@/lib/api-client/custom-hooks";
 
 // Staff Payroll's rules for October 2026: three groups of rules configured on the Settings page, and four employees (one
 // with nothing wrong, one with a missing shift and bank details, one with a night shift and no cycle rate, one with a
 // flag the panel has no name for).
+
+/** The slice of payroll the panel asks about: a Staff month, or a Production week. */
+export const STAFF_SCOPE: PayrollScope = { kind: "staff", month: 10, year: 2026 };
+export const PRODUCTION_SCOPE: PayrollScope = {
+  kind: "production",
+  cycle: "weekly",
+  periodStart: "2026-10-05",
+  periodEnd: "2026-10-11",
+};
 
 export const SETTINGS_GROUPS: RuleGroup[] = [
   {

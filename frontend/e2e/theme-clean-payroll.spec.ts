@@ -155,7 +155,7 @@ async function flatnessOf(page: Page, allowShadowWithin = "") {
 type PageSpec = { name: string; path: () => string; ready: string; click?: string; allowShadow?: string };
 const PAGES: PageSpec[] = [
   { name: "staff payroll: records", path: () => FEB, ready: '[data-testid="view-switch"]' },
-  { name: "staff payroll: issues", path: () => `${FEB}&view=issues`, ready: '[data-testid="issues-panel"]' },
+  // (the Issues view was taken off the page on 2026-11-24)
   { name: "staff payroll: skipped", path: () => `${FEB}&view=skipped`, ready: '[data-testid="view-switch"]' },
   { name: "staff payroll: rules", path: () => `${FEB}&view=rules`, ready: '[data-testid="view-switch"]' },
   {
@@ -195,7 +195,7 @@ for (const width of WIDTHS) {
   test(`every payroll page is flat at ${width}px: no overflow, no blur, no drop shadow, no gradient`, async ({
     page,
   }) => {
-    // fifteen pages, each loaded and measured
+    // fourteen pages, each loaded and measured
     test.setTimeout(300_000);
     for (const spec of PAGES) {
       await open(page, "clean", spec.path(), width);
@@ -271,7 +271,7 @@ test("the views of a tab are underlined tabs and the two-way switch is a 6px con
     "border-bottom-color": "rgb(29, 86, 179)",
     "background-color": "rgba(0, 0, 0, 0)",
   });
-  expect((await styleOf(page, '[data-testid="view-issues"]', ["border-bottom-color"]))["border-bottom-color"]).toBe(
+  expect((await styleOf(page, '[data-testid="view-skipped"]', ["border-bottom-color"]))["border-bottom-color"]).toBe(
     "rgba(0, 0, 0, 0)",
   );
   const group = '[role="group"][aria-label="Layout of the payroll list"]';
@@ -283,14 +283,6 @@ test("the views of a tab are underlined tabs and the two-way switch is a 6px con
     colourOf(page, `${group} > button[aria-pressed="true"]`, "background-color"),
   ]);
   expect(contrast(text, over(fill, [255, 255, 255]))).toBeGreaterThanOrEqual(4.5); // the fill is the primary at a low opacity
-});
-
-test("the chosen issue-type chip is readable (brand text on a soft brand fill)", async ({ page }) => {
-  await open(page, "clean", `${FEB}&view=issues`);
-  const chip = '[data-testid="issues-type-all"]';
-  await expect(page.locator(chip)).toHaveAttribute("aria-pressed", "true");
-  const [text, fill] = await Promise.all([colourOf(page, chip, "color"), colourOf(page, chip, "background-color")]);
-  expect(contrast(text, over(fill, [255, 255, 255]))).toBeGreaterThanOrEqual(4.5);
 });
 
 test("initials avatars are one colour", async ({ page }) => {

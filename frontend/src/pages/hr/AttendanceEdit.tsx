@@ -26,32 +26,43 @@ import { useToast } from "@/hooks/use-toast";
 import {
   useAttendanceEditContext,
   useSubmitAttendanceEdit,
-  type AttendanceEditType,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import { StatusChip } from "./punch-view/parts";
 import { OptionGroup } from "./payroll-details/DayAttendanceEdit";
+import { LockedBanner, PortionPicker, PunchTimeField } from "./payroll-details/EditDetails";
 import { HrEditStageLine } from "./payroll-details/HrEditMark";
 import {
   buildProposal,
   clUseText,
+  compensationText,
   editGroups,
   findTile,
+  groupNote,
+  groupTiles,
   isClassicGroup,
+  lockMessage,
+  otText,
+  penaltyText,
   pickOf,
+  portionFor,
+  proposalTitle,
   sendBlocker,
   serverSentence,
+  shiftQuestion,
   showsPunches,
+  startShifts,
   tileTitle,
   type EditPick,
   type EditTile,
 } from "./payroll-details/edit-options";
 
-const GROUPS: { key: AttendanceEditType["group"]; title: string; hint: string }[] = [
-  { key: "Attendance", title: "Attendance", hint: "How much of the day was worked" },
-  { key: "Compensation", title: "Compensation", hint: "A paid day given in return for extra work" },
-  { key: "Other", title: "Absent, leave and holiday", hint: "A day not worked" },
-];
+/** The first three groups as this page has always named them (a group it does not know uses the server's words). */
+const CLASSIC_HEAD: Record<string, { title: string; hint: string }> = {
+  worked: { title: "Attendance", hint: "How much of the day was worked" },
+  compensation: { title: "Compensation", hint: "Uses the compensation balance: the shift chosen is added to the day" },
+  not_worked: { title: "Not worked", hint: "Absent or a holiday" },
+};
 
 const backTo = (type?: string) => (type === "production" ? "/hr/attendance/production" : "/hr/attendance/staff");
 
@@ -85,14 +96,17 @@ export default function AttendanceEdit() {
   const [earlyOut, setEarlyOut] = useState(false);
   const [note, setNote] = useState("");
   const [destination, setDestination] = useState("");
+  // Leave: the part of the day; Missing Punch: the time of the punch
+  const [portion, setPortion] = useState<string | null>(null);
+  const [punchTime, setPunchTime] = useState("");
   // the server's own sentence when it refused the last try ("02 Nov 2026 is already marked Late.")
   const [problem, setProblem] = useState<string | null>(null);
 
   const data = ctx.data;
-  const types = useMemo(() => data?.types ?? [], [data]);
-  // the 11 types are drawn from `types` as before; the newer options (Permission, Late, Casual Leave, On-Duty) come from
-  // the server's `options`, drawn with the payroll details page's tiles
+  // every option comes from the server's `options` (an older server: the first three groups built from `types`); the
+  // first three are drawn as this page's own tiles, the newer ones with the payroll details page's tiles
   const groups = useMemo(() => (data ? editGroups(data) : []), [data]);
+  const classic = useMemo(() => groups.filter((g) => isClassicGroup(g.key)), [groups]);
   const extra = useMemo(() => groups.filter((g) => !isClassicGroup(g.key)), [groups]);
   const tile = useMemo(() => findTile(groups, pick), [groups, pick]);
   const selected = tile?.item ?? null;
@@ -107,14 +121,11 @@ export default function AttendanceEdit() {
     setEarlyOut(!!day.earlyLeave);
   }, [day?.date, day?.firstPunch, day?.lastPunch, day?.isLate, day?.earlyLeave]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const choose = (t: AttendanceEditType) => {
-    setPick({ itemKey: t.key, choice: null });
-    setShifts(t.shifts);
-    setProblem(null);
-  };
   const chooseTile = (t: EditTile) => {
+    // a different option starts from its own shift value (OT Pay: the overtime detected); the same one keeps the choice
+    if (pick?.itemKey !== t.item.key) setShifts(startShifts(t.item));
+    if (t.item.group === "leave") setPortion((p) => portionFor(t.item, p));
     setPick(pickOf(t));
-    if (t.item.shifts) setShifts(t.item.shifts);
     setProblem(null);
   };
 
@@ -122,13 +133,17 @@ export default function AttendanceEdit() {
   const pending = (data?.requests ?? []).find((r) => r.status === "pending");
   const noHod = !!data && !data.hod;
   const future = !!data?.future;
-  const blocker = data ? sendBlocker({ noHod, future, tile, note }) : "Loading";
+  const locked = lockMessage(data);
+  const blocker = data ? sendBlocker({ noHod, future, tile, note, locked, shifts, portion, punchTime }) : "Loading";
   const canSend = blocker === null && !submit.isPending;
   const clUse = selected?.group === "casual_leave" ? clUseText(data?.clBalance, tile?.choice?.days) : null;
+  const compensationLine = selected?.group === "compensation" ? compensationText(selected) : null;
+  const otLine = selected?.group === "ot_pay" ? otText(selected) : null;
+  const penaltyLine = selected?.group === "penalty_waiver" ? penaltyText(selected) : null;
 
   const send = async () => {
     if (!data || !tile || blocker) return;
-    const what = tileTitle(tile);
+    const what = proposalTitle(tile, { portion, punchTime, shifts });
     try {
       await submit.mutateAsync(
         buildProposal({
@@ -142,6 +157,8 @@ export default function AttendanceEdit() {
           late,
           earlyOut,
           destination,
+          portion,
+          punchTime,
         }),
       );
       toast({
@@ -251,6 +268,7 @@ export default function AttendanceEdit() {
                 <p>This day has not come yet, so its attendance cannot be changed.</p>
               </div>
             )}
+            {locked && <LockedBanner message={locked} testId="edit-locked" />}
             {pending && (
               <div
                 className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-sm text-amber-900"
@@ -270,37 +288,55 @@ export default function AttendanceEdit() {
 
             {data.hrEdit && <HrEditStageLine edit={data.hrEdit} />}
 
-            {/* ── the attendance types ── */}
-            {GROUPS.map((g) => {
-              const items = types.filter((t) => t.group === g.key);
-              if (items.length === 0) return null;
+            {/* ── the attendance types: Attendance, Compensation, Not worked ── */}
+            {classic.map((g) => {
+              const head = CLASSIC_HEAD[g.key] ?? { title: g.label, hint: g.description };
+              const groupLine = groupNote(g, locked);
               return (
-                <section key={g.key} className="space-y-2" aria-label={g.title}>
+                <section key={g.key} className="space-y-2" aria-label={head.title} data-testid={`edit-group-${g.key}`}>
                   <div>
-                    <h3 className="text-sm font-bold text-gray-900">{g.title}</h3>
-                    <p className="text-[11px] text-gray-500">{g.hint}</p>
+                    <h3 className="text-sm font-bold text-gray-900">{head.title}</h3>
+                    <p className="text-[11px] text-gray-500">{head.hint}</p>
                   </div>
+                  {groupLine && (
+                    <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600" data-testid={`edit-group-note-${g.key}`}>
+                      {groupLine}
+                    </p>
+                  )}
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                    {items.map((t) => {
-                      const on = pick?.itemKey === t.key;
+                    {groupTiles(g, locked).map((t) => {
+                      const on = pick?.itemKey === t.item.key;
+                      const off = !t.available;
                       return (
                         <button
-                          key={t.key}
+                          key={t.id}
                           type="button"
                           aria-pressed={on}
-                          data-testid={`edit-type-${t.key}`}
-                          onClick={() => choose(t)}
+                          data-testid={`edit-type-${t.item.key}`}
+                          data-available={off ? "false" : "true"}
+                          disabled={off}
+                          title={off ? (t.reason ?? t.item.unavailableReason ?? t.description) : t.description}
+                          onClick={() => chooseTile(t)}
                           className={cn(
                             "rounded-xl border px-3 py-2.5 text-left transition-colors",
-                            on
-                              ? "border-gray-900 bg-gray-900 text-white shadow-sm"
-                              : "bg-white text-gray-800 hover:bg-gray-50",
+                            off
+                              ? "cursor-not-allowed border-dashed bg-gray-50 text-gray-400"
+                              : on
+                                ? "border-gray-900 bg-gray-900 text-white shadow-sm"
+                                : "bg-white text-gray-800 hover:bg-gray-50",
                           )}
                         >
                           <span className="block text-sm font-bold">{t.label}</span>
-                          <span className={cn("block text-[11px]", on ? "text-white/70" : "text-gray-500")}>
-                            {t.shiftChoices.length ? "0.25 to 1.00 shift" : `${t.shifts} shift`}
-                          </span>
+                          {t.chip && (
+                            <span className={cn("block text-[11px]", on ? "text-white/70" : off ? "text-gray-400" : "text-gray-500")}>
+                              {t.chip}
+                            </span>
+                          )}
+                          {t.reason && (
+                            <span className="mt-1 block text-[11px] leading-snug text-gray-500" data-testid={`edit-type-${t.item.key}-reason`}>
+                              {t.reason}
+                            </span>
+                          )}
                         </button>
                       );
                     })}
@@ -309,7 +345,7 @@ export default function AttendanceEdit() {
               );
             })}
 
-            {/* ── the newer options: Permission, Late, Casual Leave, On-Duty ── */}
+            {/* ── the newer options: Permission, Late, Early-Out, Casual Leave, Leave, On-Duty, Missing Punch, Penalty Waiver, OT Pay ── */}
             {extra.length > 0 && (
               <div className="grid gap-5 lg:grid-cols-2" data-testid="edit-more-options">
                 {extra.map((g) => (
@@ -319,6 +355,7 @@ export default function AttendanceEdit() {
                     pick={pick}
                     clBalance={data.clBalance}
                     wide={false}
+                    said={locked}
                     onChoose={chooseTile}
                   />
                 ))}
@@ -334,9 +371,25 @@ export default function AttendanceEdit() {
                     <p className="text-xs text-gray-500">{tile.description}</p>
                   </div>
 
+                  {compensationLine && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-compensation-line">
+                      {compensationLine}
+                    </p>
+                  )}
+                  {selected.group === "compensation" && selected.shiftChoices.length === 0 && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-compensation-none">
+                      {selected.unavailableReason ?? "No amount fits the balance and the day."}
+                    </p>
+                  )}
+                  {otLine && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-ot-line">
+                      {otLine}
+                    </p>
+                  )}
+
                   {selected.shiftChoices.length > 0 && (
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Worth</Label>
+                      <Label className="text-xs">{shiftQuestion(selected)}</Label>
                       <div className="flex flex-wrap gap-2" role="group" aria-label="Shift value">
                         {selected.shiftChoices.map((c) => (
                           <button
@@ -366,6 +419,17 @@ export default function AttendanceEdit() {
                   {clUse && (
                     <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-cl-use">
                       {clUse}
+                    </p>
+                  )}
+                  {selected.group === "leave" && (
+                    <PortionPicker item={selected} value={portion} onChange={setPortion} testIdPrefix="edit" />
+                  )}
+                  {selected.group === "missing_punch" && (
+                    <PunchTimeField value={punchTime} onChange={setPunchTime} testId="edit-punch-time" />
+                  )}
+                  {penaltyLine && (
+                    <p className="text-xs leading-relaxed text-gray-600" data-testid="edit-penalty-line">
+                      {penaltyLine}
                     </p>
                   )}
                   {selected.group === "on_duty" && (
@@ -507,8 +571,8 @@ export default function AttendanceEdit() {
                   <Button variant="ghost" onClick={() => navigate(returnTo)}>
                     Cancel
                   </Button>
-                  {!tile && <span className="text-xs text-gray-500">Choose an attendance type above.</span>}
-                  {tile && blocker && !noHod && !future && (
+                  {!tile && !locked && <span className="text-xs text-gray-500">Choose an attendance type above.</span>}
+                  {(tile || locked) && blocker && !noHod && !future && (
                     <span className="text-xs text-gray-500" aria-live="polite">
                       {blocker}
                     </span>

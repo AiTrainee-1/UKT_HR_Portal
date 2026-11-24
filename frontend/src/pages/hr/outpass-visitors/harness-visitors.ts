@@ -205,6 +205,13 @@ function summary(rows: Row[], q: URLSearchParams): VisitorDashboardSummary {
       avgMinutes: done.length ? Math.round(done.reduce((n, r) => n + (r.minutesInside ?? 0), 0) / done.length) : null,
     },
   };
+  // the figures of the dates (every filter but the status), as the server's rangeTotals: a repeat visitor came twice or more
+  const dated = rows.filter((r) => matches(r, q, { status: false }));
+  body.rangeTotals = {
+    visits: dated.length,
+    checkedOut: dated.filter((r) => r.checkedOutAt).length,
+    repeat: new Set(dated.filter((r) => (r.visitCount ?? 1) >= 2).map((r) => r.visitorId)).size,
+  };
   if (q.get("options") === "1") {
     body.options = {
       hosts: Object.values(HOSTS).map((h) => ({ id: h.id, name: h.name, department: h.department })),

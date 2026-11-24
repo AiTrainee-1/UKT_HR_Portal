@@ -219,7 +219,8 @@ test("HR Manager and HR Assistant: created by the Super Admin, the assistant edi
     expect(refused.body!.code).toBe("approval_not_permitted");
 
     // the attendance edit: no Approve button on the Requests page, and a direct call is refused
-    await page.goto("/hr/requests?kind=attendance_correction");
+    // the Requests page lists the requests for the days of its date filter: the edit's own day
+    await page.goto(`/hr/requests?kind=attendance_correction&range=custom&from=${EDIT_DAY}`);
     await expect(page.getByTestId(`request-attendance_correction-${editId}`).first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId(`approve-attendance_correction-${editId}`)).toHaveCount(0);
     const refusedEdit = await api(
@@ -246,7 +247,8 @@ test("HR Manager and HR Assistant: created by the Super Admin, the assistant edi
       .poll(async () => (await api(page, "GET", `/api/missing-punch-requests?status=all`, undefined, admin)).body)
       .toEqual(expect.arrayContaining([expect.objectContaining({ id: punchId, status: "approved" })]));
 
-    await page.goto("/hr/requests?kind=attendance_correction");
+    // the Requests page lists the requests for the days of its date filter: the edit's own day
+    await page.goto(`/hr/requests?kind=attendance_correction&range=custom&from=${EDIT_DAY}`);
     await page.getByTestId(`approve-attendance_correction-${editId}`).first().click();
     await expect(page.getByTestId(`approve-attendance_correction-${editId}`)).toHaveCount(0, { timeout: 30_000 });
 

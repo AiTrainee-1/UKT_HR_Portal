@@ -12,15 +12,12 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   NO_FILTERS,
-  PERIOD_LABELS,
   SORT_LABELS,
   STATUS_LABELS,
   activeFilterCount,
   filtersActive,
-  rangeInvalid,
   type Filters,
   type HubOptions,
-  type Period,
   type SortKey,
   type StatusFilter,
 } from "./logic";
@@ -34,7 +31,8 @@ const REQUEST_TYPE_OPTIONS: { value: string; label: string }[] = [
   { value: "general", label: "General query" },
 ];
 
-/** Search, filters, the order and the download of the list. The first change to a filter updates the list at once. */
+/** Search, filters, the order and the download of the list. The first change to a filter updates the list at once. The
+ *  dates are the page's date filter above the figures (they follow it too). */
 export default function Toolbar({
   filters,
   onFilters,
@@ -145,40 +143,6 @@ export default function Toolbar({
             ))}
           </SelectContent>
         </Select>
-        <Select value={filters.period} onValueChange={(v) => set({ period: v as Period })}>
-          <SelectTrigger className="h-9 lg:w-40" aria-label="Filter by submitted date" data-testid="filter-period">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {(Object.keys(PERIOD_LABELS) as Period[]).map((p) => (
-              <SelectItem key={p} value={p}>
-                {PERIOD_LABELS[p]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {filters.period === "custom" && (
-          <>
-            <Input
-              type="date"
-              value={filters.from}
-              max={filters.to || undefined}
-              onChange={(e) => set({ from: e.target.value })}
-              aria-label="Submitted from"
-              className="h-9 lg:w-40"
-              data-testid="filter-from"
-            />
-            <Input
-              type="date"
-              value={filters.to}
-              min={filters.from || undefined}
-              onChange={(e) => set({ to: e.target.value })}
-              aria-label="Submitted until"
-              className="h-9 lg:w-40"
-              data-testid="filter-to"
-            />
-          </>
-        )}
         {options.branches.length > 1 && (
           <Select value={filters.branch} onValueChange={(v) => set({ branch: v, department: "all" })}>
             <SelectTrigger className="h-9 lg:w-40" aria-label="Filter by branch" data-testid="filter-branch">
@@ -247,11 +211,6 @@ export default function Toolbar({
           {filtersActive(filters) ? " match" : ""}
           {narrowed > 0 && ` · ${narrowed} filter${narrowed === 1 ? "" : "s"} on`}
         </p>
-        {rangeInvalid(filters) && (
-          <p className="text-xs font-semibold text-red-600" role="alert">
-            The range ends before it starts.
-          </p>
-        )}
         {filtersActive(filters) && (
           <button
             type="button"

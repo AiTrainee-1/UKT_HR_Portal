@@ -7,10 +7,11 @@ import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 // Periods are fixed in February 2026 (every cycle starts Monday 2 Feb) so the dates never depend on today. Every
 // employee made here has a code starting PC- and is removed again, so other specs see the seed data only.
 //
-// The page keeps its state in the address (?tab=employees&period=2026-02-02_2026-02-08&view=issues ...), so a reload and
+// The page keeps its state in the address (?tab=employees&period=2026-02-02_2026-02-08&view=skipped ...), so a reload and
 // Back from a payroll's details page land on the same screen. The Payroll tab lists the payslips as a TABLE, one department
 // at a time, like Staff Payroll (2026-11-06); `layout=cards` lists each payslip as a card (an <article> named "Payroll of
-// <employee>"). A dashboard and four views (Records, Issues, Skipped, Rules) sit above the list.
+// <employee>"). The views (Records, Skipped, Rules) sit above the list; the Issues view was taken off on 2026-11-24 (the
+// issue badges on each record stay).
 
 const WEEK1 = { periodStart: "2026-02-02", periodEnd: "2026-02-08" };
 const FORTNIGHT1 = { periodStart: "2026-02-02", periodEnd: "2026-02-15" };
@@ -334,13 +335,14 @@ test("Generate Payroll pays the rest of the cycle and leaves existing payroll al
   expect((await payrollRows(page, "biweekly", FORTNIGHT1)).map((r) => r.employeeCode)).toEqual([]);
 });
 
-test("the views of the period count the payslips, the issues and the employee who was skipped", async ({ page }) => {
+test("the views of the period count the payslips and the employee who was skipped", async ({ page }) => {
   await loginAsHr(page);
   await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}&layout=cards`);
   // two payslips of the three people on the cycle; Esha has no rate per shift, so she is the one skipped
   await expect(page.getByTestId("view-records-count")).toHaveText("2", { timeout: 30_000 });
   await expect(page.getByTestId("view-skipped-count")).toHaveText("1");
-  await expect(page.getByTestId("view-issues-count")).toBeVisible();
+  // there is no Issues view any more (owner 2026-11-24)
+  await expect(page.getByTestId("view-issues")).toHaveCount(0);
   // no dashboard of tiles and charts on the cycle pages (owner 2026-11-16)
   await expect(page.getByTestId("pcp-dash-root")).toHaveCount(0);
   // each payslip is a card with its figures, the issues payroll found and the rules the employee is paid under
@@ -415,28 +417,12 @@ test("the tab and the pay period live in the address, so a reload lands on the s
   await expect(page.getByTestId("excess-title")).toContainText(/Weekly .*2 Feb.*8 Feb 2026/);
 });
 
-test("the Issues view lists what payroll found, each issue with the day it was detected", async ({ page }) => {
+test("an old Issues address opens Records: the Issues view was taken off the page", async ({ page }) => {
   await loginAsHr(page);
   await page.goto(`/hr/production-payroll/weekly?period=${WEEK1_PARAM}&view=issues`);
-  const panel = page.getByTestId("issues-panel");
-  await expect(panel).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByTestId("view-issues")).toHaveAttribute("aria-selected", "true");
-
-  // nobody punched in that week: payroll flags the empty days, and says which day each one was detected on
-  const dayIssue = panel.locator('[data-testid="issue-detected"][data-kind="day"]').first();
-  await expect(dayIssue).toContainText(/Detected on .*Feb 2026/, { timeout: 30_000 });
-  await expect(panel.locator('[data-testid^="issue-row-"][data-code="absent"]').first()).toBeVisible();
-  // an issue about the whole period has no single day, and says so
-  await expect(panel.locator('[data-testid="issue-detected"][data-kind="period"]').first()).toContainText(
-    "Whole period",
-  );
-  // the person who could not be generated is listed beside them, with why
-  await expect(panel).toContainText("Esha Worker");
-  await expect(panel).toContainText(/No Salary Per Shift/);
-
-  // a filter goes into the address, apart from the records' own filters
-  await panel.getByTestId("issues-kpi-critical").click();
-  await expect(page).toHaveURL(/isev=critical/);
+  await expect(page.getByTestId("view-records")).toHaveAttribute("aria-selected", "true", { timeout: 30_000 });
+  await expect(page.getByTestId("view-issues")).toHaveCount(0);
+  await expect(page.getByTestId("issues-panel")).toHaveCount(0);
 });
 
 test("Skipped Employees explains who cannot be paid, from the roster, and writes nothing", async ({ page }) => {
@@ -791,7 +777,7 @@ test("a read-only login can look but not generate or assign", async ({ page }) =
     await expect(card(page, "Asha Worker")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("pcp-generate-open")).toBeDisabled();
     // looking is not locked: the views, the export menu and the details of a payroll ...
-    await expect(page.getByTestId("view-issues")).toBeEnabled();
+    await expect(page.getByTestId("view-skipped")).toBeEnabled();
     await expect(page.getByTestId("pcp-export")).toBeEnabled();
     await expect(card(page, "Asha Worker").getByRole("button", { name: /^details/i })).toBeEnabled();
     // ... writing is: the bank transfer file and Mark as Cleared

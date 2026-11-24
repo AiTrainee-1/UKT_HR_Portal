@@ -135,11 +135,12 @@ test("the payroll's day panel lists every punch with its source and edits attend
       "sunday_compensation",
       "ot_compensation",
       "absent",
-      "on_leave",
       "holiday",
     ]) {
       await expect(formBox.getByTestId(`pd-edit-type-${key}`), key).toBeVisible();
     }
+    // On Leave is no longer offered: the Leave option records the leave itself (2026-11-24)
+    await expect(formBox.getByTestId("pd-edit-type-on_leave")).toHaveCount(0);
     const before = (
       (
         await api(

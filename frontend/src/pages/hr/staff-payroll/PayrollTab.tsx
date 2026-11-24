@@ -19,7 +19,6 @@ import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { dateTime, plural } from "@/components/payroll/kit/format";
-import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote } from "@/components/payroll/kit/parts";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
@@ -35,7 +34,6 @@ import {
   filtersToUrl,
   hasChanges,
 } from "@/components/payroll/panels/filters";
-import { IssuesPanel } from "@/components/payroll/panels/issues";
 import {
   DepartmentTabs,
   PayrollRecordList,
@@ -77,8 +75,6 @@ import {
   STATEMENT_REPORT_ID,
   STAFF_VIEWS,
   isStaffView,
-  issueFiltersFromUrl,
-  issueFiltersToUrl,
   onlyStaff,
   staffPeriodLabel,
   staffScope,
@@ -91,15 +87,16 @@ type UrlSetter = (patch: Record<string, string>) => void;
 // Each view's own permission key (Account Management -> Roles & Permissions); a key with no setting follows "payroll".
 const VIEW_KEY: Record<StaffView, string> = {
   records: "payroll.records",
-  issues: "payroll.issues",
   skipped: "payroll.skipped",
   not_included: "payroll.not_included",
   rules: "payroll.rules",
 };
+// The month's issues (the badges on the Records rows and the issue filter) still follow the old Issues view's key.
+const ISSUES_KEY = "payroll.issues";
 
 /**
- * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its five views - Records, Issues,
- * Skipped, Not included and Rules - all about the one month the page header chose. (It has no dashboard of the month: the
+ * Payroll tab of the Staff Payroll page: the actions (Generate, Skipped, Export) and its four views - Records, Skipped,
+ * Not included and Rules - all about the one month the page header chose. (It has no dashboard of the month: the
  * counts are on the view switch.)
  */
 export function PayrollTab({
@@ -120,8 +117,9 @@ export function PayrollTab({
   const level = useLevel();
   const [showGenerate, setShowGenerate] = useState(false);
   const { markPaid, markingId } = useMarkPaid();
-  // Only the views this role may see (Records / Issues / Skipped / Rules); a hidden one is never shown nor loaded.
+  // Only the views this role may see (Records / Skipped / Not included / Rules); a hidden one is never shown nor loaded.
   const canSee = (v: StaffView) => level(VIEW_KEY[v]) !== "hidden";
+  const canSeeIssues = level(ISSUES_KEY) !== "hidden";
   // The month's workflow (owner 2026-11-10): Payroll Done -> Payment Pending -> Paid, and the held / new-joiner lists of
   // Skipped Employees. Once the month is finalized nothing in it can be generated, cleared or adjusted.
   const monthStatus = usePayrollMonthStatus(month, year);
@@ -145,7 +143,6 @@ export function PayrollTab({
   useViewOnlyLock(viewLocked, view);
   // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
   const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
-  const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
   // staff payroll lists staff departments only (owner 2026-11-16: every department is Staff or Production)
@@ -153,14 +150,14 @@ export function PayrollTab({
   const runsQuery = useListPayrollRuns({ month, year });
   // Staff payroll only: Production payroll has its own pages.
   const runs = useMemo(() => onlyStaff(runsQuery.data), [runsQuery.data]);
-  const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
+  const issuesQuery = usePayrollIssues(canSeeIssues ? scope : null);
   const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
   // who is not in the month's payroll: its count on the view switch (the view reads the same cached answer)
   const notIncludedQuery = usePayrollNotIncluded(month, year, canSee("not_included"));
   // Runs on arrival (not behind a button) so the Skipped tile and the view's count are always live; the Generate dialog
   // and the Skipped view read the same cached answer.
   const skipQuery = usePayrollSkipCheck(
-    canSee("issues") || canSee("skipped") || level("payroll.generate") !== "hidden"
+    canSeeIssues || canSee("skipped") || level("payroll.generate") !== "hidden"
       ? { month, year, runType: "monthly" }
       : null,
   );
@@ -183,11 +180,6 @@ export function PayrollTab({
   };
 
   const issues = issuesQuery.data;
-  // what the Issues view's count says: the issues plus the employees skipped at generation, as the view lists them
-  const dashIssues = useMemo(
-    () => addSkipped(issues?.summary, skipQuery.data?.skippedCount ?? 0),
-    [issues, skipQuery.data?.skippedCount],
-  );
   const issueIndex = useMemo(() => buildIssueIndex(issues?.issues ?? []), [issues]);
   const issueSummaries = useMemo(() => buildIssueSummaries(issues?.issues ?? []), [issues]);
   const rulesByEmployee = useMemo(
@@ -245,13 +237,6 @@ export function PayrollTab({
   const options: ViewOption<StaffView>[] = visibleItems<ViewOption<StaffView>>(
     [
       { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
-      {
-        value: "issues",
-        label: "Issues",
-        icon: AlertTriangle,
-        count: issuesQuery.isLoading || skipQuery.isLoading ? null : (dashIssues?.total ?? 0),
-        tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
-      },
       {
         value: "skipped",
         label: "Skipped",
@@ -440,7 +425,7 @@ export function PayrollTab({
             rulesByEmployee={rulesByEmployee}
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "staff", run.id)}
-            onOpenIssues={(run) => openPayrollDetails(navigate, "staff", run.id, "issues")}
+            onOpenIssues={(run) => openPayrollDetails(navigate, "staff", run.id, "attendance")}
             onMarkPaid={locked || !mayMarkCleared ? undefined : (run) => void markPaid(run)}
             markingId={markingId}
             layout={url.layout === "cards" ? "cards" : "table"}
@@ -449,17 +434,6 @@ export function PayrollTab({
             testId="staff-records"
           />
         </div>
-      ) : view === "issues" ? (
-        <IssuesPanel
-          scope={scope}
-          accent="indigo"
-          skipped={skipped}
-          value={issueFilters}
-          onChange={(patch) => setUrl(issueFiltersToUrl(patch) as Record<string, string>)}
-          onOpenDetails={(issue) => {
-            if (issue.payrollId) openPayrollDetails(navigate, "staff", issue.payrollId, "issues");
-          }}
-        />
       ) : view === "skipped" ? (
         <StaffSkippedView
           month={month}

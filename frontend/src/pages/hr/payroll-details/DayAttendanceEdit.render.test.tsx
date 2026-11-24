@@ -2,7 +2,15 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACCENT } from "./accent";
-import { clBalance, hrEdit, productionOptions, staffOptions } from "./edit-fixtures";
+import {
+  clBalance,
+  FULL_DAY_REFUSAL,
+  hrEdit,
+  LOCK_MESSAGE,
+  lockedOptions,
+  productionOptions,
+  staffOptions,
+} from "./edit-fixtures";
 
 // The day panel's attendance-edit section: it names the employee's Department Head, or says plainly that there is none;
 // and its form draws the server's option catalogue (Worked / Compensation / Not worked, then Permission, Late, Casual Leave,
@@ -153,7 +161,7 @@ describe("DayAttendanceEdit", () => {
 });
 
 describe("the Edit Attendance options", () => {
-  it("keeps the three groups and adds Permission, Late, Casual Leave and On-Duty, in that order", () => {
+  it("keeps the three groups and adds every newer option under them, in the server's order", () => {
     const el = openForm();
     const groups = [...el.querySelectorAll('[role="group"][data-testid^="pd-edit-group-"]')];
     expect(groups.map((g) => g.getAttribute("aria-label"))).toEqual([
@@ -162,14 +170,21 @@ describe("the Edit Attendance options", () => {
       "Not worked",
       "Permission",
       "Late",
+      "Early-Out",
       "Casual Leave",
+      "Leave",
       "On-Duty",
+      "Missing Punch",
+      "Penalty Waiver",
+      "OT Pay",
     ]);
     // the first three read as they always did
     expect(text(q(el, "pd-edit-group-worked"))).toContain("How much of the day was worked");
     expect(text(q(el, "pd-edit-type-half_day"))).toContain("0.50 shift");
-    // the newer four sit together under them
-    expect(q(el, "pd-edit-more-options")!.querySelectorAll('[role="group"]')).toHaveLength(4);
+    // the newer nine sit together under them
+    expect(
+      q(el, "pd-edit-more-options")!.querySelectorAll('[role="group"][data-testid^="pd-edit-group-"]'),
+    ).toHaveLength(9);
     expect(text(q(el, "pd-edit-group-permission"))).toContain(
       "Counts as an approved permission (uses the monthly allowance)",
     );
@@ -333,5 +348,204 @@ describe("the Edit Attendance options", () => {
     const form = q(el, "pd-day-edit-form")!;
     const order = [...form.querySelectorAll('[data-testid="pd-day-edit-hr-stage"], [role="group"]')];
     expect(order[0].getAttribute("data-testid")).toBe("pd-day-edit-hr-stage");
+  });
+});
+
+describe("the options added on 2026-11-24", () => {
+  const send = async (el: HTMLElement) => act(async () => (q(el, "pd-day-edit-send") as HTMLButtonElement).click());
+  const isSendable = (el: HTMLElement) => !(q(el, "pd-day-edit-send") as HTMLButtonElement).disabled;
+
+  it("no longer offers On Leave under Not worked: the Leave group records a leave", () => {
+    const el = openForm();
+    expect(q(el, "pd-edit-type-on_leave")).toBeNull();
+    const notWorked = [...q(el, "pd-edit-group-not_worked")!.querySelectorAll("button")].map((b) =>
+      b.getAttribute("data-testid"),
+    );
+    expect(notWorked).toEqual(["pd-edit-type-absent", "pd-edit-type-holiday"]);
+    expect(text(q(el, "pd-edit-group-not_worked"))).toContain("Absent or a holiday");
+  });
+
+  it("uses the compensation balance: says what the day counts and what is available, offers only what fits", async () => {
+    const el = openForm();
+    click(q(el, "pd-edit-type-sunday_compensation"));
+    expect(text(q(el, "pd-edit-compensation-line"))).toBe(
+      "The day counts 0.50 shift now · balance available 2.50 shift",
+    );
+    expect(text(q(el, "pd-day-edit-details"))).toContain("How much of the balance to use?");
+    expect(q(el, "pd-edit-shifts-0.25")).not.toBeNull();
+    expect(q(el, "pd-edit-shifts-0.75")).toBeNull();
+    expect(q(el, "pd-edit-shifts-1.00")).toBeNull();
+    // the most that fits is chosen to start with
+    expect(q(el, "pd-edit-shifts-0.50")!.getAttribute("aria-pressed")).toBe("true");
+    // the day is topped up from the balance: no punch times or Late / Early-Out switches
+    expect(q(el, "pd-edit-first-in")).toBeNull();
+    expect(q(el, "pd-edit-late")).toBeNull();
+    // the line comes before the amounts
+    const details = q(el, "pd-day-edit-details")!;
+    const order = [
+      ...details.querySelectorAll('[data-testid="pd-edit-compensation-line"], [aria-label="Shift value"]'),
+    ];
+    expect(order[0].getAttribute("data-testid")).toBe("pd-edit-compensation-line");
+    click(q(el, "pd-edit-shifts-0.25"));
+    type(q(el, "pd-edit-reason"), "Worked last Sunday");
+    await send(el);
+    expect(h.submit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sunday_compensation", shifts: "0.25", firstPunch: null, isLate: false }),
+    );
+  });
+
+  it("records a leave with its reason and the part of the day, starting on the first part that can be chosen", async () => {
+    const el = openForm();
+    click(q(el, "pd-edit-type-leave-sick"));
+    expect(text(q(el, "pd-day-edit-details"))).toContain("Leave · Sick Leave");
+    const full = q(el, "pd-edit-portion-full") as HTMLButtonElement;
+    expect(full.disabled).toBe(true);
+    expect(full.getAttribute("title")).toBe(FULL_DAY_REFUSAL);
+    expect(full.getAttribute("aria-description")).toBe(FULL_DAY_REFUSAL);
+    expect(text(q(el, "pd-edit-portion-full-reason"))).toContain(FULL_DAY_REFUSAL);
+    expect(q(el, "pd-edit-portion-first_half")!.getAttribute("aria-pressed")).toBe("true");
+    click(q(el, "pd-edit-portion-second_half"));
+    expect(q(el, "pd-edit-portion-second_half")!.getAttribute("aria-pressed")).toBe("true");
+    expect(text(q(el, "pd-edit-portion-note"))).toBe("The second half is leave; the other half counts by the punches.");
+    // another reason keeps the part chosen
+    click(q(el, "pd-edit-type-leave-personal"));
+    expect(q(el, "pd-edit-portion-second_half")!.getAttribute("aria-pressed")).toBe("true");
+    type(q(el, "pd-edit-reason"), "Went home after lunch, unwell");
+    await send(el);
+    expect(h.submit).toHaveBeenCalledWith({
+      employeeId: 7,
+      date: "2026-09-11",
+      type: "leave",
+      note: "Went home after lunch, unwell",
+      choice: "personal",
+      portion: "second_half",
+    });
+    expect(h.toast.mock.calls[0][0].description).toContain("Leave · Personal · Second half");
+  });
+
+  it("adds a missing punch: it cannot be sent until the time is typed, then sends the time", async () => {
+    const el = openForm();
+    click(q(el, "pd-edit-type-missing_punch-morning_in"));
+    const time = q(el, "pd-edit-punch-time") as HTMLInputElement;
+    expect(time.type).toBe("time");
+    expect(time.required).toBe(true);
+    expect(text(time.closest("label"))).toContain("Punch time");
+    type(q(el, "pd-edit-reason"), "Device was offline at the gate");
+    expect(isSendable(el)).toBe(false);
+    expect(text(q(el, "pd-day-edit-hint"))).toBe("Type the time of the missing punch.");
+    type(time, "09:05");
+    expect(isSendable(el)).toBe(true);
+    await send(el);
+    expect(h.submit).toHaveBeenCalledWith({
+      employeeId: 7,
+      date: "2026-09-11",
+      type: "missing_punch",
+      note: "Device was offline at the gate",
+      choice: "morning_in",
+      punchTime: "09:05",
+    });
+    expect(h.toast.mock.calls[0][0].description).toContain("Missing Punch · Morning Check-In 09:05");
+    // the slot with a request already waiting cannot be chosen
+    click(q(el, "pd-day-edit-open"));
+    expect((q(el, "pd-edit-type-missing_punch-lunch_in") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("pays overtime: the detected amount is chosen to start with and can be changed", async () => {
+    const el = openForm();
+    click(q(el, "pd-edit-type-ot_pay"));
+    expect(text(q(el, "pd-edit-ot-line"))).toBe("Overtime detected: 95 min");
+    expect(text(q(el, "pd-day-edit-details"))).toContain("How much overtime to pay?");
+    expect(q(el, "pd-edit-shifts-0.50")!.getAttribute("aria-pressed")).toBe("true");
+    expect(q(el, "pd-edit-shifts-1.00")).not.toBeNull();
+    type(q(el, "pd-edit-reason"), "Stayed for the shipment");
+    // clicking the same tile again keeps the amount chosen
+    click(q(el, "pd-edit-shifts-0.75"));
+    click(q(el, "pd-edit-type-ot_pay"));
+    expect(q(el, "pd-edit-shifts-0.75")!.getAttribute("aria-pressed")).toBe("true");
+    await send(el);
+    expect(h.submit).toHaveBeenCalledWith({
+      employeeId: 7,
+      date: "2026-09-11",
+      type: "ot_pay",
+      note: "Stayed for the shipment",
+      shifts: "0.75",
+    });
+  });
+
+  it("asks for the overtime amount when none was detected", () => {
+    const options = staffOptions().map((g) =>
+      g.key === "ot_pay" ? { ...g, items: g.items.map((i) => ({ ...i, defaultShifts: null, otMinutes: null })) } : g,
+    );
+    const el = openForm({ options });
+    click(q(el, "pd-edit-type-ot_pay"));
+    expect(q(el, "pd-edit-ot-line")).toBeNull();
+    expect(q(el, "pd-day-edit-details")!.querySelector('[aria-pressed="true"]')).toBeNull();
+    type(q(el, "pd-edit-reason"), "Stayed for the shipment");
+    expect(text(q(el, "pd-day-edit-hint"))).toBe("Choose how much overtime to pay.");
+    click(q(el, "pd-edit-shifts-0.25"));
+    expect(isSendable(el)).toBe(true);
+  });
+
+  it("marks the day Early-Out the way Late is marked, and waives a Penalty Early-Out", async () => {
+    const el = openForm();
+    expect((q(el, "pd-edit-type-early_out-unmark") as HTMLButtonElement).disabled).toBe(true);
+    click(q(el, "pd-edit-type-early_out-mark"));
+    expect(text(q(el, "pd-day-edit-details"))).toContain("Mark as Early-Out");
+    expect(q(el, "pd-edit-first-in")).toBeNull();
+    type(q(el, "pd-edit-reason"), "Left at 4 without telling anyone");
+    await send(el);
+    expect(h.submit).toHaveBeenLastCalledWith({
+      employeeId: 7,
+      date: "2026-09-11",
+      type: "early_out",
+      note: "Left at 4 without telling anyone",
+      choice: "mark",
+    });
+
+    click(q(el, "pd-day-edit-open"));
+    click(q(el, "pd-edit-type-penalty_waiver"));
+    expect(text(q(el, "pd-edit-penalty-line"))).toBe("0.25 shift is added back (left 80 min early)");
+    type(q(el, "pd-edit-reason"), "Sent home by the supervisor");
+    await send(el);
+    expect(h.submit).toHaveBeenLastCalledWith({
+      employeeId: 7,
+      date: "2026-09-11",
+      type: "penalty_waiver",
+      note: "Sent home by the supervisor",
+    });
+  });
+
+  it("says once at the top that the day's payroll is finalized, and nothing can be sent", () => {
+    const locked = { locked: true, message: LOCK_MESSAGE };
+    const el = show(HOD, { options: lockedOptions(), clBalance: clBalance(), locked });
+    expect(text(q(el, "pd-day-edit-open-hint"))).toBe(LOCK_MESSAGE);
+    click(q(el, "pd-day-edit-open"));
+    const banner = q(el, "pd-day-edit-locked")!;
+    expect(text(banner)).toContain("Payroll finalized: this day cannot be changed");
+    expect(text(banner)).toContain(LOCK_MESSAGE);
+    // it is the first thing in the form
+    const form = q(el, "pd-day-edit-form")!;
+    expect(form.querySelector('[data-testid="pd-day-edit-locked"], [role="group"]')).toBe(banner);
+    // every tile is off, and the lock is not repeated on each group
+    const tiles = [...q(el, "pd-edit-more-options")!.querySelectorAll<HTMLButtonElement>("button")];
+    expect(tiles.length).toBeGreaterThan(0);
+    expect(tiles.every((b) => b.disabled)).toBe(true);
+    expect(el.querySelectorAll('[data-testid^="pd-edit-group-note-"]')).toHaveLength(0);
+    expect(text(form).split(LOCK_MESSAGE).length - 1).toBe(2); // the banner and the line beside the button
+    type(q(el, "pd-edit-reason"), "Trying anyway");
+    expect(isSendable(el)).toBe(false);
+    expect(text(q(el, "pd-day-edit-hint"))).toBe(LOCK_MESSAGE);
+  });
+
+  it("shows the server's sentence when it refuses a locked day (409)", async () => {
+    h.submit.mockRejectedValueOnce(
+      Object.assign(new Error("HTTP 409 Conflict"), { data: { error: LOCK_MESSAGE, code: "locked" } }),
+    );
+    const el = openForm();
+    click(q(el, "pd-edit-type-penalty_waiver"));
+    type(q(el, "pd-edit-reason"), "Sent home by the supervisor");
+    await send(el);
+    expect(text(q(el, "pd-day-edit-error"))).toBe(LOCK_MESSAGE);
+    expect(q(el, "pd-day-edit-form")).not.toBeNull();
   });
 });

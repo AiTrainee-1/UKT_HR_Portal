@@ -283,9 +283,20 @@ export type PayrollDay = DayCompensationMarker & {
 /** Where an HR edit stands: waiting for the Department Head, waiting for HR (the second approval), applied, or rejected. */
 export type HrEditStatus = "waiting_hod" | "waiting_hr" | "applied" | "rejected";
 
-/** The option group of the Edit Attendance form the edit was made from. */
+/** The option group of the Edit Attendance form the edit was made from (the last five added on 2026-11-24). */
 export type HrEditOption =
-  "worked" | "compensation" | "not_worked" | "permission" | "late" | "casual_leave" | "on_duty";
+  | "worked"
+  | "compensation"
+  | "not_worked"
+  | "permission"
+  | "late"
+  | "casual_leave"
+  | "on_duty"
+  | "early_out"
+  | "leave"
+  | "missing_punch"
+  | "penalty_waiver"
+  | "ot_pay";
 
 /** One side of an edit: what the day was ("Present", 1 shift) or what it was changed to. */
 export type HrEditSide = { label: string; shifts: number | null };

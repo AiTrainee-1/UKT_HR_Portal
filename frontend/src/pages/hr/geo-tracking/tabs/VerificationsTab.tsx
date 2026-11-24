@@ -12,6 +12,7 @@ import {
   Navigation,
   XCircle,
 } from "lucide-react";
+import { DateRangeBar, OutsideRangeNote, useDateRange } from "@/components/date-range";
 import { Chip, EmptyNote } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
@@ -23,6 +24,7 @@ import {
   useUpdateOnDutySessionPunchesHR,
   type OnDutyPunchVerificationItem,
 } from "@/lib/api-client/custom-hooks";
+import { chooseDays, dayInRange, earliestDay } from "@/lib/date-range";
 import DecisionDialog from "../DecisionDialog";
 import PunchPhotosDialog from "../PunchPhotos";
 import {
@@ -176,7 +178,20 @@ export default function VerificationsTab() {
   const { user } = useAuth();
   const canDecide = canApprove(user, "on_duty_punch");
   const [statusFilter, setStatusFilter] = useState<Filter>("pending");
-  const { data: verifications, isLoading, isError, error, refetch } = useOnDutyPunchVerificationsHR(statusFilter);
+  // the HR portal's date filter (This Month by default): a punch is for its punch date; the server sends only those days'
+  const dates = useDateRange();
+  const {
+    data: verifications,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useOnDutyPunchVerificationsHR(statusFilter, true, dates.days);
+  // every pending punch whatever its day (the tab badge's own list): the ones on other days are named under the toolbar
+  const { data: allPending } = useOnDutyPunchVerificationsHR("pending", statusFilter === "pending");
+  const outside =
+    statusFilter === "pending" ? (allPending ?? []).filter((v) => !dayInRange(v.punchDate, dates.days)) : [];
+  const outsideEarliest = earliestDay(outside.map((v) => v.punchDate));
   // the decision HR clicked, waiting for its confirmation
   const [asking, setAsking] = useState<Asking | null>(null);
   const updateMutation = useUpdateOnDutyPunchVerificationHR();
@@ -230,13 +245,22 @@ export default function VerificationsTab() {
         <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
           <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
         </div>
+        <DateRangeBar value={dates.value} onChange={dates.set} accent="#006496" testId="verifications-dates" />
         {!isLoading && (
           <CountText testId="verifications-count">
             {punchTotal} {statusFilter} punch{punchTotal === 1 ? "" : "es"} · {groups.length} request
-            {groups.length === 1 ? "" : "s"}
+            {groups.length === 1 ? "" : "s"} · {dates.label}
           </CountText>
         )}
       </ToolbarCard>
+      <OutsideRangeNote
+        count={outside.length}
+        what={outside.length === 1 ? "pending punch" : "pending punches"}
+        rangeLabel={dates.label}
+        earliest={outsideEarliest && outsideEarliest < dates.days.from ? outsideEarliest : undefined}
+        onShow={() => dates.set(chooseDays(outsideEarliest, dates.today))}
+        testId="verifications-outside"
+      />
 
       {isLoading ? (
         <CardSkeleton />
@@ -248,7 +272,11 @@ export default function VerificationsTab() {
           testId="verifications-error"
         />
       ) : groups.length === 0 ? (
-        <EmptyNote icon={Camera} title={`No ${statusFilter} punch verifications.`} hint={EMPTY_HINT[statusFilter]} />
+        <EmptyNote
+          icon={Camera}
+          title={`No ${statusFilter} punch verifications for ${dates.label}.`}
+          hint={EMPTY_HINT[statusFilter]}
+        />
       ) : (
         <div className="grid gap-3">
           {groups.map(({ head, punches, pendingCount }) => (

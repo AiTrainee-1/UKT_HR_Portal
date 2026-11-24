@@ -266,14 +266,14 @@ describe("the page's state in its address", () => {
   });
 
   it("keeps the pay period when the tab changes, and each tab's own filters under its own keys", async () => {
-    await openPayroll(`${WEEKLY}?period=${WEEK_PARAM}&q=asha&view=issues&eq=bala`);
+    await openPayroll(`${WEEKLY}?period=${WEEK_PARAM}&q=asha&view=skipped&eq=bala`);
     click(tab("Employees"));
-    expect(params()).toEqual({ period: WEEK_PARAM, q: "asha", view: "issues", eq: "bala", tab: "employees" });
+    expect(params()).toEqual({ period: WEEK_PARAM, q: "asha", view: "skipped", eq: "bala", tab: "employees" });
     await waitFor(() => !!q("pcp-roster-list"), "the roster");
     expect((must("pcp-roster-search") as HTMLInputElement).value).toBe("bala");
     click(tab("Payroll"));
     await waitFor(() => !!q("view-records-count"), "the Payroll tab");
-    expect(q("issues-panel")).not.toBeNull(); // the view it was left on
+    await waitFor(() => !!q("skipped-banner-title"), "the Skipped view"); // the view it was left on
   });
 
   it("opens the pay period the address names", async () => {

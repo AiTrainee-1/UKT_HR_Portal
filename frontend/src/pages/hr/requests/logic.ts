@@ -5,6 +5,7 @@
 // what, and what an export holds.
 
 import { hrCanAct, hrCanReject, waitingText, type ApprovalProgress } from "@/lib/approval-workflow";
+import type { RangeDays } from "@/lib/date-range";
 import { permissionOutcome, permissionTypeKey } from "@/lib/late-detection";
 import type { Tone } from "@/lib/statusTones";
 import { leavePath } from "@/pages/hr/compensation/routes";
@@ -124,9 +125,16 @@ export type HubStats = {
   waitingHr: number;
   waitingHod: number;
   waitingOther: number;
+  /** Decided this month; with the date filter (from / to): the requests FOR those days that ended approved / rejected. */
   approvedThisMonth: number;
   rejectedThisMonth: number;
   oldestWaiting: { kind: KindKey; id: number; employeeName: string; label: string; submittedAt: string } | null;
+  /** Only with the date filter (2026-11-24): the days the figures are about, every waiting request whatever its day, the
+   *  waiting ones for other days and the earliest day one of those is for. */
+  range?: { from: string | null; to: string | null };
+  allWaiting?: number;
+  outsideWaiting?: number;
+  outsideEarliest?: string | null;
 };
 
 export type HubOptions = {
@@ -195,17 +203,14 @@ export function normalizeHub(raw: Partial<HubResponse> | null | undefined): HubR
 
 // ─── filters ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export type Period = "all" | "today" | "week" | "month" | "custom";
 export type StatusFilter = "any" | "waiting" | "waiting_hr" | "waiting_hod" | "decided" | "approved" | "rejected";
 export type SortKey = "latest" | "oldest" | "waiting" | "employee" | "kind";
 
+/** The list's own filters. Its dates are the HR portal's date filter (the days requests are FOR, in the address:
+ *  components/date-range useDateRange), sent beside these as from / to. */
 export type Filters = {
   query: string;
   status: StatusFilter;
-  period: Period;
-  /** YYYY-MM-DD, used when period is "custom". */
-  from: string;
-  to: string;
   /** "all" or a branch id. */
   branch: string;
   department: string;
@@ -219,9 +224,6 @@ export type Filters = {
 export const NO_FILTERS: Filters = {
   query: "",
   status: "any",
-  period: "all",
-  from: "",
-  to: "",
   branch: "all",
   department: "all",
   type: "all",
@@ -239,14 +241,6 @@ export const STATUS_LABELS: Record<StatusFilter, string> = {
   rejected: "Rejected",
 };
 
-export const PERIOD_LABELS: Record<Period, string> = {
-  all: "All time",
-  today: "Today",
-  week: "Last 7 days",
-  month: "This month",
-  custom: "Custom range",
-};
-
 export const SORT_LABELS: Record<SortKey, string> = {
   latest: "Latest submitted",
   oldest: "Oldest submitted",
@@ -259,7 +253,6 @@ export const SORT_LABELS: Record<SortKey, string> = {
 export function activeFilterCount(f: Filters): number {
   return [
     f.status !== "any",
-    f.period !== "all",
     f.branch !== "all",
     f.department !== "all",
     f.type !== "all",
@@ -273,23 +266,6 @@ const two = (n: number) => String(n).padStart(2, "0");
 /** YYYY-MM-DD of a local date. */
 export const dayStamp = (d: Date) => `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 
-/** The submitted-date window (YYYY-MM-DD, both ends included) a period stands for; empty ends are open. */
-export function periodRange(period: Period, now: Date, from = "", to = ""): { since?: string; until?: string } {
-  if (period === "today") return { since: dayStamp(now), until: dayStamp(now) };
-  if (period === "week") {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
-    return { since: dayStamp(start), until: dayStamp(now) };
-  }
-  if (period === "month") return { since: `${now.getFullYear()}-${two(now.getMonth() + 1)}-01`, until: dayStamp(now) };
-  if (period === "custom") {
-    const range: { since?: string; until?: string } = {};
-    if (from) range.since = from;
-    if (to) range.until = to;
-    return range;
-  }
-  return {};
-}
-
 /** Which page of which tab the list shows (2026-11-21: the server pages the list). */
 export type PageView = { tab: string; page: number; pageSize: number };
 
@@ -302,18 +278,20 @@ export const EXPORT_MAX = 5000;
 
 /**
  * The query string the server filters on. With a `view` (the page since 2026-11-21) the server also searches, narrows to
- * the tab and to "waiting for HR / HOD", sorts and pages; without one it returns the whole period as before.
+ * the tab and to "waiting for HR / HOD", sorts and pages; without one it returns the whole list as before. `days` (the date
+ * filter, 2026-11-24) asks only for the requests FOR those days, and makes the figures follow them.
  */
-export function serverParams(f: Filters, now: Date, view?: PageView): Record<string, string> {
+export function serverParams(f: Filters, view?: PageView, days?: RangeDays): Record<string, string> {
   const params: Record<string, string> = { kind: view && view.tab !== "all" ? view.tab : "all" };
   if (view) {
     if (f.status !== "any") params.status = f.status;
   } else if (f.status === "waiting" || f.status === "waiting_hr" || f.status === "waiting_hod")
     params.status = "waiting";
   else if (f.status !== "any") params.status = f.status;
-  const { since, until } = periodRange(f.period, now, f.from, f.to);
-  if (since) params.since = since;
-  if (until) params.until = until;
+  if (days) {
+    params.from = days.from;
+    params.to = days.to;
+  }
   if (f.branch !== "all") params.branchId = f.branch;
   if (f.department !== "all") params.departmentId = f.department;
   if (f.type !== "all") params.employeeType = f.type;
@@ -408,7 +386,6 @@ export function reasonMissingText(item: Pick<HubItem, "kind">): string {
 }
 
 /** A custom range that ends before it starts is not a range: the page says so instead of showing an empty list. */
-export const rangeInvalid = (f: Filters) => f.period === "custom" && !!f.from && !!f.to && f.from > f.to;
 
 // ─── search, filter, sort ──────────────────────────────────────────────────────────────────────────────────────────
 

@@ -60,6 +60,9 @@ async function makeMissingPunch(page: Page, employeeId: number, reason: string) 
 }
 
 const tab = (page: Page, name: RegExp | string) => page.getByRole("tab", { name });
+// The page lists the requests FOR the days of its date filter (This Month by default, 2026-11-24): the leaves and missing
+// punches made here are for October 2026, so the tests open that month.
+const HUB = "/hr/requests?month=2026-10";
 const row = (page: Page, kind: string, id: number) => page.getByTestId(`request-${kind}-${id}`);
 
 test.describe.configure({ mode: "serial" });
@@ -76,7 +79,7 @@ test("every kind of request has its own sub-tab, with how many are waiting", asy
   const asha = await employee(page);
   const leaveId = await makeLeave(page, asha.id, "RQH tabs leave");
   const punchId = await makeMissingPunch(page, asha.id, "RQH tabs punch");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await expect(page.getByTestId("requests-hub")).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Requests/ })).toBeVisible();
 
@@ -123,7 +126,7 @@ test("the figures say who the waiting requests are with, and a figure narrows th
   const asha = await employee(page);
   const leaveId = await makeLeave(page, asha.id, "RQH figures leave");
   const punchId = await makeMissingPunch(page, asha.id, "RQH figures punch");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await expect(page.getByTestId("requests-figures")).toBeVisible();
   await expect(page.getByTestId("figure-waiting-hr-value")).not.toHaveText("0");
   await expect(page.getByTestId("figure-waiting-hod-value")).not.toHaveText("0");
@@ -142,7 +145,7 @@ test("search, filters and the two kinds of empty list", async ({ page }) => {
   const asha = await employee(page);
   const a = await makeLeave(page, asha.id, "RQH search alpha wedding");
   const b = await makeLeave(page, asha.id, "RQH search beta funeral");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await tab(page, /^Leave/).click();
   const search = page.getByTestId("requests-search");
 
@@ -159,21 +162,21 @@ test("search, filters and the two kinds of empty list", async ({ page }) => {
   await expect(search).toHaveValue("");
   await expect(row(page, "leave", b)).toBeVisible();
 
-  // a status filter, then a period filter, then the filters cleared
+  // a status filter, then the filters cleared, then the date filter
   await page.getByTestId("filter-status").click();
   await page.getByRole("option", { name: "Approved", exact: true }).click();
   await expect(row(page, "leave", a)).toHaveCount(0);
   await expect(page.getByTestId("requests-clear-filters")).toBeVisible();
   await page.getByTestId("requests-clear-filters").click();
   await expect(row(page, "leave", a)).toBeVisible();
-  await page.getByTestId("filter-period").click();
-  await page.getByRole("option", { name: "Today" }).click();
-  await expect(row(page, "leave", a)).toBeVisible();
-  await page.getByTestId("filter-period").click();
-  await page.getByRole("option", { name: "Custom range" }).click();
-  await page.getByTestId("filter-from").fill("2020-01-01");
-  await page.getByTestId("filter-to").fill("2020-01-31");
+  // the leave is for 26 Oct: Today does not hold it, its month does
+  await page.getByTestId("requests-dates-today").click();
   await expect(row(page, "leave", a)).toHaveCount(0);
+  await expect(page).toHaveURL(/range=today/);
+  await page.getByTestId("requests-dates-month-name").click();
+  await page.getByTestId("requests-dates-pick-2026-10").click();
+  await expect(row(page, "leave", a)).toBeVisible();
+  await expect(page.getByTestId("requests-dates-label")).toContainText("October 2026");
 
   // the sort is offered
   await page.getByTestId("requests-sort").click();
@@ -185,7 +188,7 @@ test("the details show the approval trail; Reject needs a reason, and the row th
 }) => {
   const asha = await employee(page);
   const id = await makeLeave(page, asha.id, "RQH detail leave");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await tab(page, /^Leave/).click();
   await row(page, "leave", id).click();
   const detail = page.getByTestId("request-detail");
@@ -227,7 +230,7 @@ test("the details show the approval trail; Reject needs a reason, and the row th
 test("a request that waits for the HOD offers no Approve; it says who it is waiting for", async ({ page }) => {
   const asha = await employee(page);
   const id = await makeMissingPunch(page, asha.id, "RQH hod punch");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await tab(page, /^Missing Punch/).click();
   const card = row(page, "missing_punch", id);
   await expect(card).toContainText("Waiting for HOD");
@@ -276,7 +279,7 @@ test("a general request is answered here: status and notes the employee reads", 
 test("the filtered list downloads as CSV with every column", async ({ page }) => {
   const asha = await employee(page);
   const id = await makeLeave(page, asha.id, "RQH export leave");
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await tab(page, /^Leave/).click();
   await page.getByTestId("requests-search").fill("RQH export");
   await expect(row(page, "leave", id)).toBeVisible();
@@ -297,7 +300,7 @@ test("on a phone each request is a card and nothing is clipped", async ({ page }
   const asha = await employee(page);
   const id = await makeLeave(page, asha.id, "RQH phone leave");
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto("/hr/requests");
+  await page.goto(HUB);
   await expect(page.getByTestId("requests-cards")).toBeVisible();
   await expect(page.getByTestId("requests-table")).toHaveCount(0);
   await expect(row(page, "leave", id)).toHaveCount(1);

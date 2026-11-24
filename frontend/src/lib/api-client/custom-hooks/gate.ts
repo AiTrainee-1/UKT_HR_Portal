@@ -50,6 +50,19 @@ export const useOutpassRecords = (range: GateRange, page: number, pageSize = 20)
     placeholderData: keepPreviousData,
   });
 
+/** The QR-form exits logged on some days (from / to, YYYY-MM-DD, India: the HR portal's date filter, 2026-11-24). */
+export const getOutpassRecordsForDaysQueryKey = (days: { from: string; to: string }, page: number) =>
+  ["/api/outpass/records", "days", days.from, days.to, page] as const;
+export const useOutpassRecordsForDays = (days: { from: string; to: string }, page: number, pageSize = 20) =>
+  useQuery<PaginatedRecords<OutpassRecordRow>>({
+    queryKey: getOutpassRecordsForDaysQueryKey(days, page),
+    queryFn: () =>
+      customFetch<PaginatedRecords<OutpassRecordRow>>(
+        `/api/outpass/records?${new URLSearchParams({ from: days.from, to: days.to, page: String(page), pageSize: String(pageSize) })}`,
+      ),
+    placeholderData: keepPreviousData,
+  });
+
 export const useOutpassGateInfo = (token: string) =>
   useQuery<{ branchName: string }>({
     queryKey: ["/api/outpass/gate", token],
@@ -228,6 +241,25 @@ export const useListOutpassRequests = (status?: string, options?: { enabled?: bo
     queryKey: getListOutpassRequestsQueryKey(status),
     queryFn: () => customFetch<OutpassRequestItem[]>(`/api/outpass-requests${status ? `?status=${status}` : ""}`),
     refetchInterval: 60_000,
+    enabled: options?.enabled,
+  });
+
+/**
+ * The passes FOR some days (from / to, YYYY-MM-DD, India: the HR portal's date filter, 2026-11-24): the day the employee
+ * went out, or the day it was asked for while they have not gone out. Its key starts with getListOutpassRequestsQueryKey(),
+ * so what refreshes the whole list (a decision) refreshes this too.
+ */
+export const getOutpassRequestsForDaysQueryKey = (days: { from: string; to: string }) =>
+  [...getListOutpassRequestsQueryKey(), "days", days.from, days.to] as const;
+export const useOutpassRequestsForDays = (days: { from: string; to: string }, options?: { enabled?: boolean }) =>
+  useQuery<OutpassRequestItem[]>({
+    queryKey: getOutpassRequestsForDaysQueryKey(days),
+    queryFn: () =>
+      customFetch<OutpassRequestItem[]>(
+        `/api/outpass-requests?${new URLSearchParams({ from: days.from, to: days.to })}`,
+      ),
+    refetchInterval: 60_000,
+    placeholderData: keepPreviousData,
     enabled: options?.enabled,
   });
 

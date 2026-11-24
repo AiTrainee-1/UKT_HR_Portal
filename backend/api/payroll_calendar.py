@@ -136,7 +136,14 @@ def on_duty_states_by_employee(employee_ids, start: date, end: date) -> dict[int
     touching |= Q(status__in=requested, created_at__gte=start_dt, created_at__lt=end_dt)
     sessions = list(
         OnDutySession.objects.filter(touching, employee_id__in=ids).values(
-            "employee_id", "status", "destination", "created_at", "started_at", "employee_ended_at", "completed_at"
+            "employee_id",
+            "status",
+            "destination",
+            "created_at",
+            "started_at",
+            "employee_ended_at",
+            "completed_at",
+            "approval_trail",
         )
     )
     punched = set(
@@ -167,8 +174,13 @@ def on_duty_states_by_employee(employee_ids, start: date, end: date) -> dict[int
             first = _ist_day(s["started_at"])
             ended = s["employee_ended_at"] or s["completed_at"]
             last = _ist_day(ended) if ended else (today if s["status"] == OnDutySession.STATUS_ACTIVE else first)
+            # the On-Duty record an approved HR attendance edit wrote (2026-11-24): the edit made the day a worked
+            # On-Duty day, approved by the Department Head and HR, with no punches to wait for
+            by_hr_edit = any(
+                isinstance(e, dict) and e.get("via") == "attendance_correction" for e in (s.get("approval_trail") or [])
+            )
             for day in _each_day(max(first, start), min(max(last, first), end)):
-                if (emp_id, day) in punched:
+                if by_hr_edit or (emp_id, day) in punched:
                     put(emp_id, day, "verified", s["destination"])
                 elif (emp_id, day) in awaiting:
                     put(emp_id, day, "punches_pending", s["destination"])

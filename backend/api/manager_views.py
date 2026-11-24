@@ -1183,6 +1183,12 @@ def hod_decide_attendance(m: DepartmentManager, pk: int, data, actor: str, reque
         return Response({"error": "status must be 'approved' or 'rejected'"}, status=400)
 
     reviewer_name = actor
+    if status_val == "approved" and approval.can_act("attendance_correction", req, approval.HOD, for_actor=False):
+        from .attendance_edit import approval_refusal
+
+        # a day whose payroll is finalized (Payroll Done) can no longer change (2026-11-24)
+        if refusal := approval_refusal(req, approval.HOD):
+            return Response({"error": refusal, "code": "edit_refused"}, status=409)
     try:
         outcome = approval.decide(
             "attendance_correction", req, approval.HOD, status_val, actor=reviewer_name, comment=data.get("comment")

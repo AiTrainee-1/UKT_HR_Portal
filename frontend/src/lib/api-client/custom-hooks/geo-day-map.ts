@@ -14,7 +14,9 @@ import {
 /** One journey of the day: the list row and the last known position, with its segments in time order. */
 export type DayMapJourney = JourneyTrack & { segments: JourneySegment[] };
 
-export type JourneyDayMap = { date: string; journeys: DayMapJourney[] };
+/** `from` / `to` / `truncated` only when the map was asked for several days (the date filter, 2026-11-24): the server
+ *  then sends at most its own cap of journeys, the latest ones, and says when it left some out. */
+export type JourneyDayMap = { date: string; journeys: DayMapJourney[]; truncated?: boolean };
 
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -25,6 +27,7 @@ export function readJourneyDayMap(raw: unknown, fallbackDate = ""): JourneyDayMa
   const startOf = (a: { startedAt: string | null }) => (a.startedAt ? Date.parse(a.startedAt) : 0);
   return {
     date: typeof root.date === "string" ? root.date : fallbackDate,
+    ...(root.truncated === true ? { truncated: true } : {}),
     journeys: rows.map((row): DayMapJourney => {
       const r = isObj(row) ? row : {};
       const segments = (Array.isArray(r.segments) ? r.segments : [])
@@ -38,13 +41,18 @@ export function readJourneyDayMap(raw: unknown, fallbackDate = ""): JourneyDayMa
 /** Under the journeys' own root key, so rebuilding a journey refreshes the map too. */
 export const getJourneyDayMapQueryKey = (date: string) => [...getJourneysRootKey(), "day-map", date] as const;
 
-export const useJourneyDayMap = (date: string, enabled = true) =>
+/** Every journey of a day (`date`), or of the date filter's days (`days`: from / to, YYYY-MM-DD, India). */
+export const useJourneyDayMap = (date: string, enabled = true, days?: { from: string; to: string }) =>
   useQuery<JourneyDayMap>({
-    queryKey: getJourneyDayMapQueryKey(date),
+    queryKey: days ? getJourneyDayMapQueryKey(`${days.from}_${days.to}`) : getJourneyDayMapQueryKey(date),
     queryFn: async () =>
       readJourneyDayMap(
-        await customFetch<unknown>(`/api/tracking/journeys/day-map?date=${encodeURIComponent(date)}`),
-        date,
+        await customFetch<unknown>(
+          `/api/tracking/journeys/day-map?${
+            days ? new URLSearchParams({ from: days.from, to: days.to }).toString() : `date=${encodeURIComponent(date)}`
+          }`,
+        ),
+        days ? days.to : date,
       ),
     // a day's routes, not a live board: every 30 s, like the On-Duty feed it is drawn with
     refetchInterval: 30_000,

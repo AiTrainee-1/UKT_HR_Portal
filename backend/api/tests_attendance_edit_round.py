@@ -358,7 +358,20 @@ class CatalogueTests(RoundBase):
         groups = edit.option_catalogue()
         self.assertEqual(
             [g["key"] for g in groups],
-            ["worked", "compensation", "not_worked", "permission", "late", "casual_leave", "on_duty"],
+            [
+                "worked",
+                "compensation",
+                "not_worked",
+                "permission",
+                "late",
+                "early_out",
+                "casual_leave",
+                "leave",
+                "on_duty",
+                "missing_punch",
+                "penalty_waiver",
+                "ot_pay",
+            ],
         )
         by = {g["key"]: g for g in groups}
         self.assertEqual(
@@ -368,7 +381,8 @@ class CatalogueTests(RoundBase):
         self.assertEqual(
             [i["key"] for i in by["compensation"]["items"]], ["compensation", "sunday_compensation", "ot_compensation"]
         )
-        self.assertEqual([i["key"] for i in by["not_worked"]["items"]], ["absent", "on_leave", "holiday"])
+        # "On Leave" left the dialog (2026-11-24): the Leave option records the leave itself
+        self.assertEqual([i["key"] for i in by["not_worked"]["items"]], ["absent", "holiday"])
         permission = by["permission"]["items"][0]
         self.assertEqual(
             [c["value"] for c in permission["choices"]], ["morning_late_in", "evening_early_out", "middle_permission"]

@@ -3,7 +3,6 @@ import type { PayrollScope } from "@/lib/api-client/custom-hooks";
 import { monthYear } from "@/components/payroll/kit/format";
 import { STATEMENT_URL_DEFAULTS } from "@/components/payroll/kit/statement-url";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
-import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
 import { NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-included/logic";
 import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 
@@ -11,22 +10,13 @@ import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic
 // shared link and Back from a payroll's details page all land on the same view.
 
 export type StaffTab = "payroll" | "salary" | "payslip";
-export type StaffView = "records" | "issues" | "skipped" | "not_included" | "rules";
+export type StaffView = "records" | "skipped" | "not_included" | "rules";
 
 export const STAFF_TABS: readonly StaffTab[] = ["payroll", "salary", "payslip"];
-// "not_included" (2026-11-20): every employee of the HRMS who is not in the month's payroll, with the reason
-export const STAFF_VIEWS: readonly StaffView[] = ["records", "issues", "skipped", "not_included", "rules"];
-
-/** The Issues view's own filters in the address: prefixed, so they never collide with the records' filters (q, dept ...). */
-export const ISSUE_URL_DEFAULTS = {
-  iq: "",
-  icode: "",
-  isev: "",
-  idept: "",
-  ifrom: "",
-  ito: "",
-  igroup: DEFAULT_ISSUE_FILTERS.groupBy,
-} as const;
+// "not_included" (2026-11-20): every employee of the HRMS who is not in the month's payroll, with the reason.
+// The Issues view was taken off the page (owner 2026-11-24): an old ?view=issues address opens Records. Each payroll's
+// own issues are still on its Payroll Details page and as the badge on its Records row.
+export const STAFF_VIEWS: readonly StaffView[] = ["records", "skipped", "not_included", "rules"];
 
 /**
  * Every key the page keeps in its address, with its default (a value equal to its default is left out of the address).
@@ -41,7 +31,6 @@ export const STAFF_URL_DEFAULTS: Record<string, string> = {
   /** The department whose records are open on the Payroll tab (empty = the first department). */
   pdept: "",
   ...FILTER_URL_DEFAULTS,
-  ...ISSUE_URL_DEFAULTS,
   ...STATEMENT_URL_DEFAULTS,
   /** The Not included view's filters (ni*) and the Payslip tab's (pl*). */
   ...NOT_INCLUDED_URL_DEFAULTS,
@@ -91,34 +80,6 @@ export function existingPayroll(runs: PayrollRunItem[] | undefined): { total: nu
   const staff = onlyStaff(runs);
   const paid = staff.filter((r) => r.status === "paid").length;
   return { total: staff.length, paid, pending: staff.length - paid };
-}
-
-// ── The Issues view's filters <-> the address ─────────────────────────────────
-
-export function issueFiltersFromUrl(values: Partial<Record<string, string | null | undefined>>): IssueFilterState {
-  return sanitizeFilters({
-    q: values.iq ?? "",
-    code: values.icode ?? "",
-    severity: (values.isev ?? "") as IssueFilterState["severity"],
-    dept: values.idept ?? "",
-    from: values.ifrom ?? "",
-    to: values.ito ?? "",
-    groupBy: (values.igroup || DEFAULT_ISSUE_FILTERS.groupBy) as IssueFilterState["groupBy"],
-  });
-}
-
-export function issueFiltersToUrl(
-  patch: Partial<IssueFilterState>,
-): Partial<Record<keyof typeof ISSUE_URL_DEFAULTS, string>> {
-  const out: Partial<Record<keyof typeof ISSUE_URL_DEFAULTS, string>> = {};
-  if (patch.q !== undefined) out.iq = patch.q;
-  if (patch.code !== undefined) out.icode = patch.code;
-  if (patch.severity !== undefined) out.isev = patch.severity;
-  if (patch.dept !== undefined) out.idept = patch.dept;
-  if (patch.from !== undefined) out.ifrom = patch.from;
-  if (patch.to !== undefined) out.ito = patch.to;
-  if (patch.groupBy !== undefined) out.igroup = patch.groupBy;
-  return out;
 }
 
 // ── Salary Payroll Statement (the Export menu on the Payroll tab) ─────────────

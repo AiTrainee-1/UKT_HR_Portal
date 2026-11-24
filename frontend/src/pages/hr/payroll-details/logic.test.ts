@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PayrollDay, PayrollIssue } from "@/lib/api-client/custom-hooks";
+import type { PayrollDay } from "@/lib/api-client/custom-hooks";
 import type { DayKind } from "./logic";
 import { cleanDetails, legacyDetails, noBreakdownDetails, productionDetails, staffDetails } from "./fixtures";
 import {
@@ -9,16 +9,13 @@ import {
   MARK_FILL_ORDER,
   MARK_KEYS,
   MARK_META,
-  NO_ISSUE_FILTERS,
   SECTIONS,
   SECTION_IDS,
-  activeFilterCount,
   addDaysIso,
   backLabelFor,
   buildCalendar,
   changedRules,
   countRules,
-  dateRangeOf,
   dayKind,
   eachDay,
   factValue,
@@ -26,15 +23,10 @@ import {
   fillKindCounts,
   fillMark,
   filterDays,
-  filterIssues,
   grossLine,
-  groupIssuesByDate,
-  groupIssuesByType,
   humanizeKey,
   isDegraded,
   impactParts,
-  impactTotals,
-  impactTotalsText,
   isRuleChanged,
   kindCounts,
   markCounts,
@@ -46,29 +38,24 @@ import {
   pickActiveSection,
   sectionDomId,
   severityCounts,
-  slug,
   statusLabel,
-  typeOptions,
-  weekStartIso,
   weekdayOffset,
   workTile,
-  type IssueFilters,
 } from "./logic";
 
 const staff = staffDetails();
 const issues = staff.issues;
-const withFilters = (over: Partial<IssueFilters>): IssueFilters => ({ ...NO_ISSUE_FILTERS, ...over });
-const ids = (list: PayrollIssue[]) => list.map((i) => i.id);
 
 describe("sections", () => {
-  it("are the three the nav shows, in reading order: the days first", () => {
-    expect(SECTIONS.map((s) => s.label)).toEqual(["Attendance", "Issues", "Pay & deductions"]);
-    expect(SECTION_IDS).toEqual(["attendance", "issues", "pay"]);
-    expect(sectionDomId("issues")).toBe("pd-issues");
+  it("are the two the nav shows, in reading order: the days first (no Issues section since 2026-11-24)", () => {
+    expect(SECTIONS.map((s) => s.label)).toEqual(["Attendance", "Pay & deductions"]);
+    expect(SECTION_IDS).toEqual(["attendance", "pay"]);
+    expect(sectionDomId("pay")).toBe("pd-pay");
   });
 
   it("?section= accepts a section's name, a few aliases (days), and nothing else", () => {
-    expect(parseSectionParam("issues")).toBe("issues");
+    // the Issues section is gone: a link made before opens the attendance
+    expect(parseSectionParam("issues")).toBe("attendance");
     expect(parseSectionParam(" PAY ")).toBe("pay");
     expect(parseSectionParam("days")).toBe("attendance");
     expect(parseSectionParam("calendar")).toBe("attendance");
@@ -136,13 +123,6 @@ describe("dates", () => {
     expect(weekdayOffset(null)).toBe(-1);
   });
 
-  it("find the Monday of a week, across a month end", () => {
-    expect(weekStartIso("2026-10-13")).toBe("2026-10-12");
-    expect(weekStartIso("2026-10-11")).toBe("2026-10-05"); // a Sunday belongs to the week before it
-    expect(weekStartIso("2026-10-01")).toBe("2026-09-28");
-    expect(weekStartIso(undefined)).toBeNull();
-  });
-
   it("add days without a time zone getting in the way", () => {
     expect(addDaysIso("2026-10-31", 1)).toBe("2026-11-01");
     expect(addDaysIso("2026-03-01", -1)).toBe("2026-02-28");
@@ -153,109 +133,10 @@ describe("dates", () => {
   });
 });
 
-describe("filtering the issues", () => {
-  it("starts with everything", () => {
-    expect(filterIssues(issues, NO_ISSUE_FILTERS)).toHaveLength(11);
-    expect(activeFilterCount(NO_ISSUE_FILTERS)).toBe(0);
-  });
-
-  it("by severity: one or several", () => {
-    expect(ids(filterIssues(issues, withFilters({ severities: ["critical"] })))).toEqual(["101:absent:2026-10-06"]);
-    expect(filterIssues(issues, withFilters({ severities: ["warning"] }))).toHaveLength(8);
-    expect(filterIssues(issues, withFilters({ severities: ["warning", "info"] }))).toHaveLength(10);
-  });
-
-  it("by kind", () => {
-    const late = filterIssues(issues, withFilters({ code: "late_in" }));
-    expect(late).toHaveLength(3);
-    expect(late.every((i) => i.code === "late_in")).toBe(true);
-    expect(filterIssues(issues, withFilters({ code: "no_shift" }))).toEqual([]);
-  });
-
-  it("by date range: inclusive at both ends, open-ended with one end, and the whole-period issues drop out", () => {
-    const week = filterIssues(issues, withFilters({ from: "2026-10-13", to: "2026-10-20" }));
-    expect(ids(week)).toEqual(["101:late_in:2026-10-13", "101:late_in:2026-10-14", "101:early_out:2026-10-20"]);
-    expect(ids(filterIssues(issues, withFilters({ from: "2026-10-27" })))).toEqual([
-      "101:missing_punch:2026-10-27",
-      "101:late_in:2026-10-29",
-    ]);
-    expect(ids(filterIssues(issues, withFilters({ to: "2026-10-07" })))).toEqual([
-      "101:absent:2026-10-06",
-      "101:unpaid_leave:2026-10-07",
-    ]);
-    expect(filterIssues(issues, withFilters({ from: "2026-10-13", to: "2026-10-13" }))).toHaveLength(1);
-  });
-
-  it("a From later than the To is read the other way about", () => {
-    expect(dateRangeOf({ from: "2026-10-20", to: "2026-10-13" })).toEqual({ from: "2026-10-13", to: "2026-10-20" });
-    expect(filterIssues(issues, withFilters({ from: "2026-10-20", to: "2026-10-13" }))).toHaveLength(3);
-    expect(dateRangeOf({ from: "", to: "" })).toBeNull();
-  });
-
-  it("by words: in the detail, the facts, the date and the period, ignoring case and blanks", () => {
-    expect(filterIssues(issues, withFilters({ query: "grace" }))).toHaveLength(4); // 3 late arrivals + the early leaving
-    expect(ids(filterIssues(issues, withFilters({ query: "09:42" })))).toEqual(["101:late_in:2026-10-13"]);
-    expect(ids(filterIssues(issues, withFilters({ query: "tue, 13 oct" })))).toEqual(["101:late_in:2026-10-13"]);
-    expect(filterIssues(issues, withFilters({ query: "WHOLE PERIOD" }))).toHaveLength(3);
-    expect(ids(filterIssues(issues, withFilters({ query: "billable" })))).toEqual(["101:late_penalty:period"]);
-    // a fact's name is searchable too: "excess permission" is only a key of the late pool's facts
-    expect(ids(filterIssues(issues, withFilters({ query: "excess permission" })))).toEqual(["101:late_penalty:period"]);
-    expect(filterIssues(issues, withFilters({ query: "   " }))).toHaveLength(11);
-    expect(filterIssues(issues, withFilters({ query: "zzzz" }))).toEqual([]);
-  });
-
-  it("every filter has to pass", () => {
-    const one = filterIssues(
-      issues,
-      withFilters({ severities: ["warning"], code: "late_in", query: "09:25", from: "2026-10-01", to: "2026-10-31" }),
-    );
-    expect(ids(one)).toEqual(["101:late_in:2026-10-14"]);
-  });
-
-  it("counts the filters that narrow the list (a date range counts once)", () => {
-    expect(activeFilterCount(withFilters({ severities: ["critical", "info"] }))).toBe(1);
-    expect(activeFilterCount(withFilters({ severities: ["critical"], code: "absent" }))).toBe(2);
-    expect(activeFilterCount(withFilters({ from: "2026-10-01", to: "2026-10-05" }))).toBe(1);
-    expect(activeFilterCount(withFilters({ to: "2026-10-05" }))).toBe(1);
-    expect(activeFilterCount(withFilters({ query: "  " }))).toBe(0);
-    expect(activeFilterCount({ severities: ["info"], code: "late_in", from: "2026-10-01", to: "", query: "x" })).toBe(
-      4,
-    );
-  });
-
+describe("issues and facts, in words", () => {
   it("counts severities from the issues", () => {
     expect(severityCounts(issues)).toEqual({ critical: 1, warning: 8, info: 2 });
     expect(severityCounts([])).toEqual({ critical: 0, warning: 0, info: 0 });
-  });
-
-  it("offers the kinds present, worst first and then by name, each with its count", () => {
-    const options = typeOptions(staff.issueCounts.byCode, issues);
-    expect(options.map((o) => o.code)).toEqual([
-      "absent",
-      "early_out",
-      "half_day",
-      "late_in",
-      "late_penalty",
-      "missing_punch",
-      "unpaid_leave",
-      "advance_recovery",
-      "esi_number_missing",
-    ]);
-    expect(options.find((o) => o.code === "late_in")).toMatchObject({
-      label: "Late arrival",
-      count: 3,
-      severity: "warning",
-    });
-    // without the server's counts they are worked out from the issues themselves
-    expect(typeOptions({}, issues)).toEqual(options);
-    expect(typeOptions(undefined, issues)).toEqual(options);
-    expect(typeOptions(undefined, [])).toEqual([]);
-    // a code the screens do not know yet is still offered, in words
-    expect(typeOptions({ brand_new_code: 2 }, [])[0]).toMatchObject({
-      code: "brand_new_code",
-      label: "brand new code",
-      count: 2,
-    });
   });
 
   it("describes what an issue cost", () => {
@@ -268,9 +149,6 @@ describe("filtering the issues", () => {
     expect(impactParts({ days: 1 })).toEqual(["1 day"]);
     expect(impactParts(null)).toEqual([]);
     expect(impactParts({})).toEqual([]);
-    expect(impactTotals(issues)).toEqual({ days: 2.5, shifts: 0.5, amount: 1134.62 * 2 + 567.31 * 2 + 1000 });
-    expect(impactTotalsText({ days: 1, shifts: 0, amount: 1134.62 })).toBe("1 day · ₹1,134.62");
-    expect(impactTotalsText({ days: 0, shifts: 0, amount: 0 })).toBe("");
   });
 
   it("writes keys and facts for people", () => {
@@ -283,57 +161,8 @@ describe("filtering the issues", () => {
     expect(factValue(10)).toBe("10");
     expect(factValue(1.23456)).toBe("1.23");
     expect(factValue("09:42")).toBe("09:42");
-    expect(slug("Late detection")).toBe("late-detection");
     expect(statusLabel("paid_leave")).toBe("Paid leave");
     expect(statusLabel("")).toBe("—");
-  });
-});
-
-describe("grouping the issues", () => {
-  it("by date: the whole-period issues first, then a band per week (Monday to Sunday), then a header per day", () => {
-    const bands = groupIssuesByDate(issues);
-    expect(bands.map((b) => b.key)).toEqual(["period", "2026-10-05", "2026-10-12", "2026-10-19", "2026-10-26"]);
-    expect(bands[0]).toMatchObject({ label: "Whole period", count: 3, start: null });
-    expect(bands[0].days).toHaveLength(1);
-    expect(ids(bands[0].days[0].issues).sort()).toEqual([
-      "101:advance_recovery:period",
-      "101:esi_number_missing:period",
-      "101:late_penalty:period",
-    ]);
-    expect(bands[1].label).toBe("Week of 5 Oct - 11 Oct 2026");
-    expect(bands[1].days.map((d) => d.label)).toEqual(["Tue, 6 Oct 2026", "Wed, 7 Oct 2026"]);
-    expect(bands.slice(1).map((b) => b.count)).toEqual([2, 2, 2, 2]);
-  });
-
-  it("by date: nothing is lost and a day lists its worst issue first", () => {
-    const worse: PayrollIssue = { ...issues[3], id: "x:absent:2026-10-14", code: "absent", severity: "critical" };
-    const all = [...issues, worse];
-    const bands = groupIssuesByDate(all);
-    expect(bands.flatMap((b) => b.days.flatMap((d) => d.issues))).toHaveLength(all.length);
-    const day = bands.flatMap((b) => b.days).find((d) => d.date === "2026-10-14")!;
-    expect(day.issues.map((i) => i.severity)).toEqual(["critical", "warning"]);
-    expect(groupIssuesByDate([])).toEqual([]);
-  });
-
-  it("by type: worst kind first, then the commonest, with what each kind cost", () => {
-    const groups = groupIssuesByType(issues);
-    expect(groups.map((g) => g.code)).toEqual([
-      "absent",
-      "late_in",
-      "early_out",
-      "half_day",
-      "late_penalty",
-      "missing_punch",
-      "unpaid_leave",
-      "advance_recovery",
-      "esi_number_missing",
-    ]);
-    expect(groups[1].issues).toHaveLength(3);
-    expect(groups[0].totals).toEqual({ days: 1, shifts: 0, amount: 1134.62 });
-    expect(groups.find((g) => g.code === "late_penalty")!.totals).toEqual({ days: 0, shifts: 0.5, amount: 567.31 });
-    // the dates inside a kind run oldest first
-    expect(groups[1].issues.map((i) => i.date)).toEqual(["2026-10-13", "2026-10-14", "2026-10-29"]);
-    expect(groupIssuesByType([])).toEqual([]);
   });
 });
 

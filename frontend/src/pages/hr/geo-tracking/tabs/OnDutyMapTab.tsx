@@ -1,25 +1,29 @@
-// Geo Attendance -> On-Duty Map: every employee that was On-Duty on the chosen day (today unless a date is picked), each journey in
-// its own colour on one map, drawn like the Journey History map (route line, numbered stops, a flag at the start, a person at the
-// end). "All On-Duty" is the overview; "Single Employee" is the directional route lookup for one tracking-enabled employee.
+// Geo Attendance -> On-Duty Map: every employee that was On-Duty on the chosen days (the HR portal's date filter: This Month by
+// default, Today, Yesterday, an earlier month or Custom days), each employee's journeys of those days in their own colour on
+// one map, drawn like the Journey History map (route line, numbered stops, a flag at the start, a person at the end).
+// "All On-Duty" is the overview; "Single Employee" is the directional route lookup for one tracking-enabled employee.
 //   * the list beside the map is the legend: click a row to focus that employee (the map zooms to them, the others fade), the eye
 //     hides or shows one;
-//   * the journeys come from the new tracking (GET /api/tracking/journeys/day-map), joined by employee with the On-Duty feed
-//     (their request and punches); an employee without a journey keeps the old position pings as a plain line.
+//   * the journeys come from the new tracking (GET /api/tracking/journeys/day-map?from=&to=), joined by employee with the
+//     On-Duty feed (on-duty-map?from=&to=: their latest request of the days and its punches); an employee without a journey
+//     keeps the old position pings (kept 72 hours) as a plain line. Over several days an employee is still one entry: every
+//     journey of theirs in the days, stops numbered on through them.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation } from "wouter";
-import { CalendarDays, Eye, MapPinned, Route as RouteIcon, ScanSearch, Users } from "lucide-react";
+import { Eye, MapPinned, Route as RouteIcon, ScanSearch, Users } from "lucide-react";
+import { DateRangeBar, useDateRange } from "@/components/date-range";
 import { Chip } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { trackingErrorMessage, useJourneyDayMap, useOnDutyMap } from "@/lib/api-client/custom-hooks";
+import type { DateRangeValue } from "@/lib/date-range";
 import { moduleForPath } from "@/lib/permission-modules";
 import { ViewOnlyTabNote, pickVisible, useLevel, useViewOnlyLock } from "@/lib/tab-access";
 import { assignDutyColors, dutyColor } from "../dutyColors";
-import { buildDutyEntries, hasRoute, summarize, todayIst } from "../dutyMap";
+import { buildDutyEntries, hasRoute, summarize } from "../dutyMap";
 import { ListSkeleton, LoadError, Note, ToolbarCard } from "../kit";
 import { fmtDistance } from "../logic";
 import { MapCardHeader, MapOverlayNote, MapViewButtons, useMapView } from "../mapKit";
@@ -48,7 +52,9 @@ export default function OnDutyMapTab() {
   const modeViewOnly =
     modes.length > 0 && !isRouteViewOnly(user, location, moduleForPath(location)) && level(MODE_KEY[mode]) === "view";
   useViewOnlyLock(modeViewOnly, mode);
-  const [date, setDate] = useState(todayIst());
+  const dates = useDateRange();
+  const days = dates.days;
+  const daysKey = `${days.from}_${days.to}`;
   const [focusId, setFocusId] = useState<number | null>(null);
   // changes only when a row of the list is picked: that moves the map to the employee (picking a pin on the map must not)
   const [focusFit, setFocusFit] = useState("");
@@ -59,9 +65,12 @@ export default function OnDutyMapTab() {
   const mapCard = useRef<HTMLDivElement>(null);
   const slots = useRef(new Map<number, number>());
 
-  const today = todayIst();
-  const { data: mapData, isLoading: mapLoading, error: mapError, refetch: refetchMap } = useOnDutyMap(date);
-  const { data: dayMap, isLoading: dayLoading, error: dayError } = useJourneyDayMap(date, modes.includes("all"));
+  const { data: mapData, isLoading: mapLoading, error: mapError, refetch: refetchMap } = useOnDutyMap(days.to, days);
+  const {
+    data: dayMap,
+    isLoading: dayLoading,
+    error: dayError,
+  } = useJourneyDayMap(days.to, modes.includes("all"), days);
   const loading = mapLoading || dayLoading;
 
   const entries = useMemo(() => buildDutyEntries(mapData?.employees ?? [], dayMap?.journeys ?? []), [mapData, dayMap]);
@@ -82,8 +91,8 @@ export default function OnDutyMapTab() {
   const focusPoints: LatLng[] = focusEntry ? focusEntry.all : [];
   const drawn = visible.filter(hasRoute).length;
 
-  // the map fits everybody when the day's data first arrives and when another day is picked, not on every refresh
-  const fitSignal = !loading && drawn > 0 ? date : "";
+  // the map fits everybody when the days' data first arrives and when other days are picked, not on every refresh
+  const fitSignal = !loading && drawn > 0 ? daysKey : "";
 
   // an employee that is no longer on the list cannot stay in focus
   useEffect(() => {
@@ -93,10 +102,9 @@ export default function OnDutyMapTab() {
     }
   }, [entries, focusId]);
 
-  const changeDate = (next: string) => {
-    if (!next) return;
+  const changeDates = (next: DateRangeValue) => {
     slots.current = new Map();
-    setDate(next);
+    dates.set(next);
     setFocusId(null);
     setFocusFit("");
     setHidden(new Set());
@@ -151,22 +159,7 @@ export default function OnDutyMapTab() {
   return (
     <div className="space-y-4" data-testid="tab-onduty-map">
       <ToolbarCard>
-        <div className="flex items-center gap-2">
-          <CalendarDays size={15} className="text-gray-400" aria-hidden />
-          <Input
-            type="date"
-            className="h-9 w-[10.5rem] text-sm"
-            aria-label="Day"
-            value={date}
-            max={today}
-            onChange={(e) => changeDate(e.target.value)}
-          />
-          {date !== today && (
-            <Button type="button" size="sm" variant="outline" className="h-9 text-xs" onClick={() => changeDate(today)}>
-              Today
-            </Button>
-          )}
-        </div>
+        <DateRangeBar value={dates.value} onChange={changeDates} accent="#006496" testId="onduty-dates" />
         <PillTabs
           items={[
             // the count goes in `count`: the pills measure themselves again when it changes
@@ -199,8 +192,15 @@ export default function OnDutyMapTab() {
 
       <ViewOnlyTabNote show={modeViewOnly} />
 
+      {mode === "all" && dayMap?.truncated && (
+        <Note tone="warn" testId="duty-truncated">
+          These days hold more journeys than one map can draw: only the latest ones are drawn. Pick fewer days to see
+          the rest.
+        </Note>
+      )}
+
       {mode === "single" ? (
-        <SingleEmployeeView date={date} />
+        <SingleEmployeeView days={days} rangeText={dates.label} />
       ) : (
         <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
           <Card className="order-2 space-y-3 rounded-2xl p-4 lg:order-1 lg:max-h-[780px] lg:overflow-y-auto">
@@ -241,9 +241,9 @@ export default function OnDutyMapTab() {
                 className="rounded-xl border border-dashed px-3 py-8 text-center text-xs leading-relaxed text-gray-500"
                 data-testid="duty-empty"
               >
-                <p className="font-semibold text-gray-700">No employees were On-Duty on {date}.</p>
+                <p className="font-semibold text-gray-700">No employees were On-Duty for {dates.label}.</p>
                 <p className="mt-1">
-                  Pick another day above. A day appears here once an employee submits an On-Duty request for it.
+                  Pick other dates above. A day appears here once an employee submits an On-Duty request for it.
                 </p>
               </div>
             ) : (
@@ -299,7 +299,7 @@ export default function OnDutyMapTab() {
               )}
               {!loading && drawn === 0 && (
                 <MapOverlayNote testId="duty-map-empty">
-                  No live positions to show for On-Duty staff on {date}.
+                  No live positions to show for On-Duty staff for {dates.label}.
                 </MapOverlayNote>
               )}
             </div>

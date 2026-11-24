@@ -38,6 +38,7 @@ from rest_framework.response import Response
 from .auth import require_hr
 from .branch_scope import get_branch_scope, scope_to_branch
 from .clock import FACTORY_TZ
+from .date_span import DaySpanError, parse_day_span
 from .employee_photo import employee_photo_link, photo_links
 from .models import Branch, Employee, GateQRCode, OutpassRecord, Visitor, VisitorVisit
 from .throttles import throttle
@@ -251,9 +252,19 @@ def outpass_summary(request: Request) -> Response:
 @api_view(["GET"])
 @require_hr
 def outpass_records(request: Request) -> Response:
-    start = _range_start(request.query_params.get("range", "month"))
+    """The exits logged through the branch QR form: `range` today / week / month (month by default) as before, or
+    from / to (YYYY-MM-DD, India days, 2026-11-24: the HR portal's date filter, date_span.py) by the day it was logged;
+    page, pageSize."""
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return Response({"error": str(exc)}, status=400)
     page, page_size = _paginate_params(request)
-    qs = scope_to_branch(OutpassRecord.objects, request).filter(submitted_at__gte=start).select_related("branch")
+    qs = scope_to_branch(OutpassRecord.objects, request).select_related("branch")
+    if span is not None:
+        qs = qs.filter(span.instant_q("submitted_at"))
+    else:
+        qs = qs.filter(submitted_at__gte=_range_start(request.query_params.get("range", "month")))
     total = qs.count()
     offset = (page - 1) * page_size
     rows = qs[offset:offset + page_size]
@@ -574,7 +585,10 @@ def mask_phone(phone: str | None) -> str:
 @require_hr
 def visitor_summary(request: Request) -> Response:
     """today / thisWeek / thisMonth (as before) and insideNow / checkedOutToday / longStayNow / repeatThisMonth, for
-    the page's filters except the dates and the status; inRange {visits, checkedOut, avgMinutes} for every filter."""
+    the page's filters except the dates and the status; inRange {visits, checkedOut, avgMinutes} for every filter;
+    rangeTotals {visits, checkedOut, repeat} (2026-11-24: the page's figures follow its date filter) for every filter but
+    the status: the visits of the dates, how many of them checked out, and how many of their visitors have two or more
+    visits in all (at this branch)."""
     try:
         p = visit_filter_params(request)
     except VisitFilterError as e:
@@ -615,6 +629,17 @@ def visitor_summary(request: Request) -> Response:
     # the rows' own whole minutes, averaged half up (the same rule as minutesInside and the file)
     in_range["avgMinutes"] = average_minutes(in_range.pop("avg"))
     out["inRange"] = in_range
+    dated = base.filter(visit_date_q(p)).order_by()
+    totals = dated.aggregate(visits=Count("id"), checkedOut=Count("id", filter=Q(checked_out_at__isnull=False)))
+    totals["repeat"] = (
+        branch_visits.filter(visitor_id__in=dated.values("visitor_id"))
+        .order_by()
+        .values("visitor_id")
+        .annotate(n=Count("id"))
+        .filter(n__gte=2)
+        .count()
+    )
+    out["rangeTotals"] = totals
     if (request.query_params.get("options") or "").lower() in ("1", "true"):
         out["options"] = _visit_filter_options(p["branch_id"])
     return Response(out)

@@ -253,6 +253,7 @@ api/tests_reporting_hr_time_card.py
 api/attendance_edit.py
 api/attendance_edit_views.py
 api/tests_attendance_edit.py
+api/tests_attendance_edit_all_options.py
 api/tests_device_punch_rules.py
 api/tests_punch_view_sync.py
 api/tests_reporting_payroll_core.py
@@ -651,3 +652,5 @@ api/tests_md_reportlog.py
 api/md_portal/analytics/punches.py
 api/md_portal/routes/punches.py
 api/tests_md_punches.py
+api/date_span.py
+api/tests_date_range_filters.py

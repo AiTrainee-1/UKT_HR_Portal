@@ -98,15 +98,31 @@ function setValue(el: HTMLElement, value: string) {
 }
 const blur = (el: HTMLElement) => act(() => el.dispatchEvent(new FocusEvent("focusout", { bubbles: true })));
 
-async function open() {
-  mountPage(URL_);
+async function open(url = URL_) {
+  mountPage(url);
   await waitFor(() => ready("visitors-list") && rowNames().length > 0, "the visits");
   await waitFor(() => text(q("visitors-stat-inside-value")) !== "", "the figures");
 }
 
 describe("the Visits view", () => {
-  it("shows today's visits, the five figures, and asks for India's today without the screen switch", async () => {
+  it("opens on This Month: asks for October's days, and the figures are October's", async () => {
     await open();
+    expect(lastRecords().get("from")).toBe("2026-10-01");
+    expect(lastRecords().get("to")).toBe("2026-10-31");
+    expect(must("visitors-dates-month").getAttribute("aria-pressed")).toBe("true");
+    expect(text(q("visitors-dates-label"))).toContain("October 2026");
+    expect(rowNames()).toHaveLength(5);
+    // Visits / Checked out / Repeat follow the dates; Inside now and Inside over 2 h are about right now
+    expect(text(q("visitors-stat-today-value"))).toBe("5");
+    expect(text(q("visitors-stat-today"))).toContain("October 2026");
+    expect(text(q("visitors-stat-checked-out-value"))).toBe("2");
+    expect(text(q("visitors-stat-repeat-value"))).toBe("1");
+    expect(text(q("visitors-stat-repeat"))).toContain("October 2026");
+    expect(text(q("visitors-stat-inside-value"))).toBe("2");
+  });
+
+  it("shows today's visits, the five figures, and asks for India's today without the screen switch", async () => {
+    await open(`${URL_}?range=today`);
     expect(rowNames()).toEqual([
       expect.stringContaining("Visitor One"),
       expect.stringContaining("Ramesh Kumar"),
@@ -129,8 +145,8 @@ describe("the Visits view", () => {
     expect(text(q("visitors-summary-line"))).toBe("3 visits · 1 checked out · 2 h 45 m on average");
   });
 
-  it("every filter asks the server and stays in the address; Clear brings today back", async () => {
-    await open();
+  it("every filter asks the server and stays in the address; Clear brings This Month back", async () => {
+    await open(`${URL_}?range=today`);
     setValue(must("visitors-status"), "inside");
     await waitFor(() => lastRecords().get("status") === "inside", "the status filter");
     await waitFor(() => rowNames().length === 2, "two inside");
@@ -165,19 +181,27 @@ describe("the Visits view", () => {
     click(must("visitors-clear"));
     // (the first answer is cached, so the cleared list need not be asked for again)
     await waitFor(() => !here().includes("q=") && !here().includes("branchId="), "the cleared filters");
-    await waitFor(() => rowNames().length === 3, "today's three");
+    await waitFor(() => rowNames().length === 5, "the month's five");
+    expect(here()).not.toContain("range=");
     expect(q("visitors-clear")).toBeNull();
   });
 
-  it("the dates: This week asks for Monday to today, a typed day is a custom range", async () => {
+  it("the dates: Today, Yesterday, and typed days as a custom range", async () => {
     await open();
-    click(must("visitors-dates-week"));
-    await waitFor(() => lastRecords().get("from") === "2026-10-12", "this week");
+    click(must("visitors-dates-today"));
+    await waitFor(() => lastRecords().get("from") === "2026-10-14", "today");
     expect(lastRecords().get("to")).toBe("2026-10-14");
-    await waitFor(() => rowNames().length === 4, "with yesterday's visit");
+    await waitFor(() => rowNames().length === 3, "today's visits");
+    await waitFor(() => text(q("visitors-stat-today-value")) === "3", "today's figure");
+    click(must("visitors-dates-yesterday"));
+    await waitFor(() => lastRecords().get("from") === "2026-10-13", "yesterday");
+    await waitFor(() => rowNames().length === 1, "yesterday's visit");
+    click(must("visitors-dates-custom"));
+    await waitFor(() => q("visitors-dates-from") !== null, "the custom days");
     setValue(must("visitors-dates-from"), "2026-10-01");
     await waitFor(() => lastRecords().get("from") === "2026-10-01", "the typed day");
-    await waitFor(() => rowNames().length === 5, "every visit");
+    expect(lastRecords().get("to")).toBe("2026-10-13");
+    await waitFor(() => rowNames().length === 2, "1 - 13 Oct");
     expect(here()).toContain("range=custom");
   });
 
@@ -375,7 +399,8 @@ describe("the export", () => {
     };
     expect([path, format]).toEqual(["/api/visitor/export", "xlsx"]);
     expect(query.get("status")).toBe("inside");
-    expect(query.get("from")).toBe("2026-10-14");
+    expect(query.get("from")).toBe("2026-10-01");
+    expect(query.get("to")).toBe("2026-10-31");
     expect(query.has("view")).toBe(false);
     expect(query.has("page")).toBe(false);
   });

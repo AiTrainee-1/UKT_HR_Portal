@@ -146,7 +146,7 @@ describe("the roster", () => {
     expect(text(q("pcp-roster-row-PC-W1"))).not.toContain("No issues");
   });
 
-  it("opens a generated payslip's details on its own page, and the issues from the issue badge", async () => {
+  it("opens a generated payslip's details on its own page, and its attendance from the issue badge", async () => {
     await openRoster();
     expect(q("pcp-roster-details-PC-W2")).toBeNull(); // nothing generated: nothing to open
     expect(q("pcp-roster-details-PC-N1")).toBeNull();
@@ -156,7 +156,8 @@ describe("the roster", () => {
     unmountPage();
     await openRoster();
     click(must("pcp-roster-issues-PC-W1"));
-    expect(here()).toBe("/hr/production-payroll/details/11?section=issues");
+    // the details page has no Issues section any more (2026-11-24): the badge opens the days
+    expect(here()).toBe("/hr/production-payroll/details/11?section=attendance");
   });
 
   it("says why somebody cannot be generated, and links to where it is fixed", async () => {

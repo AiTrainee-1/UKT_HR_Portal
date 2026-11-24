@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { istDayOf } from "@/lib/date-range";
 import GeoAttendance from "../GeoAttendance";
 import { resetMap } from "./leafletMock";
 import {
@@ -20,6 +21,8 @@ import {
   waitFor,
   type Raw,
   type World,
+  inDays,
+  pinClock,
 } from "./testing";
 
 // On-Duty Approvals and Punch Verifications in jsdom: what each card says, the decision it sends, who may decide (the approval
@@ -121,6 +124,7 @@ const punch = (id: number, over: Raw = {}): Raw => ({
 
 beforeAll(installBrowserStubs);
 beforeEach(() => {
+  pinClock();
   vi.clearAllMocks();
   resetMap();
   h.user.current = SUPER;
@@ -132,7 +136,12 @@ beforeEach(() => {
     const [path, query = ""] = url.split("?");
     const method = (options?.method ?? "GET").toUpperCase();
     if (method === "GET" && path === "/api/on-duty-sessions") {
-      return JSON.parse(JSON.stringify(sessions[new URLSearchParams(query).get("status") ?? "pending"] ?? []));
+      // the status and the date filter's days (a request is for the day it was made), as the server does
+      const params = new URLSearchParams(query);
+      const rows = (sessions[params.get("status") ?? "pending"] ?? []).filter((s) =>
+        inDays(istDayOf(String(s.createdAt)), params),
+      );
+      return JSON.parse(JSON.stringify(rows));
     }
     if (method === "GET" && /^\/api\/live-location\/team\/\d+\/route$/.test(path)) {
       return { employeeId: 11, employeeCode: "E2E001", employeeName: "Asha Kumar", date: "2026-10-28", points: [] };
@@ -148,6 +157,7 @@ beforeEach(() => {
 afterEach(() => {
   expect(world.unexpected).toEqual([]);
   unmount();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -176,7 +186,7 @@ describe("On-Duty Approvals", () => {
     expect(first).toContain("Buyer 1");
     expect(first).toContain("Submitted 28 Oct, 09:00");
     expect(cards()[0].dataset.status).toBe("pending_hr");
-    expect(text(q("approvals-count"))).toBe("2 pending requests");
+    expect(text(q("approvals-count"))).toBe("2 pending requests · October 2026");
   });
 
   it("asks first, then sends the decision the button says (with the note), and says what happened", async () => {
@@ -351,7 +361,10 @@ describe("On-Duty Approvals", () => {
 
   it("says when there is nothing, in a few words and with what would appear here", async () => {
     await open();
-    await waitFor(() => text(document.body).includes("No pending On-Duty sessions."), "the empty note");
+    await waitFor(
+      () => text(document.body).includes("No pending On-Duty sessions for October 2026."),
+      "the empty note",
+    );
     expect(text(document.body)).toContain("New On-Duty requests from employees appear here for a decision.");
   });
 });
@@ -371,7 +384,7 @@ describe("Punch Verifications", () => {
     ];
     await open("?tab=verifications");
     await waitFor(() => verificationCards().length === 2, "the requests");
-    expect(text(q("verifications-count"))).toBe("3 pending punches · 2 requests");
+    expect(text(q("verifications-count"))).toBe("3 pending punches · 2 requests · October 2026");
     const asha = verificationCards().find((c) => text(c).includes("Asha Kumar"))!;
     expect(asha.querySelectorAll('[data-testid="punch-row"]')).toHaveLength(2);
     expect(text(asha)).toContain("2 punches");
@@ -477,7 +490,75 @@ describe("Punch Verifications", () => {
 
   it("says there is nothing, and what would appear here", async () => {
     await open("?tab=verifications");
-    await waitFor(() => text(document.body).includes("No pending punch verifications."), "the empty note");
+    await waitFor(
+      () => text(document.body).includes("No pending punch verifications for October 2026."),
+      "the empty note",
+    );
     expect(text(document.body)).toContain("wait here until HR approves them into attendance");
+  });
+});
+
+describe("the date filter (This Month by default: the pinned clock is 28 Oct 2026)", () => {
+  const sessionCalls = () =>
+    h.fetch.mock.calls.map((c) => String(c[0])).filter((u) => u.startsWith("/api/on-duty-sessions?"));
+
+  it("asks for the requests made on This Month's days, and names the pending ones of other days", async () => {
+    sessions.pending = [
+      session(1, { approval: approval() }),
+      session(2, { createdAt: "2026-09-30T18:00:00+05:30", approval: approval() }),
+    ];
+    await open();
+    await waitFor(() => cards().length === 1, "October's request");
+    expect(sessionCalls()).toContain("/api/on-duty-sessions?status=pending&from=2026-10-01&to=2026-10-31");
+    expect(text(q("approvals-count"))).toBe("1 pending request · October 2026");
+    expect(text(q("approvals-outside"))).toContain("1 more pending request outside October 2026");
+    expect(text(q("approvals-outside"))).toContain("the earliest is for 30 Sep 2026");
+    // Show them: Custom days from the earliest to today, in the address
+    clickId("approvals-outside-show");
+    await waitFor(() => cards().length === 2, "both requests");
+    expect(window.location.search).toBe("?range=custom&from=2026-09-30&to=2026-10-28");
+    expect(q("approvals-outside")).toBeNull();
+  });
+
+  it("Today and an earlier month ask for their own days", async () => {
+    sessions.pending = [session(1, { approval: approval() })];
+    await open();
+    await waitFor(() => cards().length === 1, "the request");
+    clickId("approvals-dates-yesterday");
+    await waitFor(() => cards().length === 0, "nothing yesterday");
+    expect(sessionCalls().at(-1)).toBe("/api/on-duty-sessions?status=pending&from=2026-10-27&to=2026-10-27");
+    expect(text(document.body)).toContain("No pending On-Duty sessions for Yesterday, 27 Oct.");
+    clickId("approvals-dates-prev");
+    await waitFor(
+      () => sessionCalls().at(-1) === "/api/on-duty-sessions?status=pending&from=2026-09-01&to=2026-09-30",
+      "September",
+    );
+    expect(window.location.search).toBe("?month=2026-09");
+  });
+
+  it("punches by their punch date: This Month's, and the pending ones of other days named apart", async () => {
+    world.verifications = [
+      punch(1),
+      punch(2, {
+        sessionId: 52,
+        employeeName: "Old Punch",
+        punchDate: "2026-09-29",
+        createdAt: "2026-09-29T10:00:00+05:30",
+      }),
+    ];
+    await open("?tab=verifications");
+    await waitFor(() => verificationCards().length === 1, "October's punch");
+    expect(world.requests).toContain(
+      "GET /api/on-duty-punch-verifications?status=pending&from=2026-10-01&to=2026-10-31",
+    );
+    expect(text(q("verifications-count"))).toBe("1 pending punch · 1 request · October 2026");
+    expect(text(q("verifications-outside"))).toContain("1 more pending punch outside October 2026");
+    clickId("verifications-dates-today");
+    await waitFor(
+      () =>
+        world.requests.includes("GET /api/on-duty-punch-verifications?status=pending&from=2026-10-28&to=2026-10-28"),
+      "today's punches",
+    );
+    expect(window.location.search).toBe("?range=today");
   });
 });

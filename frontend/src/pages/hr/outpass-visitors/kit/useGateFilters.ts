@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
+import { rangeDays, readDateRange } from "@/lib/date-range";
 import { DATE_PRESETS, isDateKey, istDateKey, msUntilNextIstDay, resolveDateRange, toInstant } from "./fmt";
 
 /** The list's paging keys: in the address like the filters, never counted as a filter, never sent with an export. */
 const PAGING = new Set(["page", "pageSize"]);
-/** The date filter's keys (DateRangeFilter): the API gets `from` / `to` worked out from them, never `range`. */
-const DATE_KEYS = new Set(["range", "from", "to"]);
+/** The date filter's keys (DateRangeFilter, or the HR portal's DateRangeBar with `month`): the API gets `from` / `to`
+ *  worked out from them, never `range` or `month`. */
+const DATE_KEYS = new Set(["range", "month", "from", "to"]);
 
 export type GateFilters<T extends Record<string, string>> = {
   /** Every filter as the address has it (its default when the address has none), plus `page`. */
@@ -38,6 +40,9 @@ export type GateFilters<T extends Record<string, string>> = {
  *   equal to its default is left out of the address.
  * - A `range` key (with `from` and `to`) is the date filter: "today" / "week" / "month" are worked out from today in
  *   India, "custom" uses `from` / `to`, "all" has no limit. `params` carries `from` / `to`, never `range`.
+ * - With a `month` key as well, the date filter is the HR portal's one (lib/date-range, components/date-range
+ *   DateRangeBar, owner brief 2026-11-24): "today" / "yesterday" / "month" (the whole month of `month`, the current one
+ *   when empty) / "custom", nothing after today.
  * - `page` is always there (default "1"); `pageSize` only when the defaults have it.
  * - `keep` names keys that are not filters (Visitors' `?view=`): Clear leaves them alone and they are not counted, but
  *   they still go to the API like any other value, so leave a pure screen switch out of `defaults` if the API must not
@@ -61,7 +66,10 @@ export function useGateFilters<T extends Record<string, string>>(
   const keepKey = (options.keep ?? []).join("\u0000");
   // "Today" / "This week" / "This month" are worked out from today in India: read it on every render, and re-render at
   // India's midnight, so a list left open overnight asks for the new day by itself.
-  const today = useIstToday("range" in all && DATE_PRESETS.some((p) => p.value === values.range));
+  const portalDates = "month" in all;
+  const today = useIstToday(
+    "range" in all && (portalDates ? values.range !== "custom" : DATE_PRESETS.some((p) => p.value === values.range)),
+  );
 
   const set = useCallback(
     (patch: Partial<T & { page: string }>) => {
@@ -86,9 +94,12 @@ export function useGateFilters<T extends Record<string, string>>(
     const keep = new Set(keepKey ? keepKey.split("\u0000") : []);
     const hasDate = Object.keys(all).some((k) => DATE_KEYS.has(k));
     // a preset is worked out from `today` (India), so it moves on to the new day at midnight
-    const dateRange = hasDate
-      ? resolveDateRange({ range: values.range, from: values.from, to: values.to }, toInstant(today) ?? new Date())
-      : { from: "", to: "" };
+    const at = toInstant(today) ?? new Date();
+    const dateRange = !hasDate
+      ? { from: "", to: "" }
+      : portalDates
+        ? rangeDays(readDateRange(values as Record<string, string>, at), at)
+        : resolveDateRange({ range: values.range, from: values.from, to: values.to }, at);
     const filterParams = new URLSearchParams();
     // the date filter counts once, however many of its keys moved
     let activeCount = Object.keys(all).some((k) => DATE_KEYS.has(k) && !keep.has(k) && (values[k] ?? "") !== all[k])
@@ -106,7 +117,7 @@ export function useGateFilters<T extends Record<string, string>>(
     params.set("page", String(pageOf(values.page)));
     if ("pageSize" in all && values.pageSize) params.set("pageSize", values.pageSize);
     return { dateRange, exportQuery: filterParams, params, activeCount, queryKey: params.toString() };
-  }, [all, values, keepKey, today]);
+  }, [all, values, keepKey, today, portalDates]);
 
   return {
     filters: values,

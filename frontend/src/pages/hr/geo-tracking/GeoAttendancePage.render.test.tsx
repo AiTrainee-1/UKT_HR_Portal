@@ -20,6 +20,7 @@ import {
   waitFor,
   type Raw,
   type World,
+  pinClock,
 } from "./testing";
 
 // Geo Attendance as a whole page in jsdom: the new Journey History tab and its address, the Live Map with the new feed of On-Duty
@@ -55,6 +56,7 @@ let world: World;
 
 beforeAll(installBrowserStubs);
 beforeEach(() => {
+  pinClock();
   vi.clearAllMocks();
   resetMap();
   h.user.current = SUPER;
@@ -63,6 +65,7 @@ beforeEach(() => {
 afterEach(() => {
   expect(world.unexpected).toEqual([]);
   unmount();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 

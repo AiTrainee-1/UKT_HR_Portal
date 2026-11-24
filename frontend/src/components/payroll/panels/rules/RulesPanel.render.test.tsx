@@ -3,9 +3,8 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PayrollRulesResponse } from "@/lib/api-client/custom-hooks";
 import { isMutatingControl, lockMutatingControls } from "@/lib/view-only-lock";
-import { EMPLOYEE_RULES, makeRules, manyEmployees } from "./fixtures";
+import { EMPLOYEE_RULES, PRODUCTION_SCOPE, STAFF_SCOPE, makeRules, manyEmployees } from "./fixtures";
 import { RulesPanel, type RulesPanelProps } from "./RulesPanel";
-import { STAFF_SCOPE, PRODUCTION_SCOPE } from "../issues/fixtures";
 
 // The Rules panel in jsdom with the data hook faked: the rules configured on the Settings page (grouped, each with the
 // link to change it) and the rules assigned to each employee (a table with chips and warning flags, filters, a row that

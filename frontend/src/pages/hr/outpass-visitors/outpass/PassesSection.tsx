@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { FileText } from "lucide-react";
-import { useListOutpassRequests, type GateRange, type OutpassRequestItem } from "@/lib/api-client/custom-hooks";
-import { inGateRange } from "@/lib/gate-range";
+import { useOutpassRequestsForDays, type OutpassRequestItem } from "@/lib/api-client/custom-hooks";
+import type { RangeDays } from "@/lib/date-range";
 import {
   DataTable,
   PersonCell,
@@ -12,7 +12,6 @@ import {
   fmtCount,
   type DataColumn,
 } from "../kit";
-import { RANGE_LABEL } from "../shared";
 import {
   APPROVAL_CHIP,
   PASS_STATUS_OPTIONS,
@@ -20,6 +19,7 @@ import {
   formatApprover,
   matchesPassSearch,
   matchesPassStatus,
+  passesForDays,
   type PassFilterStatus,
 } from "./logic";
 
@@ -96,30 +96,27 @@ const COLUMNS: DataColumn<OutpassRequestItem>[] = [
 ];
 
 /**
- * Overview > Passes: every pass asked for in the range (the Today / This Week / This Month filter above), newest first,
- * with its decision and where it stands at the gate. The list comes whole from /api/outpass-requests (the Requests
- * module's list, also the sidebar's), so the search and the status filter work on it here.
+ * Overview > Passes: every pass for the days of the date filter above (the day the employee went out, or the day it was
+ * asked for until they go), newest first, with its decision and where it stands at the gate. The days' passes come whole
+ * from /api/outpass-requests?from=&to= (the Requests module's list), so the search and the status filter work on them here.
  */
 export function ApprovedPassesSection({
-  range,
+  days,
+  rangeText,
   status,
   q,
   onFilters,
 }: {
-  range: GateRange;
+  days: RangeDays;
+  /** The days in words ("November 2026"). */
+  rangeText: string;
   status: PassFilterStatus;
   q: string;
   onFilters: (patch: { status?: PassFilterStatus; q?: string }) => void;
 }) {
   const [page, setPage] = useState(1);
-  const { data: requests, isLoading, error, refetch } = useListOutpassRequests();
-  const inRange = useMemo(
-    () =>
-      (requests ?? [])
-        .filter((r) => inGateRange(r.createdAt, range))
-        .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)),
-    [requests, range],
-  );
+  const { data: requests, isLoading, error, refetch } = useOutpassRequestsForDays(days);
+  const inRange = useMemo(() => passesForDays(requests, days), [requests, days]);
   const rows = useMemo(
     () => inRange.filter((r) => matchesPassStatus(r, status) && matchesPassSearch(r, q)),
     [inRange, status, q],
@@ -127,7 +124,6 @@ export function ApprovedPassesSection({
   const pageCount = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
   const pageSafe = Math.min(page, pageCount);
   const pageRows = rows.slice((pageSafe - 1) * PAGE_SIZE, pageSafe * PAGE_SIZE);
-  const rangeText = RANGE_LABEL[range].toLowerCase();
   const filtered = !!status || !!q.trim();
   const change = (patch: { status?: PassFilterStatus; q?: string }) => {
     setPage(1);
@@ -177,8 +173,8 @@ export function ApprovedPassesSection({
       }
       empty={{
         icon: FileText,
-        title: filtered ? "No pass matches the search" : `No gate passes asked for ${rangeText}`,
-        hint: filtered ? "Clear the search or pick another status." : "Try This Week or This Month.",
+        title: filtered ? "No pass matches the search" : `No gate passes for ${rangeText}`,
+        hint: filtered ? "Clear the search or pick another status." : "Pick other dates above, or an earlier month.",
       }}
       pagination={{ page: pageSafe, pageSize: PAGE_SIZE, total: rows.length, onPageChange: setPage }}
       caption="Gate passes"

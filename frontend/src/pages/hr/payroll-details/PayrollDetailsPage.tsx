@@ -15,7 +15,6 @@ import { ACCENT, type Accent } from "./accent";
 import { AttendanceCard } from "./AttendanceCard";
 import { detailsExportItems } from "./exports";
 import { DetailsHeader } from "./Header";
-import { IssuesCard } from "./IssuesCard";
 import { KpiStrip, NetBridge } from "./Kpis";
 import {
   SECTION_IDS,
@@ -25,7 +24,6 @@ import {
   normalizeDetails,
   parsePayrollId,
   parseSectionParam,
-  severityCounts,
 } from "./logic";
 import { DegradedNotice, ErrorState, NotFoundState, PageSkeleton, StaleBar, SwitchingChip } from "./PageStates";
 import { PayExtrasCard } from "./PayExtrasCard";
@@ -33,7 +31,6 @@ import { PRINT_CSS } from "./print";
 import { scrollPageToTop, useSectionSpy } from "./scroll";
 import { SectionNav } from "./SectionNav";
 import { StatutoryCard } from "./StatutoryCard";
-import { useIssueFilters } from "./use-issue-filters";
 import { isMissingError, useMarkPaid, usePayrollDetailsView } from "./use-details";
 import { useDetailsWorkflow } from "./use-workflow";
 
@@ -162,7 +159,6 @@ function DetailsBody({
   onNeighbour: (payrollId: number) => void;
   onRefresh: () => void;
 }) {
-  const filters = useIssueFilters();
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const degraded = isDegraded(details);
   const { markPaid, busy } = useMarkPaid(kind);
@@ -172,7 +168,6 @@ function DetailsBody({
   const company = settings.data?.companyName || "UK Textiles";
   const { active, jump } = useSectionSpy(SECTION_IDS);
 
-  const counts = useMemo(() => severityCounts(details.issues), [details.issues]);
   const exportItems = useMemo(() => detailsExportItems({ details, company }), [details, company]);
   // How PF / ESI / TDS were decided is stored in the payslip's breakdown, not in the details: read it from there (a payroll
   // with no breakdown, a legacy one, or a failed request simply has no such card).
@@ -188,7 +183,7 @@ function DetailsBody({
     [breakdown.data, kind],
   );
 
-  // `?section=issues` opens the page scrolled to that section (once per payroll and section).
+  // `?section=pay` opens the page scrolled to that section (once per payroll and section).
   const scrolledFor = useRef<string | null>(null);
   useEffect(() => {
     if (!section || switching) return;
@@ -201,14 +196,7 @@ function DetailsBody({
     return () => cancelAnimationFrame(frame);
   }, [section, switching, details.payrollId, jump]);
 
-  const { setDay } = filters;
-  const selectDay = useCallback(
-    (date: string | null) => {
-      setSelectedDay(date);
-      setDay(date);
-    },
-    [setDay],
-  );
+  const selectDay = useCallback((date: string | null) => setSelectedDay(date), []);
 
   return (
     <div
@@ -246,27 +234,17 @@ function DetailsBody({
 
       {degraded && <DegradedNotice legacy={details.kind === "legacy_session"} notes={details.notes} />}
 
-      <KpiStrip details={details} kind={kind} accent={accent} degraded={degraded} onJump={jump} />
+      <KpiStrip details={details} kind={kind} accent={accent} />
       <NetBridge details={details} />
 
       <SectionNav
         active={active}
         onJump={jump}
         accent={accent}
-        issues={details.issues.length}
-        criticalIssues={counts.critical}
         who={`${details.employee.name} · ${details.employee.code}`}
       />
 
-      <AttendanceCard
-        details={details}
-        kind={kind}
-        accent={accent}
-        selectedDay={selectedDay}
-        onSelectDay={selectDay}
-        onShowIssues={() => jump("issues")}
-      />
-      <IssuesCard details={details} accent={accent} state={filters} company={company} degraded={degraded} />
+      <AttendanceCard details={details} kind={kind} accent={accent} selectedDay={selectedDay} onSelectDay={selectDay} />
       <PayExtrasCard details={details} accent={accent} />
       {statutory && <StatutoryCard view={statutory} accent={accent} />}
     </div>

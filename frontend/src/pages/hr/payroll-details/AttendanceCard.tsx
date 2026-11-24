@@ -72,7 +72,8 @@ export function AttendanceCard({
   accent: Accent;
   selectedDay: string | null;
   onSelectDay: (date: string | null) => void;
-  onShowIssues: () => void;
+  /** Opens the day in an Issues list; the Issues section was taken off the page (2026-11-24), so the link is hidden. */
+  onShowIssues?: () => void;
 }) {
   const [view, setView] = useState<View>("calendar");
   const [kindFilter, setKindFilter] = useState<DayKind | "all">("all");
@@ -757,7 +758,7 @@ function DayPanel({
   issues: PayrollIssue[];
   accent: Accent;
   onClose: () => void;
-  onShowIssues: () => void;
+  onShowIssues?: () => void;
 }) {
   const kind = dayKind(day);
   const meta = DAY_KIND_META[kind];
@@ -858,7 +859,7 @@ function DayPanel({
           ))
         )}
       </div>
-      {issues.length > 0 && (
+      {issues.length > 0 && onShowIssues && (
         <button
           type="button"
           onClick={onShowIssues}

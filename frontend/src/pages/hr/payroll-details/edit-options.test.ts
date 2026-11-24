@@ -6,19 +6,38 @@ import {
   clBalanceDetail,
   clBalanceText,
   clUseText,
+  compensationText,
   editGroups,
   findTile,
+  GROUP_LOOK,
   groupNote,
   groupTiles,
   isClassicGroup,
+  isPunchTime,
+  lockMessage,
+  OPTION_GROUPS,
+  otText,
+  penaltyText,
   pickOf,
+  portionFor,
+  proposalTitle,
   sendBlocker,
   serverSentence,
+  shiftQuestion,
+  shiftRange,
   showsPunches,
+  startShifts,
   tileTitle,
   type EditTile,
 } from "./edit-options";
-import { clBalance, productionOptions, staffOptions } from "./edit-fixtures";
+import {
+  clBalance,
+  FULL_DAY_REFUSAL,
+  LOCK_MESSAGE,
+  lockedOptions,
+  productionOptions,
+  staffOptions,
+} from "./edit-fixtures";
 
 // The Edit Attendance form's option catalogue: the groups in the server's order, a tile per sub-choice, what is greyed
 // out and why, and exactly what each choice sends to POST /api/attendance/override.
@@ -27,16 +46,43 @@ const groupOf = (key: string) => staffOptions().find((g) => g.key === key)!;
 const tileOf = (key: string, id: string): EditTile => groupTiles(groupOf(key)).find((t) => t.id === id)!;
 
 describe("the groups", () => {
-  it("draws the server's seven groups in its order", () => {
+  it("draws the server's twelve groups in its order", () => {
     expect(editGroups({ types: [], options: staffOptions() }).map((g) => g.key)).toEqual([
       "worked",
       "compensation",
       "not_worked",
       "permission",
       "late",
+      "early_out",
       "casual_leave",
+      "leave",
       "on_duty",
+      "missing_punch",
+      "penalty_waiver",
+      "ot_pay",
     ]);
+  });
+
+  it("knows the look of every newer group, each its own colour", () => {
+    expect(OPTION_GROUPS).toEqual([
+      "permission",
+      "late",
+      "early_out",
+      "casual_leave",
+      "leave",
+      "on_duty",
+      "missing_punch",
+      "penalty_waiver",
+      "ot_pay",
+    ]);
+    const solids = Object.values(GROUP_LOOK).map((l) => l.solid);
+    expect(new Set(solids).size).toBe(solids.length);
+    expect(GROUP_LOOK.leave.title).toBe("Leave");
+    expect(GROUP_LOOK.not_worked.hint).toBe("Absent or a holiday");
+  });
+
+  it("no longer offers On Leave under Not worked: the Leave group records the leave", () => {
+    expect(groupTiles(groupOf("not_worked")).map((t) => t.id)).toEqual(["absent", "holiday"]);
   });
 
   it("builds the first three groups from the old types when an older server sends no catalogue", () => {
@@ -82,7 +128,51 @@ describe("the tiles", () => {
       chip: "1.00 shift",
     });
     expect(half.chip).toBe("0.50 shift");
-    expect(groupTiles(groupOf("compensation"))[0].chip).toBe("0.25 to 1.00 shift");
+    // a compensation type lists only the amounts that fit the balance and the day
+    expect(groupTiles(groupOf("compensation"))[0].chip).toBe("0.25 to 0.50 shift");
+    expect(shiftRange(["0.25", "0.50", "0.75", "1.00"])).toBe("0.25 to 1.00 shift");
+    expect(shiftRange(["0.25"])).toBe("0.25 shift");
+    expect(shiftRange([])).toBe("");
+  });
+
+  it("gives the 2026-11-24 options their tiles: Early-Out marks, leave reasons, punch slots, waiver, OT", () => {
+    expect(groupTiles(groupOf("early_out")).map((t) => [t.label, t.chip, t.available])).toEqual([
+      ["Mark as Early-Out", "Counts as an Early-Out", true],
+      ["Unmark Early-Out", "Early-Out mark removed", false],
+    ]);
+    expect(groupTiles(groupOf("leave")).map((t) => [t.testId, t.label, t.chip])).toEqual([
+      ["pd-edit-type-leave-sick", "Sick Leave", ""],
+      ["pd-edit-type-leave-emergency", "Emergency", ""],
+      ["pd-edit-type-leave-personal", "Personal", ""],
+      ["pd-edit-type-leave-other", "Other Reasons", ""],
+    ]);
+    expect(groupTiles(groupOf("missing_punch")).map((t) => [t.label, t.chip, t.available])).toEqual([
+      ["Morning Check-In", "IN punch", true],
+      ["Lunch Check-Out", "OUT punch", true],
+      ["Lunch Check-In", "IN punch", false],
+      ["Evening Check-Out", "OUT punch", true],
+    ]);
+    expect(groupTiles(groupOf("penalty_waiver"))[0]).toMatchObject({
+      testId: "pd-edit-type-penalty_waiver",
+      chip: "0.25 shift back",
+      available: true,
+    });
+    expect(groupTiles(groupOf("ot_pay"))[0]).toMatchObject({ testId: "pd-edit-type-ot_pay", chip: "95 min overtime" });
+  });
+
+  it("does not repeat the Payroll Done lock on every group and tile: the form says it once", () => {
+    const groups = lockedOptions();
+    for (const g of groups) {
+      expect(groupNote(g)).toBe(LOCK_MESSAGE);
+      expect(groupNote(g, LOCK_MESSAGE)).toBeNull();
+      const tiles = groupTiles(g, LOCK_MESSAGE);
+      expect(tiles.every((t) => !t.available && t.reason === null)).toBe(true);
+    }
+    // another reason is still said
+    const production = productionOptions().find((g) => g.key === "compensation")!;
+    expect(groupNote(production, LOCK_MESSAGE)).toBe(
+      "Compensation applies to staff employees only: production attendance has no compensation balance.",
+    );
   });
 
   it("gives Permission a tile per type, each an hour, the taken one greyed out with the server's reason", () => {
@@ -128,6 +218,22 @@ describe("the tiles", () => {
     expect(tileTitle(tileOf("casual_leave", "casual_leave:first_half"))).toBe("Casual Leave · First half");
     expect(tileTitle(tileOf("worked", "half_day"))).toBe("Half Day");
     expect(tileTitle(tileOf("on_duty", "on_duty"))).toBe("On-Duty");
+    expect(tileTitle(tileOf("early_out", "early_out:mark"))).toBe("Mark as Early-Out");
+    expect(tileTitle(tileOf("leave", "leave:sick"))).toBe("Leave · Sick Leave");
+    expect(tileTitle(tileOf("missing_punch", "missing_punch:morning_in"))).toBe("Missing Punch · Morning Check-In");
+    expect(tileTitle(tileOf("penalty_waiver", "penalty_waiver"))).toBe("Penalty Waiver");
+  });
+
+  it("names the change with its details the way the request will", () => {
+    expect(proposalTitle(tileOf("leave", "leave:sick"), { portion: "first_half" })).toBe(
+      "Leave · Sick Leave · First half",
+    );
+    expect(proposalTitle(tileOf("leave", "leave:other"), { portion: "full" })).toBe("Leave · Other Reasons");
+    expect(proposalTitle(tileOf("missing_punch", "missing_punch:morning_in"), { punchTime: "09:05:00" })).toBe(
+      "Missing Punch · Morning Check-In 09:05",
+    );
+    expect(proposalTitle(tileOf("ot_pay", "ot_pay"), { shifts: "0.50" })).toBe("OT Pay · 0.50 shift");
+    expect(proposalTitle(tileOf("late", "late:unmark"))).toBe("Unmark Late");
   });
 
   it("finds a pick again in a fresh catalogue, and forgets it when it is no longer offered", () => {
@@ -145,6 +251,59 @@ describe("the tiles", () => {
     expect(showsPunches(tileOf("late", "late:unmark").item)).toBe(false);
     expect(showsPunches(tileOf("on_duty", "on_duty").item)).toBe(false);
     expect(showsPunches(tileOf("permission", "permission:middle_permission").item)).toBe(false);
+    // a compensation type is topped up from the balance: no punch times since 2026-11-24
+    expect(showsPunches(tileOf("compensation", "sunday_compensation").item)).toBe(false);
+    expect(showsPunches(tileOf("missing_punch", "missing_punch:lunch_out").item)).toBe(false);
+  });
+});
+
+describe("the details of the newer options", () => {
+  it("starts each tile from its own shift value: OT Pay the overtime detected, compensation the most that fits", () => {
+    expect(startShifts(tileOf("ot_pay", "ot_pay").item)).toBe("0.50");
+    expect(startShifts({ ...tileOf("ot_pay", "ot_pay").item, defaultShifts: null })).toBe("");
+    // the day counts 0.50, so 1.00 no longer fits: 0.50 is the most
+    expect(startShifts(tileOf("compensation", "sunday_compensation").item)).toBe("0.50");
+    expect(startShifts({ ...tileOf("compensation", "sunday_compensation").item, shiftChoices: ["0.25", "1.00"] })).toBe(
+      "1.00",
+    );
+    expect(startShifts(tileOf("worked", "half_day").item)).toBe("0.50");
+    expect(startShifts(tileOf("late", "late:mark").item)).toBe("");
+  });
+
+  it("starts Leave on the first part of the day that can be chosen, and keeps a choice that still can", () => {
+    const leave = tileOf("leave", "leave:sick").item;
+    expect(portionFor(leave)).toBe("first_half"); // the full day is refused
+    expect(portionFor(leave, "second_half")).toBe("second_half");
+    expect(portionFor(leave, "full")).toBe("first_half");
+    expect(portionFor({ portions: undefined })).toBeNull();
+  });
+
+  it("says what the compensation, the waiver and the overtime are", () => {
+    expect(compensationText(tileOf("compensation", "sunday_compensation").item)).toBe(
+      "The day counts 0.50 shift now · balance available 2.50 shift",
+    );
+    expect(compensationText({ dayShifts: undefined, balanceAvailable: undefined })).toBeNull();
+    expect(penaltyText(tileOf("penalty_waiver", "penalty_waiver").item)).toBe(
+      "0.25 shift is added back (left 80 min early)",
+    );
+    expect(penaltyText({ shifts: "0.00", penaltyMinutes: 0 })).toBeNull();
+    expect(penaltyText({ shifts: "0.25", penaltyMinutes: 0 })).toBe("0.25 shift is added back");
+    expect(otText(tileOf("ot_pay", "ot_pay").item)).toBe("Overtime detected: 95 min");
+    expect(otText({ otMinutes: null })).toBeNull();
+    expect(shiftQuestion({ group: "ot_pay" })).toBe("How much overtime to pay?");
+    expect(shiftQuestion({ group: "compensation" })).toBe("How much of the balance to use?");
+  });
+
+  it("reads a punch time and the Payroll Done lock", () => {
+    expect(isPunchTime("09:05")).toBe(true);
+    expect(isPunchTime("23:59:30")).toBe(true);
+    expect(isPunchTime("24:00")).toBe(false);
+    expect(isPunchTime("9:5")).toBe(false);
+    expect(isPunchTime("")).toBe(false);
+    expect(lockMessage({ locked: { locked: true, message: LOCK_MESSAGE } })).toBe(LOCK_MESSAGE);
+    expect(lockMessage({ locked: { locked: true, message: null } })).toContain("Payroll Done");
+    expect(lockMessage({ locked: { locked: false, message: null } })).toBeNull();
+    expect(lockMessage({})).toBeNull(); // an older server
   });
 });
 
@@ -208,15 +367,81 @@ describe("what is sent", () => {
       isLate: true,
       isEarlyOut: false,
     });
-    expect(
-      buildProposal({ ...base, tile: tileOf("compensation", "sunday_compensation"), shifts: "0.75" }),
-    ).toMatchObject({ type: "sunday_compensation", shifts: "0.75", isLate: false });
+    // a compensation type: the shift taken from the balance, no punch times (it is not a "worked" type any more)
+    expect(buildProposal({ ...base, tile: tileOf("compensation", "sunday_compensation"), shifts: "0.50" })).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "sunday_compensation",
+      note: "Verified with the supervisor",
+      shifts: "0.50",
+      firstPunch: null,
+      lastPunch: null,
+      isLate: false,
+      isEarlyOut: false,
+    });
     expect(buildProposal({ ...base, tile: tileOf("not_worked", "absent"), late: true })).toMatchObject({
       type: "absent",
       firstPunch: null,
       lastPunch: null,
       isLate: false,
       isEarlyOut: false,
+    });
+  });
+
+  it("sends Mark as Early-Out as its type and choice", () => {
+    expect(buildProposal({ ...base, tile: tileOf("early_out", "early_out:mark"), earlyOut: false })).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "early_out",
+      note: "Verified with the supervisor",
+      choice: "mark",
+    });
+  });
+
+  it("sends a leave with its reason and its part of the day", () => {
+    expect(buildProposal({ ...base, tile: tileOf("leave", "leave:sick"), portion: "first_half" })).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "leave",
+      note: "Verified with the supervisor",
+      choice: "sick",
+      portion: "first_half",
+    });
+    // the part of the day is only sent for a leave
+    expect(buildProposal({ ...base, tile: tileOf("late", "late:unmark"), portion: "full" })).not.toHaveProperty(
+      "portion",
+    );
+  });
+
+  it("sends a missing punch with its slot and its time as HH:MM", () => {
+    expect(
+      buildProposal({ ...base, tile: tileOf("missing_punch", "missing_punch:morning_in"), punchTime: " 09:05:00 " }),
+    ).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "missing_punch",
+      note: "Verified with the supervisor",
+      choice: "morning_in",
+      punchTime: "09:05",
+    });
+    expect(buildProposal({ ...base, tile: tileOf("on_duty", "on_duty"), punchTime: "09:05" })).not.toHaveProperty(
+      "punchTime",
+    );
+  });
+
+  it("sends a penalty waiver with nothing but the reason, and OT Pay with its shifts", () => {
+    expect(buildProposal({ ...base, tile: tileOf("penalty_waiver", "penalty_waiver"), shifts: "1.00" })).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "penalty_waiver",
+      note: "Verified with the supervisor",
+    });
+    expect(buildProposal({ ...base, tile: tileOf("ot_pay", "ot_pay"), shifts: "0.75" })).toEqual({
+      employeeId: 7,
+      date: "2026-11-02",
+      type: "ot_pay",
+      note: "Verified with the supervisor",
+      shifts: "0.75",
     });
   });
 });
@@ -241,6 +466,53 @@ describe("when it can be sent", () => {
     const permission = groupOf("permission").items[0];
     const bare: EditTile = { ...tileOf("permission", "permission:evening_early_out"), choice: null, item: permission };
     expect(sendBlocker({ ...ok, tile: bare })).toBe("Choose one of its options.");
+  });
+
+  it("refuses everything on a day whose payroll is finalized, before anything else", () => {
+    const tile = tileOf("late", "late:unmark");
+    expect(sendBlocker({ ...ok, tile, locked: LOCK_MESSAGE })).toBe(LOCK_MESSAGE);
+    expect(sendBlocker({ ...ok, tile: null, noHod: true, locked: LOCK_MESSAGE })).toBe(LOCK_MESSAGE);
+    expect(sendBlocker({ ...ok, tile, locked: null })).toBeNull();
+    // the locked catalogue's own tiles say it too
+    const lockedTile = groupTiles(lockedOptions().find((g) => g.key === "leave")!)[0];
+    expect(sendBlocker({ ...ok, tile: lockedTile })).toBe(LOCK_MESSAGE);
+  });
+
+  it("needs a part of the day that can be chosen for a leave", () => {
+    const tile = tileOf("leave", "leave:emergency");
+    expect(sendBlocker({ ...ok, tile, portion: "second_half" })).toBeNull();
+    expect(sendBlocker({ ...ok, tile, portion: null })).toBe(
+      "Choose the part of the day: Full day, First half or Second half.",
+    );
+    expect(sendBlocker({ ...ok, tile, portion: "full" })).toBe(FULL_DAY_REFUSAL);
+  });
+
+  it("needs the time of a missing punch, typed as hours and minutes", () => {
+    const tile = tileOf("missing_punch", "missing_punch:evening_out");
+    expect(sendBlocker({ ...ok, tile, punchTime: "" })).toBe("Type the time of the missing punch.");
+    expect(sendBlocker({ ...ok, tile })).toBe("Type the time of the missing punch.");
+    expect(sendBlocker({ ...ok, tile, punchTime: "7 pm" })).toBe(
+      "Type the punch time as hours and minutes, like 09:05.",
+    );
+    expect(sendBlocker({ ...ok, tile, punchTime: "19:02" })).toBeNull();
+    // the slot that already has a waiting request cannot be chosen
+    expect(sendBlocker({ ...ok, tile: tileOf("missing_punch", "missing_punch:lunch_in"), punchTime: "13:30" })).toBe(
+      "A Lunch Check-In request for 02 Nov 2026 is waiting for approval: decide that request instead.",
+    );
+  });
+
+  it("needs the overtime shifts for OT Pay and an amount that fits for compensation", () => {
+    const ot = tileOf("ot_pay", "ot_pay");
+    expect(sendBlocker({ ...ok, tile: ot, shifts: "" })).toBe("Choose how much overtime to pay.");
+    expect(sendBlocker({ ...ok, tile: ot, shifts: "0.50" })).toBeNull();
+    const comp = tileOf("compensation", "sunday_compensation");
+    expect(sendBlocker({ ...ok, tile: comp, shifts: "1.00" })).toBe("Choose how much of the balance to use.");
+    expect(sendBlocker({ ...ok, tile: comp, shifts: "0.25" })).toBeNull();
+    // a penalty waiver needs only the reason
+    expect(sendBlocker({ ...ok, tile: tileOf("penalty_waiver", "penalty_waiver") })).toBeNull();
+    expect(sendBlocker({ ...ok, tile: tileOf("penalty_waiver", "penalty_waiver"), note: "" })).toBe(
+      "Write the reason to send it.",
+    );
   });
 });
 

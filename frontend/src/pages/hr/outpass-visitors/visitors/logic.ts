@@ -4,10 +4,12 @@ import type { VisitSource, VisitStatus, VisitorVisit } from "@/lib/api-client/cu
 // and Aadhaar masks, and what the server's error answers say. No React here, so logic.test.ts covers it directly.
 
 /** Every filter of the page, as the address has it (useGateFilters). `view` (Visits | People) is a screen switch: it is
- *  kept by Clear and never sent to the API (apiQuery drops it). */
+ *  kept by Clear and never sent to the API (apiQuery drops it). The dates are the HR portal's date filter
+ *  (lib/date-range: This Month by default, `month` for an earlier one). */
 export const VISIT_FILTER_DEFAULTS = {
   view: "visits",
-  range: "today",
+  range: "month",
+  month: "",
   from: "",
   to: "",
   status: "",

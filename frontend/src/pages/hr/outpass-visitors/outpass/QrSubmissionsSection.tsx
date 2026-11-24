@@ -1,7 +1,6 @@
 import { QrCode } from "lucide-react";
-import type { GateRange, OutpassRecordRow, PaginatedRecords } from "@/lib/api-client/custom-hooks";
+import type { OutpassRecordRow, PaginatedRecords } from "@/lib/api-client/custom-hooks";
 import { DataTable, WhenCell, fmtCount, type DataColumn } from "../kit";
-import { RANGE_LABEL } from "../shared";
 
 const COLUMNS: DataColumn<OutpassRecordRow>[] = [
   {
@@ -33,17 +32,17 @@ const COLUMNS: DataColumn<OutpassRecordRow>[] = [
 // The exits logged through the branch's permanent QR form: no approval step, no attendance or payroll impact. The page and the
 // list come from the Overview (it also counts them on its tab), so this only draws them.
 export function QrSubmissionsSection({
-  range,
+  rangeText,
   records: page_,
   isLoading,
   setPage,
 }: {
-  range: GateRange;
+  /** The days of the date filter in words ("November 2026"). */
+  rangeText: string;
   records: PaginatedRecords<OutpassRecordRow> | undefined;
   isLoading: boolean;
   setPage: (page: number) => void;
 }) {
-  const rangeText = RANGE_LABEL[range].toLowerCase();
   const total = page_?.total ?? 0;
   return (
     <DataTable
@@ -57,13 +56,13 @@ export function QrSubmissionsSection({
             <strong className="font-semibold text-slate-900">
               {fmtCount(total)} {total === 1 ? "submission" : "submissions"}
             </strong>{" "}
-            {rangeText} · logged through the branch QR form, with no approval step
+            · {rangeText} · logged through the branch QR form, with no approval step
           </span>
         ) : null
       }
       empty={{
         icon: QrCode,
-        title: `No gate QR submissions ${rangeText}`,
+        title: `No gate QR submissions for ${rangeText}`,
         hint: "People who scan the branch's gate QR and fill in the form are listed here.",
       }}
       pagination={

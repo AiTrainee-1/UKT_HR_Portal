@@ -1,7 +1,10 @@
 // Geo Attendance -> Journey History. The list of every tracked On-Duty journey with the Journey Simulation picker above it, one
 // journey's page (/journeys/12), or that journey replayed on the map (/journeys/12/simulate). The filters live here, so coming
-// Back from a journey (or from its replay) shows the same list as it was left.
+// Back from a journey (or from its replay) shows the same list as it was left; the dates (the HR portal's date filter, This
+// Month by default) are in the address, and the page carries them to a journey and back.
 import { useCallback, useState } from "react";
+import { useDateRange } from "@/components/date-range";
+import type { DateRangeValue } from "@/lib/date-range";
 import JourneyDetail from "./JourneyDetail";
 import JourneyList, { DEFAULT_FILTERS, type JourneyFilters } from "./JourneyList";
 import type { GeoView } from "./routes";
@@ -22,6 +25,11 @@ export default function JourneyHistoryTab({
 }) {
   const [filters, setFilters] = useState<JourneyFilters>(DEFAULT_FILTERS);
   const patch = useCallback((next: Partial<JourneyFilters>) => setFilters((f) => ({ ...f, ...next })), []);
+  const dates = useDateRange();
+  const changeDates = (next: DateRangeValue) => {
+    dates.set(next);
+    patch({ page: 1 });
+  };
 
   if (journeyId !== null && view === "simulate") {
     return (
@@ -46,7 +54,14 @@ export default function JourneyHistoryTab({
   return (
     <div className="space-y-4">
       {onSimulate && <SimulationPicker onSimulate={onSimulate} />}
-      <JourneyList filters={filters} onFilters={patch} onOpen={onJourneyChange} onSimulate={onSimulate} />
+      <JourneyList
+        filters={filters}
+        onFilters={patch}
+        dates={dates}
+        onDates={changeDates}
+        onOpen={onJourneyChange}
+        onSimulate={onSimulate}
+      />
     </div>
   );
 }

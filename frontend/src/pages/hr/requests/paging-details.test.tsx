@@ -115,12 +115,9 @@ const kind: HubKind = {
 const handlers: ActionHandlers = { onApprove: vi.fn(), onReject: vi.fn(), onHandle: vi.fn(), onOpenPage: vi.fn() };
 
 describe("the server pages the list", () => {
-  const now = new Date(2026, 10, 21);
-
   it("asks for one page of one tab, with the search, the order and 'waiting for HR' as they are", () => {
     const params = serverParams(
       { ...NO_FILTERS, query: "  asha   kumar ", status: "waiting_hr", sort: "oldest" },
-      now,
       { tab: "leave", page: 3, pageSize: 50 },
     );
     expect(params).toEqual({
@@ -135,12 +132,24 @@ describe("the server pages the list", () => {
 
   it("sends the request type only on the Other requests tab", () => {
     const f = { ...NO_FILTERS, requestType: "salary_enquiry" };
-    expect(serverParams(f, now, { tab: "request", page: 1, pageSize: 25 }).requestType).toBe("salary_enquiry");
-    expect(serverParams(f, now, { tab: "all", page: 1, pageSize: 25 }).requestType).toBeUndefined();
+    expect(serverParams(f, { tab: "request", page: 1, pageSize: 25 }).requestType).toBe("salary_enquiry");
+    expect(serverParams(f, { tab: "all", page: 1, pageSize: 25 }).requestType).toBeUndefined();
+  });
+
+  it("sends the date filter's days (the days requests are for) beside the page", () => {
+    const params = serverParams(
+      NO_FILTERS,
+      { tab: "all", page: 1, pageSize: 25 },
+      { from: "2026-11-01", to: "2026-11-30" },
+    );
+    expect(params.from).toBe("2026-11-01");
+    expect(params.to).toBe("2026-11-30");
+    // an export of the page asks for the same days
+    expect(exportParams(params)).toMatchObject({ from: "2026-11-01", to: "2026-11-30", export: "1" });
   });
 
   it("an export asks for every matching request at once, never the linked one", () => {
-    const params = serverParams(NO_FILTERS, now, { tab: "all", page: 4, pageSize: 25 });
+    const params = serverParams(NO_FILTERS, { tab: "all", page: 4, pageSize: 25 });
     expect(exportParams({ ...params, focus: "leave-1" })).toEqual({
       kind: "all",
       sort: "latest",

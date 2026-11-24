@@ -71,6 +71,9 @@ export type VisitorDashboardSummary = {
   longStayNow: number;
   repeatThisMonth: number;
   inRange: { visits: number; checkedOut: number; avgMinutes: number | null };
+  /** The figures of the dates, every filter but the status (2026-11-24: the page's tiles follow its date filter): the
+   *  visits, how many checked out, and how many of their visitors came twice or more. Older servers leave it out. */
+  rangeTotals?: { visits: number; checkedOut: number; repeat: number };
   /** Only with ?options=1. */
   options?: VisitorFilterOptions;
 };

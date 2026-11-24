@@ -21,7 +21,6 @@ import PayrollGenerationPipeline from "@/components/PayrollGenerationPipeline";
 import { Button } from "@/components/ui/button";
 import { ExportMenu, type ExportItem } from "@/components/payroll/kit/ExportMenu";
 import { dateShort, dateTime, plural } from "@/components/payroll/kit/format";
-import { addSkipped } from "@/components/payroll/kit/issue-summary";
 import { EmptyNote, PayrollLoader, SectionCard } from "@/components/payroll/kit/parts";
 import { useMarkPaid } from "@/components/payroll/kit/use-payroll-actions";
 import { openPayrollDetails } from "@/components/payroll/kit/url-state";
@@ -38,7 +37,6 @@ import {
   filtersToUrl,
   hasChanges,
 } from "@/components/payroll/panels/filters";
-import { IssuesPanel } from "@/components/payroll/panels/issues";
 import {
   DepartmentTabs,
   PayrollRecordList,
@@ -78,8 +76,6 @@ import {
   PRODUCTION_VIEWS,
   formatPeriod,
   isProductionView,
-  issueFiltersFromUrl,
-  issueFiltersToUrl,
   productionScope,
   skippedFromRoster,
   type ProductionView,
@@ -90,18 +86,19 @@ import { PRODUCTION_STATEMENT_REPORT_ID, productionStatementQuery } from "./payr
 // Each view's own permission key (Account Management -> Roles & Permissions); a key with no setting follows the Payroll tab.
 const VIEW_KEY: Record<ProductionView, string> = {
   records: "production_payroll.payroll.records",
-  issues: "production_payroll.payroll.issues",
   skipped: "production_payroll.payroll.skipped",
   not_included: "production_payroll.payroll.not_included",
   rules: "production_payroll.payroll.rules",
   moved: "production_payroll.payroll.moved_out",
 };
+// The period's issues (the badges on the Records rows and the issue filter) still follow the old Issues view's key.
+const ISSUES_KEY = "production_payroll.payroll.issues";
 
 /**
  * Payroll tab of a cycle page: the actions (Generate, Skipped Employees, Payroll Done / Payment Pending / Paid, Export,
- * bank file), the period's timeline (no dashboard of tiles and charts: owner 2026-11-16), its New Joiners and its six
- * views - Records, Issues, Skipped, Not included (2026-11-20: everyone not in the period's payroll, and why), Rules and
- * Moved out - all about the one pay period the page chose and the workers on this cycle. Like Staff Payroll's: the
+ * bank file), the period's timeline (no dashboard of tiles and charts: owner 2026-11-16), its New Joiners and its five
+ * views - Records, Skipped, Not included (2026-11-20: everyone not in the period's payroll, and why), Rules and Moved
+ * out - all about the one pay period the page chose and the workers on this cycle. Like Staff Payroll's: the
  * records are a table by default, listed one department at a time, and Export is the printed Production Salary Statement
  * (Excel / PDF) of the Report Center. The period workflow (owner 2026-11-16): a period is generated only once it has
  * ended; New Joiners wait until added; Payroll Done locks the period for good; Mark as Paid records the paid day.
@@ -126,8 +123,10 @@ export function PayrollTab({
   const [showGenerate, setShowGenerate] = useState(false);
   const { markPaid, markingId } = useMarkPaid("production");
   const info = PAY_CYCLE_INFO[cycle];
-  // Only the views this role may see (Records / Issues / Skipped / Rules); a hidden one is never shown nor loaded.
+  // Only the views this role may see (Records / Skipped / Not included / Rules / Moved out); a hidden one is never shown
+  // nor loaded.
   const canSee = (v: ProductionView) => level(VIEW_KEY[v]) !== "hidden";
+  const canSeeIssues = level(ISSUES_KEY) !== "hidden";
   const visibleViews = visibleItems(PRODUCTION_VIEWS, (v) => VIEW_KEY[v], level);
   const mayGenerate = level("production_payroll.generate") !== "hidden";
   // The period's workflow (owner 2026-11-16): Not generated / Generated / Payroll Done (locked) / Paid
@@ -148,7 +147,6 @@ export function PayrollTab({
   useViewOnlyLock(viewLocked, view);
   // The department is picked with the tabs above the records, never by the filter: an old address naming one is ignored.
   const filters = useMemo(() => ({ ...filtersFromUrl(url), dept: ALL }), [url]);
-  const issueFilters = useMemo(() => issueFiltersFromUrl(url), [url]);
 
   const { showPipeline, progress, dismiss: dismissPipeline } = usePayrollGeneration();
   // production payroll lists production departments only (owner 2026-11-16: every department is Staff or Production)
@@ -163,7 +161,7 @@ export function PayrollTab({
   });
   // A production row already is a payroll row (`ProductionPayrollItem` extends `PayrollRunItem`): the panels take it as it is.
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
-  const issuesQuery = usePayrollIssues(canSee("issues") ? scope : null);
+  const issuesQuery = usePayrollIssues(canSeeIssues ? scope : null);
   const rulesQuery = usePayrollRules(canSee("rules") ? scope : null);
   // who is not in the period's payroll: its count on the view switch (the view reads the same cached answer)
   const notIncludedQuery = usePeriodNotIncluded(scope, canSee("not_included"));
@@ -186,8 +184,6 @@ export function PayrollTab({
   const roster = status.data?.employees.length;
   const skipped = useMemo(() => (status.data ? skippedFromRoster(status.data.employees) : undefined), [status.data]);
   const skippedCount = skipped?.length ?? 0;
-  // what the Issues view's count says: the issues plus the employees who cannot be paid, as the view lists them
-  const dashIssues = useMemo(() => addSkipped(issues?.summary, skippedCount), [issues, skippedCount]);
 
   const locked = !!(wf?.locked ?? status.data?.locked);
   const lockedTitle = `${info.label} ${periodLabel} is finalized (Payroll Done): its payroll is locked for good`;
@@ -224,13 +220,6 @@ export function PayrollTab({
   const options: ViewOption<ProductionView>[] = visibleItems<ViewOption<ProductionView>>(
     [
       { value: "records", label: "Records", icon: ListChecks, count: runsQuery.isLoading ? null : runs.length },
-      {
-        value: "issues",
-        label: "Issues",
-        icon: AlertTriangle,
-        count: issuesQuery.isLoading || status.isLoading ? null : (dashIssues?.total ?? 0),
-        tone: (dashIssues?.bySeverity.critical ?? 0) > 0 ? "danger" : "warning",
-      },
       {
         value: "skipped",
         label: "Skipped",
@@ -463,7 +452,7 @@ export function PayrollTab({
             rulesByEmployee={rulesByEmployee}
             rulesLoading={rulesQuery.isLoading}
             onOpenDetails={(run) => openPayrollDetails(navigate, "production", run.id)}
-            onOpenIssues={(run) => openPayrollDetails(navigate, "production", run.id, "issues")}
+            onOpenIssues={(run) => openPayrollDetails(navigate, "production", run.id, "attendance")}
             onMarkPaid={locked || !mayMarkCleared ? undefined : (run) => void markPaid(run)}
             markingId={markingId}
             showPayment
@@ -473,17 +462,6 @@ export function PayrollTab({
             testId="pcp-records"
           />
         </div>
-      ) : view === "issues" ? (
-        <IssuesPanel
-          scope={scope}
-          accent="amber"
-          skipped={skipped}
-          value={issueFilters}
-          onChange={(patch) => setUrl(issueFiltersToUrl(patch) as Record<string, string>)}
-          onOpenDetails={(issue) => {
-            if (issue.payrollId) openPayrollDetails(navigate, "production", issue.payrollId, "issues");
-          }}
-        />
       ) : view === "skipped" ? (
         <SkippedPanel
           skipped={skipped}

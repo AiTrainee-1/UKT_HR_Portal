@@ -5,11 +5,13 @@ import HrLayout from "@/components/HrLayout";
 import { RefreshButton } from "@/components/PageRefreshBar";
 import { PipelineSummary } from "@/components/ApprovalTrail";
 import { RejectReasonDialog } from "@/components/RejectReasonDialog";
+import { DateRangeBar, OutsideRangeNote, useDateRange } from "@/components/date-range";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { isRouteViewOnly, useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
+import { chooseDays, type DateRangeValue } from "@/lib/date-range";
 import { downloadBlob, downloadWorkbook, fileSafe, newWorkbook, styleHeaderCell, todayStamp } from "@/lib/exportUtils";
 import { moduleForPath } from "@/lib/permission-modules";
 import { pickVisible, useLevel, useViewOnlyLock, ViewOnlyTabNote, visibleItems } from "@/lib/tab-access";
@@ -23,7 +25,6 @@ import {
   NO_FILTERS,
   buildTabs,
   daysText,
-  dayStamp,
   exportRows,
   filtersActive,
   normalizeHub,
@@ -136,6 +137,9 @@ export default function ApprovedRequests() {
   useViewOnlyLock(sectionViewOnly, section);
 
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  // the HR portal's date filter (This Month by default, in the address): only the requests FOR those days, and the figures
+  // follow them (the server's from / to; hr_requests_views.py says which date each kind is for)
+  const dates = useDateRange();
   const [rawTab, setRawTab] = useState<string | null>(readTab);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -155,7 +159,7 @@ export default function ApprovedRequests() {
   const searchText = useDebounced(filters.query, SEARCH_DELAY_MS);
   const effective = useMemo(() => ({ ...filters, query: searchText }), [filters, searchText]);
   const requestTab = rawTab && (KIND_KEYS as readonly string[]).includes(rawTab) ? rawTab : "all";
-  const listKey = JSON.stringify([effective, requestTab, pageSize]);
+  const listKey = JSON.stringify([effective, requestTab, pageSize, dates.days]);
   const [paging, setPaging] = useState<{ key: string; page: number }>({ key: listKey, page: 1 });
   const page = paging.key === listKey ? paging.page : 1;
   // forget the old page for good: going back to the same search later starts at page 1 too, not where it was left
@@ -164,13 +168,11 @@ export default function ApprovedRequests() {
   }, [paging.key, listKey]);
   const focusParam = focus ? focusKey(focus) : pinnedKey;
 
-  const today = dayStamp(new Date());
   const params = useMemo(() => {
-    const p = serverParams(effective, new Date(), { tab: requestTab, page, pageSize });
+    const p = serverParams(effective, { tab: requestTab, page, pageSize }, dates.days);
     if (focusParam) p.focus = focusParam;
     return p;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effective, requestTab, page, pageSize, focusParam, today]);
+  }, [effective, requestTab, page, pageSize, focusParam, dates.days]);
   const query = useHubRequests(params, canSee("requests"));
   // the reminders employees sent HR from the app show on their rows ("Employee reminded HR on ...")
   const reminders = useHrReminders(canSee("requests"));
@@ -381,6 +383,11 @@ export default function ApprovedRequests() {
     ? (hub.items.find((i) => i.key === selectedKey) ?? (hub.focusItem?.key === selectedKey ? hub.focusItem : null))
     : null;
   const stats = hub.stats;
+  // every waiting request whatever its day (the header's badge); the server says how many are for other days
+  const allWaiting = stats.allWaiting ?? stats.waiting;
+  const outsideWaiting = stats.outsideWaiting ?? 0;
+  const outsideEarliest = stats.outsideEarliest ?? "";
+  const changeDates = (next: DateRangeValue) => dates.set(next);
   const oldest = stats.oldestWaiting;
   const oldestDays = oldest
     ? Math.max(0, Math.floor((now.getTime() - Date.parse(oldest.submittedAt)) / 86_400_000))
@@ -399,7 +406,7 @@ export default function ApprovedRequests() {
             <h2 className="flex items-center gap-2 text-2xl font-black text-gray-900 sm:col-start-1 sm:row-start-1">
               <Bell size={22} className="text-amber-500" />
               Requests
-              {stats.waiting > 0 && <Badge className="bg-amber-500 text-xs text-white">{stats.waiting} pending</Badge>}
+              {allWaiting > 0 && <Badge className="bg-amber-500 text-xs text-white">{allWaiting} pending</Badge>}
             </h2>
             <p
               className="-mt-2.5 text-sm text-muted-foreground sm:col-start-1 sm:row-start-2"
@@ -449,12 +456,28 @@ export default function ApprovedRequests() {
 
         {canSee("requests") && section === "requests" && (
           <div role="tabpanel" aria-label="Requests" className="space-y-5" data-testid="requests-section-requests">
-            {/* Figures */}
+            {/* The dates: the list and the figures under them are about the requests for these days */}
+            <div
+              className="flex flex-wrap items-center gap-2 rounded-2xl border bg-white p-3"
+              data-testid="requests-dates-bar"
+            >
+              <DateRangeBar value={dates.value} onChange={changeDates} accent="#4f46e5" testId="requests-dates" />
+            </div>
+            <OutsideRangeNote
+              count={outsideWaiting}
+              what={outsideWaiting === 1 ? "request waiting" : "requests waiting"}
+              rangeLabel={dates.label}
+              earliest={outsideEarliest && outsideEarliest < dates.days.from ? outsideEarliest : undefined}
+              onShow={() => changeDates(chooseDays(outsideEarliest, dates.today))}
+              testId="requests-outside"
+            />
+
+            {/* Figures (for the days above) */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="requests-figures">
               <FigureCard
                 label="Waiting for HR now"
                 value={stats.waitingHr}
-                sub="HR can decide these today"
+                sub={`HR can decide these · ${dates.label}`}
                 icon={UserCheck}
                 tone="bg-blue-50 text-blue-800"
                 onClick={() => focusWaiting("waiting_hr")}
@@ -476,15 +499,17 @@ export default function ApprovedRequests() {
                 testId="figure-waiting-hod"
               />
               <FigureCard
-                label="Approved this month"
+                label="Approved"
                 value={stats.approvedThisMonth}
+                sub={`Requests for ${dates.label}`}
                 icon={CheckCircle2}
                 tone="bg-green-50 text-green-800"
                 testId="figure-approved"
               />
               <FigureCard
-                label="Rejected this month"
+                label="Rejected"
                 value={stats.rejectedThisMonth}
+                sub={`Requests for ${dates.label}`}
                 icon={XCircle}
                 tone="bg-red-50 text-red-800"
                 testId="figure-rejected"
@@ -492,7 +517,7 @@ export default function ApprovedRequests() {
               <FigureCard
                 label="Oldest waiting"
                 value={oldest ? daysText(oldestDays) : "None"}
-                sub={oldest ? `${oldest.employeeName} · ${oldest.label}` : "Nothing is waiting"}
+                sub={oldest ? `${oldest.employeeName} · ${oldest.label}` : `Nothing is waiting · ${dates.label}`}
                 icon={ShieldAlert}
                 tone={oldestDays >= 3 ? "bg-rose-50 text-rose-800" : "bg-slate-50 text-slate-700"}
                 onClick={oldest ? () => focusWaiting("waiting") : undefined}

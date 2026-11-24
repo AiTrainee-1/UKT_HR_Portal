@@ -177,7 +177,7 @@ function RosterRowImpl({
               <IssueBadge
                 summary={issues}
                 state={issuesState}
-                onOpen={() => onOpenDetails(p.id, "issues")}
+                onOpen={() => onOpenDetails(p.id, "attendance")}
                 code={code}
               />
             )}

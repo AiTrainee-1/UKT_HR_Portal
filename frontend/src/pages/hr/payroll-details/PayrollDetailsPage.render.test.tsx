@@ -33,8 +33,6 @@ const h = vi.hoisted(() => ({
   preview: vi.fn(),
   download: vi.fn(),
   workbook: vi.fn(),
-  csv: vi.fn(),
-  excel: vi.fn(),
 }));
 
 // The shell's <main> is what scrolls on the real page: a scroll container here lets the tests see where the page is.
@@ -62,7 +60,6 @@ vi.mock("@/lib/api-client/custom-hooks", async (original) => ({
   previewDocumentPdf: h.preview,
   downloadDocumentPdf: h.download,
 }));
-vi.mock("@/components/payroll/kit/export-table", () => ({ exportTableToExcel: h.excel, exportTableToCsv: h.csv }));
 vi.mock("./workbook", () => ({ exportDetailsWorkbook: h.workbook }));
 
 let world: World;
@@ -234,7 +231,7 @@ describe("the header", () => {
 });
 
 describe("the dashboard", () => {
-  it("monthly salary, gross, per day, deductions, days worked and issues, each with what explains it", async () => {
+  it("monthly salary, gross, per day, deductions and days worked, each with what explains it", async () => {
     await openStaff();
     // left to right: the whole monthly salary first, and no Net payable tile (the net is the end of the gross-to-net bar)
     expect([...must("pd-kpis").children].map((c) => (c as HTMLElement).dataset.testid)).toEqual([
@@ -243,8 +240,9 @@ describe("the dashboard", () => {
       "pd-kpi-perday",
       "pd-kpi-deductions",
       "pd-kpi-days",
-      "pd-kpi-issues",
     ]);
+    // no Issues tile (owner 2026-11-24)
+    expect(q("pd-kpi-issues")).toBeNull();
     expect(q("pd-kpi-net")).toBeNull();
     expect(text(q("pd-kpi-salary-value"))).toBe("₹29,500");
     expect(text(q("pd-kpi-salary"))).toContain("Monthly salary");
@@ -260,18 +258,8 @@ describe("the dashboard", () => {
     expect(text(q("pd-kpi-days"))).toContain("Days worked");
     expect(text(q("pd-kpi-days-value"))).toBe("23.5 / 26");
     expect(text(q("pd-kpi-days"))).toContain("21 present · 2 paid leave · 1 half · 2 LOP");
-    expect(text(q("pd-kpi-issues-value"))).toBe("11");
-    expect(text(q("pd-kpi-issues"))).toContain("1 critical · 8 warnings · 2 info");
     // the rules are not part of this page: no tile for them
     expect(q("pd-kpi-rules")).toBeNull();
-  });
-
-  it("a clean payroll says so on the Issues tile", async () => {
-    mountPage("/hr/payroll/details/102", null);
-    await waitFor(() => !!q("pd-body"), "the clean payroll");
-    expect(text(q("pd-kpi-issues-value"))).toBe("0");
-    expect(text(q("pd-kpi-issues"))).toContain("Nothing to flag: this payroll is clean");
-    expect(q("pd-nav-issues-count")).toBeNull();
   });
 
   it("draws gross -> deductions -> net as one bar, in numbers too", async () => {
@@ -287,18 +275,12 @@ describe("the dashboard", () => {
     expect(parseFloat(q("pd-bridge-net")!.style.width)).toBeCloseTo(88.12, 1);
     expect(parseFloat(q("pd-bridge-deductions")!.style.width)).toBeCloseTo(11.88, 1);
   });
-
-  it("the Issues tile takes the reader to the Issues section", async () => {
-    await openStaff();
-    click(q("pd-kpi-issues"));
-    expect(scrolledTo(scroll)).toEqual(["pd-issues"]);
-  });
 });
 
-describe("a simple page: the days, the issues, the pay", () => {
+describe("a simple page: the days, the pay", () => {
   it("has no Overview, Rules, Employee or History section", async () => {
     await openStaff();
-    for (const id of ["overview", "rules", "employee", "history"]) {
+    for (const id of ["overview", "rules", "employee", "history", "issues"]) {
       expect(q(`pd-section-${id}`), id).toBeNull();
       expect(q(`pd-nav-${id}`), id).toBeNull();
     }
@@ -309,11 +291,10 @@ describe("a simple page: the days, the issues, the pay", () => {
     expect(q("pd-ready-bank")).toBeNull();
   });
 
-  it("shows the Attendance first, then the Issues, then the Pay & deductions", async () => {
+  it("shows the Attendance first, then the Pay & deductions", async () => {
     await openStaff();
-    const order = ["pd-section-attendance", "pd-section-issues", "pd-section-pay"].map((id) => must(id));
+    const order = ["pd-section-attendance", "pd-section-pay"].map((id) => must(id));
     expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // and the money dashboard stays above them
     const kpis = must("pd-kpis");
     expect(kpis.compareDocumentPosition(order[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -321,19 +302,19 @@ describe("a simple page: the days, the issues, the pay", () => {
 });
 
 describe("the section bar", () => {
-  it("lists the three sections, marks the one being read, and shows what needs a look", async () => {
+  it("lists the two sections and marks the one being read", async () => {
     await openStaff();
     const buttons = [...must("pd-nav").querySelectorAll("button")];
-    expect(buttons.map(text)).toEqual(["Attendance", "Issues11", "Pay & deductions"]);
+    expect(buttons.map(text)).toEqual(["Attendance", "Pay & deductions"]);
     expect(must("pd-nav-attendance").getAttribute("aria-current")).toBe("location");
-    expect(must("pd-nav-issues-count").className).toContain("bg-red-500"); // there is a critical issue
+    expect(q("pd-nav-issues")).toBeNull();
     expect(must("pd-nav").getAttribute("aria-label")).toBe("Payroll sections");
     expect(text(q("pd-nav-bar"))).toContain("Meena Subramanian · UKT-0142");
   });
 
   it("every section is on the page at once, each with the id the bar scrolls to", async () => {
     await openStaff();
-    for (const id of ["attendance", "issues", "pay"]) {
+    for (const id of ["attendance", "pay"]) {
       expect(document.getElementById(`pd-${id}`), id).not.toBeNull();
       expect(q(`pd-section-${id}`)?.id).toBe(`pd-${id}`);
     }
@@ -341,21 +322,27 @@ describe("the section bar", () => {
 
   it("pressing a section scrolls to it and marks it", async () => {
     await openStaff();
-    click(q("pd-nav-issues"));
-    expect(scrolledTo(scroll)).toEqual(["pd-issues"]);
-    expect(must("pd-nav-issues").getAttribute("aria-current")).toBe("location");
-    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBeNull();
     click(q("pd-nav-pay"));
-    expect(scrolledTo(scroll)).toEqual(["pd-issues", "pd-pay"]);
+    expect(scrolledTo(scroll)).toEqual(["pd-pay"]);
+    expect(must("pd-nav-pay").getAttribute("aria-current")).toBe("location");
+    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBeNull();
+    click(q("pd-nav-attendance"));
+    expect(scrolledTo(scroll)).toEqual(["pd-pay", "pd-attendance"]);
+    expect(must("pd-nav-attendance").getAttribute("aria-current")).toBe("location");
+  });
+
+  it("?section=pay opens the page scrolled to the pay, once", async () => {
+    await openStaff("?section=pay");
+    await waitFor(() => scrolledTo(scroll).includes("pd-pay"), "the scroll to Pay");
+    await settle(30);
+    expect(scrolledTo(scroll).filter((id) => id === "pd-pay")).toHaveLength(1);
     expect(must("pd-nav-pay").getAttribute("aria-current")).toBe("location");
   });
 
-  it("?section=issues opens the page scrolled to the issues, once", async () => {
+  it("an old ?section=issues link opens the attendance (the Issues section was taken off, 2026-11-24)", async () => {
     await openStaff("?section=issues");
-    await waitFor(() => scrolledTo(scroll).includes("pd-issues"), "the scroll to Issues");
-    await settle(30);
-    expect(scrolledTo(scroll).filter((id) => id === "pd-issues")).toHaveLength(1);
-    expect(must("pd-nav-issues").getAttribute("aria-current")).toBe("location");
+    await waitFor(() => scrolledTo(scroll).includes("pd-attendance"), "the scroll to Attendance");
+    expect(q("pd-section-issues")).toBeNull();
   });
 
   it("a link to a section the page no longer has opens it at the top", async () => {
@@ -492,20 +479,20 @@ describe("Previous and Next", () => {
   });
 
   it("with a section in the address the new payroll goes to that section instead of the top", async () => {
-    await openStaff("?section=issues");
-    await waitFor(() => scrolledTo(scroll).includes("pd-issues"), "the first scroll to Issues");
+    await openStaff("?section=pay");
+    await waitFor(() => scrolledTo(scroll).includes("pd-pay"), "the first scroll to Pay");
     const shell = must("shell");
     Object.defineProperty(shell, "scrollTop", { value: 640, writable: true, configurable: true });
     click(q("pd-next"));
     await waitFor(() => text(q("pd-employee-name")) === "Arun Prasad", "the next payroll");
-    await waitFor(() => scrolledTo(scroll).filter((id) => id === "pd-issues").length === 2, "the second scroll");
+    await waitFor(() => scrolledTo(scroll).filter((id) => id === "pd-pay").length === 2, "the second scroll");
     expect(shell.scrollTop).toBe(640); // not sent to the top
   });
 
-  it("keep the section the address names, so a reviewer can go through the Issues of everyone", async () => {
-    await openStaff("?section=issues");
+  it("keep the section the address names, so a reviewer can go through the pay of everyone", async () => {
+    await openStaff("?section=pay");
     click(q("pd-next"));
-    expect(here()).toBe("/hr/payroll/details/102?section=issues");
+    expect(here()).toBe("/hr/payroll/details/102?section=pay");
     await waitFor(() => text(q("pd-employee-name")) === "Arun Prasad", "the next payroll");
   });
 
@@ -604,15 +591,16 @@ describe("the payslip", () => {
 });
 
 describe("Export", () => {
-  it("offers the details workbook, the issues in Excel and CSV, and print", async () => {
+  it("offers the details workbook and print, and no Issues Excel / CSV (taken off 2026-11-24)", async () => {
     await openStaff();
     openMenu("export-menu");
     expect(all("export-menu-workbook")).toHaveLength(1);
     expect(text(q("export-menu-workbook"))).toContain("Details workbook (Excel)");
-    expect(text(q("export-menu-issues-xlsx"))).toContain("Issues (Excel)");
-    expect(text(q("export-menu-issues-csv"))).toContain("Issues (CSV)");
-    expect(text(q("export-menu-issues-csv"))).toContain("All 11 issues");
     expect(text(q("export-menu-print"))).toContain("Print this page");
+    expect(q("export-menu-issues-xlsx")).toBeNull();
+    expect(q("export-menu-issues-csv")).toBeNull();
+    expect(document.body.textContent).not.toContain("Issues (Excel)");
+    expect(document.body.textContent).not.toContain("Issues (CSV)");
   });
 
   it("builds the workbook for this payroll under the company's name", async () => {
@@ -623,15 +611,6 @@ describe("Export", () => {
     await waitFor(() => h.workbook.mock.calls.length > 0, "the workbook to be built");
     expect(h.workbook.mock.calls[0][0]).toMatchObject({ payrollId: 101, employee: { name: "Meena Subramanian" } });
     expect(h.workbook.mock.calls[0][1]).toBe("UK Textiles Ltd");
-  });
-
-  it("exports every issue as CSV", async () => {
-    await openStaff();
-    openMenu("export-menu");
-    click(q("export-menu-issues-csv"));
-    await waitFor(() => h.csv.mock.calls.length > 0, "the CSV");
-    expect(h.csv.mock.calls[0][0].rows).toHaveLength(11);
-    expect(h.csv.mock.calls[0][0].filename).toBe("Payroll_Issues_Meena_Subramanian_October_2026");
   });
 
   it("prints the page", async () => {
@@ -661,22 +640,17 @@ describe("Export", () => {
     const locked = [...document.body.querySelectorAll("button")].filter((b) => isMutatingControl(b));
     expect(locked.map((b) => b.dataset.testid)).toEqual(["pd-mark-paid"]);
     expect(isMutatingControl(must("export-menu") as HTMLButtonElement)).toBe(false);
-    expect(isMutatingControl(must("pd-issues-export") as HTMLButtonElement)).toBe(false);
   });
 });
 
 describe("a payroll with no day-by-day breakdown behind it", () => {
-  it("says why its days and issues are missing, in the server's own words, instead of calling it clean", async () => {
+  it("says why its days are missing, in the server's own words, instead of calling it clean", async () => {
     mountPage("/hr/payroll/details/105", null);
     await waitFor(() => !!q("pd-body"), "the payroll");
     const notice = text(q("pd-degraded"));
     expect(notice).toContain("Some details are not available for this payroll");
     expect(notice).toContain("No day-by-day breakdown is stored for this payroll (it has no salary slip)");
-    // each missing section says so; none of them claims the payroll is clean
-    expect(text(q("pd-issues-unavailable"))).toContain("Issues cannot be detected for this payroll");
-    expect(q("pd-issues-clean")).toBeNull();
-    expect(text(q("pd-kpi-issues-value"))).toBe("—");
-    expect(text(q("pd-kpi-issues"))).toContain("No breakdown to check");
+    // the missing days say so
     expect(text(q("pd-attendance-empty"))).toContain("No day records were stored for this payroll");
     // what the payroll does have is still there: the money, and the summary counts
     expect(text(q("pd-net-bridge"))).toContain("₹23,496");
@@ -690,7 +664,6 @@ describe("a payroll with no day-by-day breakdown behind it", () => {
     await waitFor(() => !!q("pd-body"), "the payroll");
     expect(text(q("pd-degraded"))).toContain("older session-based production engine");
     expect(text(q("pd-chips"))).toContain("Legacy session payroll");
-    expect(q("pd-issues-clean")).toBeNull();
     expect(text(q("pd-position"))).toBe("1 of 1");
   });
 
@@ -701,7 +674,6 @@ describe("a payroll with no day-by-day breakdown behind it", () => {
     mountPage("/hr/payroll/details/102", null);
     await waitFor(() => !!q("pd-body"), "the clean payroll");
     expect(q("pd-degraded")).toBeNull();
-    expect(q("pd-issues-clean")).not.toBeNull();
   });
 
   it("falls back to its own sentence when the server sent no notes", async () => {

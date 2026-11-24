@@ -102,7 +102,8 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
     await expect(page.getByTestId("attendance-edit-page")).toBeVisible();
     await expect(page.getByTestId("edit-approval-path")).toContainText("Meena");
 
-    // every attendance type of the HRMS is offered
+    // every attendance type of the HRMS is offered (the compensation types greyed out when the balance does not fit);
+    // On Leave no longer is: the Leave option records the leave itself (2026-11-24)
     for (const key of [
       "present",
       "half_day",
@@ -113,20 +114,19 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
       "sunday_compensation",
       "ot_compensation",
       "absent",
-      "on_leave",
       "holiday",
     ]) {
       await expect(page.getByTestId(`edit-type-${key}`), key).toBeVisible();
     }
+    await expect(page.getByTestId("edit-type-on_leave")).toHaveCount(0);
     await expect(page.getByTestId("edit-send")).toBeDisabled();
 
     const before = (
       await api(page, "GET", `/api/attendance/edit-context?employeeId=${asha.id}&date=${day}`, undefined, admin)
     ).body!.day;
 
-    // Sunday Compensation, worth half a shift
-    await page.getByTestId("edit-type-sunday_compensation").click();
-    await page.getByTestId("edit-shifts-0.50").click();
+    // a Half Day (the compensation types use the compensation balance since 2026-11-24, which this employee has none of)
+    await page.getByTestId("edit-type-half_day").click();
     await expect(page.getByTestId("edit-send")).toBeDisabled(); // a reason is needed
     await page.getByTestId("edit-reason").fill("Worked last Sunday, confirmed by the HOD");
     await page.getByTestId("edit-send").click();
@@ -144,9 +144,9 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
 
     // the Requests page's Attendance correction tab: the request shows as waiting for the Department Head and HR cannot decide it yet
     const requestId = waiting.requests[0].id as number;
-    await page.goto("/hr/requests?kind=attendance_correction");
+    await page.goto(`/hr/requests?kind=attendance_correction&range=custom&from=${day}`); // the edited day (date filter, 2026-11-24)
     const row = page.getByTestId(`request-attendance_correction-${requestId}`).first();
-    await expect(row).toContainText("Sunday Compensation", { timeout: 30_000 });
+    await expect(row).toContainText("Half Day", { timeout: 30_000 });
     await expect(row).toContainText(/Department Head|HOD/);
     await expect(page.getByTestId(`approve-attendance_correction-${requestId}`)).toHaveCount(0);
     expect(
@@ -175,17 +175,16 @@ test("the pencil opens the Attendance Edit page; a change needs the Department H
     expect(between.requests[0].approval.waitingFor).toEqual(["hr"]);
 
     // HR approves from the Requests tab itself: only now does the day change
-    await page.goto("/hr/requests?kind=attendance_correction");
-    await expect(page.getByTestId(`request-attendance_correction-${requestId}`).first()).toContainText(
-      "Sunday Compensation",
-      { timeout: 30_000 },
-    );
+    await page.goto(`/hr/requests?kind=attendance_correction&range=custom&from=${day}`); // the edited day (date filter, 2026-11-24)
+    await expect(page.getByTestId(`request-attendance_correction-${requestId}`).first()).toContainText("Half Day", {
+      timeout: 30_000,
+    });
     await page.getByTestId(`approve-attendance_correction-${requestId}`).first().click();
     await expect(page.getByTestId(`approve-attendance_correction-${requestId}`)).toHaveCount(0, { timeout: 30_000 });
     const after = (
       await api(page, "GET", `/api/attendance/edit-context?employeeId=${asha.id}&date=${day}`, undefined, admin)
     ).body!;
-    expect(after.day.status).toBe("present");
+    expect(after.day.status).toBe("half_shift");
     expect(Number(after.day.shiftsEarned)).toBe(0.5);
     expect(after.day.source).toBe("manual");
   } finally {

@@ -125,19 +125,21 @@ async function openRecords(url = `${TEA}/records`, table = "tea-break-list") {
 }
 
 describe("the Records tab", () => {
-  it("asks for today's breaks, figures and choices, and shows each break with its status", async () => {
+  it("asks for This Month's breaks, figures and choices, and shows each break with its status", async () => {
     await openRecords();
+    // This Month is the date filter's default: the whole of October (the clock is 14 Oct 2026)
     const list = lastGet(LIST);
-    expect(Object.fromEntries(list)).toEqual({ from: "2026-10-14", to: "2026-10-14", page: "1", pageSize: "20" });
-    expect(Object.fromEntries(lastGet(SUMMARY))).toEqual({ from: "2026-10-14", to: "2026-10-14" });
+    expect(Object.fromEntries(list)).toEqual({ from: "2026-10-01", to: "2026-10-31", page: "1", pageSize: "20" });
+    expect(Object.fromEntries(lastGet(SUMMARY))).toEqual({ from: "2026-10-01", to: "2026-10-31" });
     expect(asked("/api/tea-break/records/options")).toBe(1);
+    expect(must("tea-dates-month").getAttribute("aria-pressed")).toBe("true");
 
-    expect(text(must("tea-tile-breaks-value"))).toBe("4");
+    expect(text(must("tea-tile-breaks-value"))).toBe("5");
     expect(text(must("tea-tile-on-break-value"))).toBe("1");
     expect(text(must("tea-tile-overtime-value"))).toBe("1");
     expect(text(must("tea-tile-not-returned-value"))).toBe("1");
     expect(text(must("tea-tile-employees-value"))).toBe("4");
-    expect(text(must("tea-tile-average-value"))).toBe("17 min"); // (8 + 25) / 2 finished breaks
+    expect(text(must("tea-tile-average-value"))).toBe("13 min"); // (8 + 25 + 6) / 3 finished breaks
     expect(text(must("tea-tile-overtime"))).toContain("Over 10 min");
 
     // the open breaks carry their running minutes; the finished ones their result
@@ -148,7 +150,7 @@ describe("the Records tab", () => {
     expect(must("tea-time-2").getAttribute("data-tone")).toBe("rose");
     expect(text(row("Tea Overtime"))).toContain("Gate 2");
     expect(text(row("Tea Missing"))).toContain("Still out");
-    expect(text(must("tea-break-count"))).toBe("4 breaks · 14 Oct 2026");
+    expect(text(must("tea-break-count"))).toBe("5 breaks · October 2026");
     await waitFor(() => text(q("tea-break-allowed")) === "Allowed: 10 min.", "the rule in the subtitle");
   });
 
@@ -159,7 +161,7 @@ describe("the Records tab", () => {
     await waitFor(() => !listText().includes("Tea Ontime"), "the filtered list");
     expect(listText()).toContain("Tea Missing");
     expect(lastGet(SUMMARY).get("status")).toBeNull();
-    expect(text(must("tea-tile-breaks-value"))).toBe("4");
+    expect(text(must("tea-tile-breaks-value"))).toBe("5");
     expect(must("tea-tile-not-returned").getAttribute("aria-pressed")).toBe("true");
     click(must("tea-tile-not-returned"));
     await waitFor(() => listText().includes("Tea Ontime"), "the whole list again");
@@ -207,18 +209,40 @@ describe("every filter reaches the server and narrows the list", () => {
     await waitFor(() => listText().includes("Tea Overtime") && !listText().includes("Tea Missing"), "the new match");
   });
 
-  it("the dates: a preset and typed days", async () => {
+  it("the dates: Today, Yesterday, an earlier month and typed days", async () => {
     await openRecords();
-    click(must("tea-dates-week"));
-    await waitFor(() => lastGet(LIST).get("from") === "2026-10-12", "the week in the request");
+    click(must("tea-dates-today"));
+    await waitFor(() => lastGet(LIST).get("from") === "2026-10-14", "today in the request");
     expect(lastGet(LIST).get("to")).toBe("2026-10-14");
-    await waitFor(() => text(must("tea-tile-breaks-value")) === "5", "the week's figures");
-    typeInto(must("tea-dates-to"), "2026-10-12");
-    await waitFor(() => lastGet(LIST).get("to") === "2026-10-12", "the typed day");
+    await waitFor(() => text(must("tea-tile-breaks-value")) === "4", "today's figures");
+    expect(query().get("range")).toBe("today");
+
+    click(must("tea-dates-yesterday"));
+    await waitFor(() => lastGet(LIST).get("from") === "2026-10-13", "yesterday in the request");
+    await waitFor(() => text(must("tea-tile-breaks-value")) === "0", "no breaks yesterday");
+
+    // Custom starts on the days on screen (yesterday): an earlier From makes it a range
+    click(must("tea-dates-custom"));
+    await waitFor(() => q("tea-dates-from") !== null, "the custom days");
+    typeInto(must("tea-dates-from"), "2026-10-12");
+    await waitFor(() => lastGet(LIST).get("from") === "2026-10-12", "the typed day");
+    expect(lastGet(LIST).get("to")).toBe("2026-10-13");
     expect(query().get("range")).toBe("custom");
-    await waitFor(() => !listText().includes("Tea Missing"), "12 Oct only");
-    expect(listText()).toContain("Tea Ontime");
-    expect(text(must("tea-break-count"))).toBe("1 break · 12 Oct 2026");
+    await waitFor(() => listText().includes("Tea Ontime"), "12 Oct's break");
+    expect(listText()).not.toContain("Tea Missing");
+    expect(text(must("tea-break-count"))).toBe("1 break · 12 Oct – 13 Oct 2026");
+
+    // the month before: all of September, nothing after today
+    click(must("tea-dates-prev"));
+    await waitFor(() => lastGet(LIST).get("from") === "2026-09-01", "September");
+    expect(lastGet(LIST).get("to")).toBe("2026-09-30");
+    expect(query().get("month")).toBe("2026-09");
+    click(must("tea-dates-next"));
+    // (October's answer is cached: no new request is needed)
+    await waitFor(() => text(must("tea-dates-label")).includes("October 2026"), "October again");
+    expect(query().get("month")).toBeNull();
+    expect(text(must("tea-tile-breaks-value"))).toBe("5");
+    expect((must("tea-dates-next") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("the branch (an account not bound to one): its own choices, and nothing of another branch", async () => {
@@ -274,10 +298,10 @@ describe("Breaks | By employee", () => {
       "the employees",
     );
     expect(query().get("view")).toBe("employees");
-    expect(lastGet(EMPLOYEES).get("from")).toBe("2026-10-14");
+    expect(lastGet(EMPLOYEES).get("from")).toBe("2026-10-01");
     expect(lastGet(EMPLOYEES).get("view")).toBeNull();
     expect(q("tea-break-list")).toBeNull();
-    expect(text(must("tea-break-count"))).toBe("4 employees · 4 breaks · 14 Oct 2026");
+    expect(text(must("tea-break-count"))).toBe("4 employees · 5 breaks · October 2026");
 
     click(must("tea-sort-total"));
     await waitFor(() => lastGet(EMPLOYEES).get("sort") === "-total", "the order in the request");
@@ -359,8 +383,8 @@ describe("Export", () => {
     expect(Object.fromEntries(opts.query)).toEqual({
       departmentId: "11",
       status: "overtime",
-      from: "2026-10-14",
-      to: "2026-10-14",
+      from: "2026-10-01",
+      to: "2026-10-31",
       view: "breaks",
     });
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "File downloaded" }));

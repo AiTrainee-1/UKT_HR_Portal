@@ -11,19 +11,18 @@ import {
   type RuleGroup,
   type RuleItem,
 } from "@/lib/api-client/custom-hooks";
-import { dateLong, inr2, parseIso, periodLabel, plural } from "@/components/payroll/kit/format";
-import { ISSUE_META, issueLabel, severityRank } from "@/components/payroll/kit/issue-meta";
+import { inr2, parseIso, plural } from "@/components/payroll/kit/format";
 
-// The pure logic behind the payroll details page: what the sections are, how issues are filtered and grouped, how the
-// calendar is laid out, which rules changed, and the small formatting rules. Nothing here touches React or the network,
-// so every rule can be tested on its own (logic.test.ts).
+// The pure logic behind the payroll details page: what the sections are, how the calendar is laid out, which rules
+// changed, and the small formatting rules. Nothing here touches React or the network, so every rule can be tested on
+// its own (logic.test.ts).
 
 // ── Sections ──────────────────────────────────────────────────────────────────
 
-/** The sections of the page, in the order they are shown: the days first, then what was flagged, then the money. */
+/** The sections of the page, in the order they are shown: the days first, then the money. (The Issues section was taken
+ *  off the page, owner 2026-11-24: a day's own notes still show in its day panel.) */
 export const SECTIONS = [
   { id: "attendance", label: "Attendance" },
-  { id: "issues", label: "Issues" },
   { id: "pay", label: "Pay & deductions" },
 ] as const;
 
@@ -36,6 +35,7 @@ export const sectionDomId = (id: string): string => `pd-${id}`;
 
 // A link to a section the page no longer has (overview, rules, employee, history) simply opens the page at its top.
 const SECTION_ALIASES: Record<string, SectionId> = {
+  issues: "attendance", // the Issues section is gone (2026-11-24): an old link opens the attendance
   days: "attendance",
   calendar: "attendance",
   deductions: "pay",
@@ -114,12 +114,6 @@ export function weekdayOffset(iso: string | null | undefined): number {
   return d ? (d.getUTCDay() + 6) % 7 : -1;
 }
 
-/** The Monday of the week a day is in. */
-export function weekStartIso(iso: string | null | undefined): string | null {
-  const offset = weekdayOffset(iso);
-  return offset < 0 ? null : addDaysIso(iso as string, -offset);
-}
-
 /** Every day from `from` to `to`, inclusive (at most `limit`, so a bad range can never run away). */
 export function eachDay(from: string, to: string, limit = 400): string[] {
   const out: string[] = [];
@@ -128,42 +122,7 @@ export function eachDay(from: string, to: string, limit = 400): string[] {
   return out;
 }
 
-// ── Issues: filtering ─────────────────────────────────────────────────────────
-
-export type IssueGroupBy = "date" | "type";
-
-export type IssueFilters = {
-  severities: IssueSeverity[];
-  /** "all" or an issue code. */
-  code: string;
-  /** ISO days, "" for open-ended. */
-  from: string;
-  to: string;
-  query: string;
-};
-
-export const NO_ISSUE_FILTERS: IssueFilters = { severities: [], code: "all", from: "", to: "", query: "" };
-
-/** How many of the filters are narrowing the list (the number on the Reset button). */
-export function activeFilterCount(f: IssueFilters): number {
-  return (
-    (f.severities.length > 0 ? 1 : 0) + (f.code !== "all" ? 1 : 0) + (f.from || f.to ? 1 : 0) + (f.query.trim() ? 1 : 0)
-  );
-}
-
-/** The date range with its ends the right way round (a From later than the To is read as the other way about). */
-export function dateRangeOf(f: Pick<IssueFilters, "from" | "to">): { from: string; to: string } | null {
-  if (!f.from && !f.to) return null;
-  if (f.from && f.to && f.from > f.to) return { from: f.to, to: f.from };
-  return { from: f.from, to: f.to };
-}
-
-/** "Late detection" -> "late-detection": a name that is safe in a test id. */
-export const slug = (text: string): string =>
-  text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
+// ── Issues and facts, in words ────────────────────────────────────────────────
 
 export function humanizeKey(key: string): string {
   return key
@@ -179,95 +138,10 @@ export function factValue(value: string | number | boolean | null | undefined): 
   return value;
 }
 
-/** Everything a search can match on one issue, lower-cased: its words, its type, its rule, its date and its facts. */
-export function issueSearchText(issue: PayrollIssue): string {
-  const facts = Object.entries(issue.facts ?? {}).map(([k, v]) => `${humanizeKey(k)} ${factValue(v)}`);
-  return [
-    issue.title,
-    issue.detail,
-    issueLabel(issue.code),
-    issue.rule?.label,
-    issue.date ? dateLong(issue.date) : "whole period",
-    ...facts,
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
-/**
- * The issues that pass every filter. An issue about the whole period has no date, so it is left out as soon as a date
- * range is set (the range asks "what happened on these days").
- */
-export function filterIssues(issues: PayrollIssue[], f: IssueFilters): PayrollIssue[] {
-  const range = dateRangeOf(f);
-  const query = f.query.trim().toLowerCase();
-  return issues.filter((issue) => {
-    if (f.severities.length > 0 && !f.severities.includes(issue.severity)) return false;
-    if (f.code !== "all" && issue.code !== f.code) return false;
-    if (range) {
-      if (!issue.date) return false;
-      if (range.from && issue.date < range.from) return false;
-      if (range.to && issue.date > range.to) return false;
-    }
-    if (query && !issueSearchText(issue).includes(query)) return false;
-    return true;
-  });
-}
-
 export function severityCounts(issues: PayrollIssue[]): Record<IssueSeverity, number> {
   const counts: Record<IssueSeverity, number> = { critical: 0, warning: 0, info: 0 };
   for (const issue of issues) if (issue.severity in counts) counts[issue.severity] += 1;
   return counts;
-}
-
-export type TypeOption = { code: string; label: string; count: number; severity: IssueSeverity };
-
-/** The choices of the type filter: every kind of issue present, worst first, each with how many there are. */
-export function typeOptions(byCode: Record<string, number> | null | undefined, issues: PayrollIssue[]): TypeOption[] {
-  const counts: Record<string, number> = {};
-  for (const [code, n] of Object.entries(byCode ?? {})) if (n > 0) counts[code] = n;
-  // without the server's counts (or with an empty answer) they are worked out from the issues themselves
-  if (Object.keys(counts).length === 0) {
-    for (const issue of issues) counts[issue.code] = (counts[issue.code] ?? 0) + 1;
-  }
-  const worst: Record<string, IssueSeverity> = {};
-  for (const issue of issues) {
-    const seen = worst[issue.code];
-    if (!seen || severityRank(issue.severity) < severityRank(seen)) worst[issue.code] = issue.severity;
-  }
-  return Object.entries(counts)
-    .map(([code, count]) => ({
-      code,
-      label: issueLabel(code),
-      count,
-      severity: worst[code] ?? ISSUE_META[code as keyof typeof ISSUE_META]?.severity ?? "info",
-    }))
-    .sort((a, b) => severityRank(a.severity) - severityRank(b.severity) || a.label.localeCompare(b.label));
-}
-
-// ── Issues: ordering and grouping ─────────────────────────────────────────────
-
-/** Date first (the whole-period issues, which have none, come before the first day), then worst, then kind. */
-export function compareIssues(a: PayrollIssue, b: PayrollIssue): number {
-  return (
-    (a.date ?? "").localeCompare(b.date ?? "") ||
-    severityRank(a.severity) - severityRank(b.severity) ||
-    issueLabel(a.code).localeCompare(issueLabel(b.code)) ||
-    a.id.localeCompare(b.id)
-  );
-}
-
-export type ImpactTotals = { days: number; shifts: number; amount: number };
-
-export function impactTotals(issues: PayrollIssue[]): ImpactTotals {
-  const totals: ImpactTotals = { days: 0, shifts: 0, amount: 0 };
-  for (const issue of issues) {
-    totals.days += issue.impact?.days ?? 0;
-    totals.shifts += issue.impact?.shifts ?? 0;
-    totals.amount += issue.impact?.amount ?? 0;
-  }
-  return totals;
 }
 
 /** "0.5 days", "₹567.31": the cost of one issue in words. */
@@ -279,90 +153,6 @@ export function impactParts(impact: PayrollIssue["impact"] | undefined): string[
   if (impact.amount) parts.push(inr2(impact.amount));
   if (impact.label) parts.push(impact.label);
   return parts;
-}
-
-export function impactTotalsText(t: ImpactTotals): string {
-  const parts: string[] = [];
-  if (t.days) parts.push(plural(Math.round(t.days * 100) / 100, "day"));
-  if (t.shifts) parts.push(plural(Math.round(t.shifts * 100) / 100, "shift"));
-  if (t.amount) parts.push(inr2(t.amount));
-  return parts.join(" · ");
-}
-
-export type IssueDayGroup = { key: string; date: string | null; label: string; issues: PayrollIssue[] };
-export type IssueWeekBand = { key: string; label: string; start: string | null; days: IssueDayGroup[]; count: number };
-
-/**
- * The by-date view: the whole-period issues first (they sum the month up), then one band per week (Monday to Sunday)
- * with a header per day inside it. Nothing is dropped: every issue lands in exactly one day group.
- */
-export function groupIssuesByDate(issues: PayrollIssue[]): IssueWeekBand[] {
-  const sorted = [...issues].sort(compareIssues);
-  const bands: IssueWeekBand[] = [];
-  const wholePeriod = sorted.filter((i) => !i.date);
-  if (wholePeriod.length > 0) {
-    bands.push({
-      key: "period",
-      label: "Whole period",
-      start: null,
-      count: wholePeriod.length,
-      days: [{ key: "period", date: null, label: "Not tied to a single day", issues: wholePeriod }],
-    });
-  }
-  let band: IssueWeekBand | null = null;
-  let day: IssueDayGroup | null = null;
-  for (const issue of sorted) {
-    if (!issue.date) continue;
-    const start = weekStartIso(issue.date) ?? issue.date;
-    if (!band || band.key !== start) {
-      band = { key: start, label: `Week of ${periodLabel(start, addDaysIso(start, 6))}`, start, days: [], count: 0 };
-      bands.push(band);
-      day = null;
-    }
-    if (!day || day.date !== issue.date) {
-      day = { key: issue.date, date: issue.date, label: dateLong(issue.date), issues: [] };
-      band.days.push(day);
-    }
-    day.issues.push(issue);
-    band.count += 1;
-  }
-  return bands;
-}
-
-export type IssueTypeGroup = {
-  code: string;
-  label: string;
-  severity: IssueSeverity;
-  issues: PayrollIssue[];
-  totals: ImpactTotals;
-};
-
-/** The by-type view: one group per kind of issue, worst first, with what the kind cost altogether. */
-export function groupIssuesByType(issues: PayrollIssue[]): IssueTypeGroup[] {
-  const groups = new Map<string, IssueTypeGroup>();
-  for (const issue of [...issues].sort(compareIssues)) {
-    let group = groups.get(issue.code);
-    if (!group) {
-      group = {
-        code: issue.code,
-        label: issueLabel(issue.code),
-        severity: issue.severity,
-        issues: [],
-        totals: impactTotals([]),
-      };
-      groups.set(issue.code, group);
-    }
-    if (severityRank(issue.severity) < severityRank(group.severity)) group.severity = issue.severity;
-    group.issues.push(issue);
-  }
-  const list = [...groups.values()];
-  for (const group of list) group.totals = impactTotals(group.issues);
-  return list.sort(
-    (a, b) =>
-      severityRank(a.severity) - severityRank(b.severity) ||
-      b.issues.length - a.issues.length ||
-      a.label.localeCompare(b.label),
-  );
 }
 
 // ── The days: calendar and table ──────────────────────────────────────────────

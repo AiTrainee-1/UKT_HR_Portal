@@ -312,6 +312,12 @@ def attendance_day_override(request: Request) -> Response:
 
     hr_name = get_hr_display_name(request)
 
+    from . import attendance_edit as edit
+
+    # Payroll Done (2026-11-24): the day's payroll is finalized, so nothing of the day can change - not even a revert
+    if locked := edit.lock_refusal(emp, d):
+        return Response({"error": locked, "code": "locked"}, status=409)
+
     if data.get("reset"):
         AttendanceDayRecord.objects.filter(employee=emp, date=d).delete()
         AttendanceOverrideRequest.objects.filter(
@@ -338,8 +344,6 @@ def attendance_day_override(request: Request) -> Response:
 
     # EVERY change (any attendance type) is a request: nothing here writes the day. The Department Head approves it first,
     # then HR; only then does the record change (attendance_edit.finalize).
-    from . import attendance_edit as edit
-
     if d > ist_today():
         return Response({"error": "A day that has not come yet cannot be changed."}, status=400)
     if edit.hod_of(emp) is None:
@@ -364,7 +368,9 @@ def attendance_day_override(request: Request) -> Response:
             record = edit.fresh_day(emp, d)
             resolved = edit.resolve_option(data, emp, d, record)
         elif data.get("type"):
-            resolved = edit.resolve(data)
+            # a compensation type is checked against the balance (2026-11-24); the day's waiting edits are replaced below,
+            # so the balance they hold is free for this one
+            resolved = edit.resolve(data, emp, d, exclude_edit_ids=edit._pending_override_ids(emp, d))
         else:  # an older client: the same approval, the old fields
             if len(str(data.get("note") or "").strip()) < 3:
                 return Response({"error": "Give a reason for the change (a few words)."}, status=400)

@@ -11,6 +11,7 @@ import type {
   VisitorRecordRow,
 } from "@/lib/api-client/custom-hooks";
 import OutpassVisitors from "../OutpassVisitors";
+import { passDay } from "./outpass/logic";
 import { handler as desksHandler } from "./harness-desks";
 import { handler as gatesHandler } from "./harness-gates";
 import { handler as inOutHandler } from "./harness-inout";
@@ -36,6 +37,8 @@ export type { Call, SliceHandler, World } from "./harness-kit";
 const SLICES: readonly SliceHandler[] = [gatesHandler, inOutHandler, visitorsHandler, desksHandler, teaHandler];
 
 const iso = (day: string, time = "05:00:00") => `2026-10-${day}T${time}Z`;
+/** The harness's today (NOW, 14 Oct 2026 in India). */
+const TODAY_DAY = "2026-10-14";
 
 const approval = (hr: boolean) =>
   ({
@@ -95,6 +98,17 @@ const qrRow = (id: number, name: string): OutpassRecordRow => ({
   branchName: "Main",
   submittedAt: iso("14"),
 });
+
+/** The QR submissions a request asks for: the old `range`, or the date filter's days (today: today's two, days that end
+ *  before today: none, anything else reaching back to the 1st: the month's five). */
+function qrRowsFor(qs: URLSearchParams, range: string): OutpassRecordRow[] {
+  const from = qs.get("from");
+  const to = qs.get("to");
+  if (!from && !to) return QR_ROWS[range];
+  if (from === TODAY_DAY && to === TODAY_DAY) return QR_ROWS.today;
+  if (to && to < TODAY_DAY) return [];
+  return QR_ROWS.month;
+}
 
 /** Gate QR submissions: today 2, this week 3, this month 5. */
 export const QR_ROWS: Record<string, OutpassRecordRow[]> = {
@@ -191,8 +205,16 @@ export function installWorld(fetch: Mock): World {
       throw new Error(`unexpected request ${method} ${url}`);
     }
     switch (path) {
-      case "/api/outpass-requests":
-        return copy(qs.get("status") ? world.requests.filter((r) => r.status === qs.get("status")) : world.requests);
+      case "/api/outpass-requests": {
+        // the date filter's days (from / to): a pass is for the day it went out, or the day it was asked for
+        const rows = world.requests.filter(
+          (r) =>
+            (!qs.get("status") || r.status === qs.get("status")) &&
+            (!qs.get("from") || passDay(r) >= qs.get("from")!) &&
+            (!qs.get("to") || passDay(r) <= qs.get("to")!),
+        );
+        return copy(rows);
+      }
       case "/api/outpass/qr":
       case "/api/visitor/qr":
         return { token: "tok", branchId: 1, branchName: "Main" };
@@ -201,7 +223,7 @@ export function installWorld(fetch: Mock): World {
       case "/api/tea-break/summary":
         return summary;
       case "/api/outpass/records":
-        return page(QR_ROWS[range]);
+        return page(qrRowsFor(qs, range));
       case "/api/visitor/records":
         return page(VISITOR_ROWS[range]);
       case "/api/tea-break/records": {

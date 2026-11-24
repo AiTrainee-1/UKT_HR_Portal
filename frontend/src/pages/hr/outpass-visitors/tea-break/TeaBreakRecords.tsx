@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, ArrowDown, ArrowUp, Coffee, Gauge, Timer, UserX, Users } from "lucide-react";
+import { DateRangeBar } from "@/components/date-range";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   TEA_BREAK_ADMIN_API,
@@ -11,12 +12,12 @@ import {
   type TeaBreakEmployeeRow,
   type TeaBreakStatus,
 } from "@/lib/api-client/custom-hooks";
+import { rangeLabel, rangeParams, readDateRange } from "@/lib/date-range";
 import { useLevel } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import {
   ClearFilters,
   DataTable,
-  DateRangeFilter,
   ExportButton,
   FilterBar,
   PersonCell,
@@ -29,14 +30,12 @@ import {
   fmtCount,
   fmtDate,
   fmtMinutes,
-  fmtRangeLabel,
   fmtTime,
   isTodayIst,
   NONE,
   useGateFilters,
   type DataColumn,
   type DataTablePagination,
-  type DateRangePatch,
 } from "../kit";
 import { EmployeePicker } from "./EmployeePicker";
 import { TeaBreakDrawer } from "./TeaBreakDrawer";
@@ -79,7 +78,10 @@ export function TeaBreakRecords() {
   const { user } = useAuth();
   const level = useLevel();
   const filters = useGateFilters(TEA_DEFAULTS, { keep: TEA_KEEP });
-  const { filters: values, set, params, dateRange } = filters;
+  const { filters: values, set, params } = filters;
+  // the HR portal's date filter (This Month by default): the days it stands for are in `params` as from / to
+  const dates = readDateRange(values);
+  const datesText = rangeLabel(dates);
   const view = teaView(values.view);
   const now = useNow();
   const scoped = !!user?.branchId;
@@ -204,13 +206,7 @@ export function TeaBreakRecords() {
           />
         }
       >
-        <DateRangeFilter
-          range={values.range}
-          from={values.from}
-          to={values.to}
-          onChange={(patch: DateRangePatch) => set(patch)}
-          testId="tea-dates"
-        />
+        <DateRangeBar value={dates} onChange={(next) => set(rangeParams(next))} testId="tea-dates" />
         {!scoped && branches.length > 1 && (
           <SelectFilter
             label="Branch"
@@ -278,7 +274,7 @@ export function TeaBreakRecords() {
             <span data-testid="tea-break-count">
               {fmtCount(breaks.data?.total ?? 0)} {breaks.data?.total === 1 ? "break" : "breaks"}
               {values.status ? ` · ${STATUS_LABEL[values.status as TeaBreakStatus] ?? values.status}` : ""} ·{" "}
-              {fmtRangeLabel(dateRange.from, dateRange.to)}
+              {datesText}
             </span>
           }
           toolbar={<ViewSwitch view={view} onChange={(v) => set({ view: v })} />}
@@ -304,7 +300,7 @@ export function TeaBreakRecords() {
           summaryLine={
             <span data-testid="tea-break-count">
               {fmtCount(employees.data?.total ?? 0)} {employees.data?.total === 1 ? "employee" : "employees"}
-              {s ? ` · ${fmtCount(s.breaks)} breaks` : ""} · {fmtRangeLabel(dateRange.from, dateRange.to)}
+              {s ? ` · ${fmtCount(s.breaks)} breaks` : ""} · {datesText}
             </span>
           }
           toolbar={<ViewSwitch view={view} onChange={(v) => set({ view: v })} />}

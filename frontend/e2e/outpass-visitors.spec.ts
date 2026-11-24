@@ -105,15 +105,17 @@ test("Outpass: each tab shows only its own section, and the sidebar item stays l
   expect([await lit("outpass"), await lit("visitors"), await lit("tea-break")]).toEqual([false, false, true]);
 });
 
-test("Outpass: the range filter is kept across the two sections of Overview", async ({ page }) => {
+test("Outpass: the date filter is kept across the two sections of Overview", async ({ page }) => {
   await loginAsHr(page);
   await page.goto(`${BASE}/outpass/overview/passes`);
-  await tab(page, "This Month").click();
-  await expect(tab(page, "This Month")).toHaveAttribute("aria-selected", "true");
+  // This Month by default; Today is kept in the address and by the other section
+  await expect(page.getByTestId("overview-dates-month")).toHaveAttribute("aria-pressed", "true");
+  await page.getByTestId("overview-dates-today").click();
+  await expect(page).toHaveURL(/range=today/);
   await page.getByTestId("outpass-overview-nested-qr-submissions").click();
   await expect(page.getByTestId("outpass-qr-submissions")).toBeVisible();
-  await expect(tab(page, "This Month")).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByTestId("outpass-qr-submissions")).toContainText("this month");
+  await expect(page.getByTestId("overview-dates-today")).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("outpass-qr-submissions")).toContainText("Today");
 });
 
 test("Outpass: a Gate QR submission is listed, and counted on its tab", async ({ page }) => {
@@ -323,18 +325,18 @@ test("Tea Break: Records and Rule are separate tabs, and the filters are kept be
   await expect(page.getByTestId("tea-break-rule")).toHaveCount(0);
 
   // the filters live in the address, so they go along with a switch of tab
-  await page.getByTestId("tea-dates-week").click();
+  await page.getByTestId("tea-dates-today").click();
   await page.getByTestId("tea-status").selectOption("overtime");
-  await expect(page).toHaveURL(`${BASE}/tea-break/records?range=week&status=overtime`);
+  await expect(page).toHaveURL(`${BASE}/tea-break/records?range=today&status=overtime`);
 
   await tab(page, "Rule").click();
-  await expect(page).toHaveURL(`${BASE}/tea-break/rule?range=week&status=overtime`);
+  await expect(page).toHaveURL(`${BASE}/tea-break/rule?range=today&status=overtime`);
   await expect(page.getByTestId("tea-break-rule")).toBeVisible();
   await expect(page.getByTestId("tea-break-list")).toHaveCount(0);
 
   await tab(page, "Records").click();
-  await expect(page).toHaveURL(`${BASE}/tea-break/records?range=week&status=overtime`);
-  await expect(page.getByTestId("tea-dates-week")).toHaveAttribute("aria-pressed", "true");
+  await expect(page).toHaveURL(`${BASE}/tea-break/records?range=today&status=overtime`);
+  await expect(page.getByTestId("tea-dates-today")).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByTestId("tea-status")).toHaveValue("overtime");
 });
 

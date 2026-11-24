@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -23,6 +24,7 @@ from rest_framework.response import Response
 from . import approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import get_hr_display_name, get_token_employee_id, require_auth, require_hr
 from .branch_scope import scope_to_branch
+from .date_span import DaySpanError, parse_day_span
 from . import gate_qr
 from .employee_photo import employee_photo_link, photo_links
 from .models import Employee, OutpassRequest
@@ -179,6 +181,15 @@ def outpass_requests(request: Request) -> Response:
             qs = qs.filter(employee_id=emp_id)
         if status := request.query_params.get("status"):
             qs = qs.filter(status=status)
+        # Optional from / to (YYYY-MM-DD, 2026-11-24: the HR portal's date filter, date_span.py): only the passes FOR
+        # those India days -the day the employee went out, or the day it was asked for while they have not gone out.
+        # Without them the list is exactly as before (the newest DEFAULT_LIST_CAP).
+        try:
+            span = parse_day_span(request.query_params)
+        except DaySpanError as exc:
+            return Response({"error": str(exc)}, status=400)
+        if span is not None:
+            qs = qs.filter(span.instant_q("exited_at") | (Q(exited_at__isnull=True) & span.instant_q("created_at")))
 
         # An employee only ever sees their own -no employee{} block needed.
         # HR's list (no token_emp_id) includes it, same convention as

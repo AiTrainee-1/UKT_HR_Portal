@@ -4,12 +4,14 @@
 import { useState, type ReactNode } from "react";
 import { CalendarClock, CheckCircle2, Clock, MapPin, MapPinned, ShieldAlert, XCircle } from "lucide-react";
 import { PipelineNote, WaitingChip } from "@/components/ApprovalTrail";
+import { DateRangeBar, OutsideRangeNote, useDateRange } from "@/components/date-range";
 import { EmptyNote } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { useToast } from "@/hooks/use-toast";
 import { explainsWaiting, hrCanAct, hrCanReject, waitingText } from "@/lib/approval-workflow";
 import { useOnDutySessionsHR, useUpdateOnDutySessionHR, type OnDutySessionItem } from "@/lib/api-client/custom-hooks";
+import { chooseDays, dayInRange, earliestDay, istDayOf } from "@/lib/date-range";
 import DecisionDialog from "../DecisionDialog";
 import { fmtDateTime } from "../logic";
 import { CardSkeleton, CountText, Eyebrow, LoadError, Note, PersonCell, SessionChip, ToolbarCard } from "../kit";
@@ -196,9 +198,17 @@ function SessionCard({
 export default function ApprovalsTab() {
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<Filter>("pending");
-  const { data: sessions, isLoading, isError, error, refetch } = useOnDutySessionsHR(statusFilter);
+  // the HR portal's date filter (This Month by default): a request is for the day it was made (a session never runs past
+  // its day), and the server sends only those days' requests
+  const dates = useDateRange();
+  const { data: sessions, isLoading, isError, error, refetch } = useOnDutySessionsHR(statusFilter, true, dates.days);
+  // every pending request whatever its day (the tab badge's own list): the ones on other days are named under the toolbar
+  const { data: allPending } = useOnDutySessionsHR("pending", statusFilter === "pending");
   const updateMutation = useUpdateOnDutySessionHR();
   const rows = sessions ?? [];
+  const outside =
+    statusFilter === "pending" ? (allPending ?? []).filter((s) => !dayInRange(istDayOf(s.createdAt), dates.days)) : [];
+  const outsideEarliest = earliestDay(outside.map((s) => istDayOf(s.createdAt)));
   // the decision HR clicked, waiting for its confirmation
   const [asking, setAsking] = useState<{ session: OnDutySessionItem; status: "approved" | "rejected" } | null>(null);
 
@@ -231,12 +241,21 @@ export default function ApprovalsTab() {
         <div className="flex min-w-0 max-w-full max-sm:overflow-x-auto" data-tab-row>
           <PillTabs items={FILTERS} value={statusFilter} onChange={(v) => setStatusFilter(v as Filter)} size="sm" />
         </div>
+        <DateRangeBar value={dates.value} onChange={dates.set} accent="#006496" testId="approvals-dates" />
         {!isLoading && (
           <CountText testId="approvals-count">
-            {rows.length} {statusFilter} request{rows.length === 1 ? "" : "s"}
+            {rows.length} {statusFilter} request{rows.length === 1 ? "" : "s"} · {dates.label}
           </CountText>
         )}
       </ToolbarCard>
+      <OutsideRangeNote
+        count={outside.length}
+        what={outside.length === 1 ? "pending request" : "pending requests"}
+        rangeLabel={dates.label}
+        earliest={outsideEarliest && outsideEarliest < dates.days.from ? outsideEarliest : undefined}
+        onShow={() => dates.set(chooseDays(outsideEarliest, dates.today))}
+        testId="approvals-outside"
+      />
 
       {isLoading ? (
         <CardSkeleton />
@@ -248,7 +267,11 @@ export default function ApprovalsTab() {
           testId="approvals-error"
         />
       ) : rows.length === 0 ? (
-        <EmptyNote icon={MapPinned} title={`No ${statusFilter} On-Duty sessions.`} hint={EMPTY_HINT[statusFilter]} />
+        <EmptyNote
+          icon={MapPinned}
+          title={`No ${statusFilter} On-Duty sessions for ${dates.label}.`}
+          hint={EMPTY_HINT[statusFilter]}
+        />
       ) : (
         <div className="grid gap-3">
           {rows.map((session, i) => (

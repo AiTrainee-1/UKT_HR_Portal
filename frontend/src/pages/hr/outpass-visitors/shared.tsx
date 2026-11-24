@@ -1,25 +1,8 @@
 import { useEffect, useState } from "react";
-import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useListBranches, getListBranchesQueryKey, type GateRange } from "@/lib/api-client/custom-hooks";
+import { useListBranches, getListBranchesQueryKey } from "@/lib/api-client/custom-hooks";
 
 export const PAGE_SIZE = 20;
-export const RANGE_LABEL: Record<GateRange, string> = { today: "Today", week: "This Week", month: "This Month" };
-
-// ── Range filter ──────────────────────────────────────────────────────────
-
-export function RangeFilter({ value, onChange }: { value: GateRange; onChange: (v: GateRange) => void }) {
-  return (
-    <PillTabs
-      size="sm"
-      items={(["today", "week", "month"] as GateRange[]).map((r) => ({ value: r, label: RANGE_LABEL[r] }))}
-      value={value}
-      onChange={(v) => onChange(v as GateRange)}
-      baseColor="#0f172a"
-      pillBg="#f1f5f9"
-    />
-  );
-}
 
 // ── Branch picker (unscoped/super-admin only) ────────────────────────────
 

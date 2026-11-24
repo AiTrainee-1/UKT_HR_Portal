@@ -7,9 +7,11 @@ import type { TeaBreakAdminRecord, TeaBreakRemark, TeaBreakStatus } from "@/lib/
 import type { FilterOption, KitTone } from "../kit";
 import { toInstant } from "../kit";
 
-/** The list's filters in the address (module level: useGateFilters needs a stable object). */
+/** The list's filters in the address (module level: useGateFilters needs a stable object). The dates are the HR
+ *  portal's date filter (lib/date-range: This Month by default, `month` for an earlier one). */
 export const TEA_DEFAULTS = {
-  range: "today",
+  range: "month",
+  month: "",
   from: "",
   to: "",
   departmentId: "",

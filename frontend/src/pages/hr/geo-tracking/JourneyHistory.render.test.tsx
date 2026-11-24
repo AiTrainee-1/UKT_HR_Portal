@@ -9,6 +9,7 @@ import {
   click,
   clickId,
   css,
+  here,
   detailFixture,
   installBrowserStubs,
   installWorld,
@@ -23,6 +24,7 @@ import {
   unmount,
   waitFor,
   type World,
+  pinClock,
 } from "./testing";
 
 // Geo Attendance -> Journey History in jsdom: the list with its filters and paging, the empty / loading / error states, and one
@@ -53,6 +55,7 @@ let world: World;
 
 beforeAll(installBrowserStubs);
 beforeEach(() => {
+  pinClock();
   vi.clearAllMocks();
   resetMap();
   h.user.current = SUPER;
@@ -61,6 +64,7 @@ beforeEach(() => {
 afterEach(() => {
   expect(world.unexpected).toEqual([]);
   unmount();
+  vi.useRealTimers();
 });
 
 /** The tab with the open journey kept in state, as the page keeps it. */
@@ -188,20 +192,29 @@ describe("the list", () => {
     expect(text(q("employee-filter-options"))).toContain('No employee matches "zzz"');
   });
 
-  it("filters by a date range and refuses a range that ends before it starts", async () => {
+  it("filters by the date filter: This Month by default, then Today, Yesterday and Custom days, in the address", async () => {
     await openList();
-    typeAt("#journey-from", "2026-10-28");
-    await waitFor(() => rows().length === 2, "the journeys of the 28th");
-    expect(lastListRequest()).toContain("from=2026-10-28");
-    expect(rows().map((r) => r.dataset.journeyId)).toEqual(["7", "8"]);
+    // the pinned clock is 28 Oct 2026: This Month is the whole of October
+    expect(lastListRequest()).toContain("from=2026-10-01&to=2026-10-31");
+    expect(rows()).toHaveLength(3);
+    expect(text(q("journey-dates-label"))).toContain("October 2026");
 
-    const before = journeyRequests().length;
-    typeAt("#journey-to", "2026-10-27");
-    await waitFor(() => q("range-error") !== null, "the range message");
-    expect(text(q("range-error"))).toContain('The "From" date is after the "To" date');
-    await settle(30);
-    // no request for a range that cannot match
-    expect(journeyRequests().length).toBe(before);
+    click(q("journey-dates-today"));
+    await waitFor(() => rows().length === 2, "the journeys of the 28th");
+    expect(lastListRequest()).toContain("from=2026-10-28&to=2026-10-28");
+    expect(rows().map((r) => r.dataset.journeyId)).toEqual(["7", "8"]);
+    expect(here()).toContain("range=today");
+
+    click(q("journey-dates-yesterday"));
+    await waitFor(() => rows().length === 1, "the journey of the 27th");
+    expect(rows()[0].dataset.journeyId).toBe("9");
+
+    click(q("journey-dates-custom"));
+    await waitFor(() => q("journey-dates-to") !== null, "the custom days");
+    typeAt('[data-testid="journey-dates-to"]', "2026-10-28");
+    await waitFor(() => rows().length === 3, "27 - 28 Oct");
+    expect(lastListRequest()).toContain("from=2026-10-27&to=2026-10-28");
+    expect(here()).toContain("range=custom&from=2026-10-27&to=2026-10-28");
   });
 
   it("clears every filter with one button", async () => {
@@ -239,11 +252,11 @@ describe("the list", () => {
   it("says there are no journeys yet, and says nothing matches when a filter is the reason", async () => {
     world.journeys = [];
     await openList();
-    expect(text(q("journey-empty"))).toContain("No journeys yet");
+    expect(text(q("journey-empty"))).toContain("No journeys for October 2026");
     expect(text(q("journey-empty"))).toContain("submits an On-Duty request");
     choose("#journey-status", "active");
     await waitFor(
-      () => text(q("journey-empty")).includes("No journey matches these filters"),
+      () => text(q("journey-empty")).includes("No journey for October 2026 matches these filters"),
       "the filtered empty note",
     );
   });

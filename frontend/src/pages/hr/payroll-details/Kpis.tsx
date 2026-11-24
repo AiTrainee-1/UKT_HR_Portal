@@ -1,72 +1,32 @@
-import {
-  AlertTriangle,
-  CalendarCheck,
-  Coins,
-  Factory,
-  MinusCircle,
-  ShieldCheck,
-  TrendingUp,
-  Wallet,
-} from "lucide-react";
+import { CalendarCheck, Coins, Factory, MinusCircle, TrendingUp, Wallet } from "lucide-react";
 import { KpiTile } from "@/components/payroll/kit/parts";
 import { inr, inr2 } from "@/components/payroll/kit/format";
 import type { PayrollDetails, PayrollKind } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
 import type { Accent } from "./accent";
-import { grossLine, netBridge, severityCounts, workTile } from "./logic";
+import { grossLine, netBridge, workTile } from "./logic";
 
 /**
  * The dashboard of one payroll, left to right: the employee's monthly salary (staff), the gross earned for the days paid, what
- * one day (or shift) pays, the deductions, the days or shifts worked, and how many issues were detected (split by severity). The
- * Issues tile jumps to its section. The net payable is the last figure of the gross-to-net bar under the tiles.
+ * one day (or shift) pays, the deductions and the days or shifts worked. (The Issues tile went with the Issues section,
+ * owner 2026-11-24.) The net payable is the last figure of the gross-to-net bar under the tiles.
  */
-export function KpiStrip({
-  details,
-  kind,
-  accent,
-  degraded,
-  onJump,
-}: {
-  details: PayrollDetails;
-  kind: PayrollKind;
-  accent: Accent;
-  /** No breakdown behind this payroll: there is nothing to say about its issues or rules, which is not "clean". */
-  degraded: boolean;
-  onJump: (sectionId: string) => void;
-}) {
+export function KpiStrip({ details, kind, accent }: { details: PayrollDetails; kind: PayrollKind; accent: Accent }) {
   const { money } = details;
-  const counts = severityCounts(details.issues);
-  const total = details.issues.length;
   const work = workTile(details, kind);
   // What one day (staff) or one shift (production) pays: the salary the month was worked out from, shown on its own
   const perDay = perDayTile(details, kind, work.outOf, work.holidaysPaid);
   const monthly = kind === "staff" ? money.monthlySalary : null;
   const deductionShare = money.gross > 0 ? Math.round((money.deductions / money.gross) * 1000) / 10 : 0;
 
-  const issuesTone = degraded
-    ? "bg-slate-50 text-slate-600"
-    : counts.critical > 0
-      ? "bg-red-50 text-red-800"
-      : counts.warning > 0
-        ? "bg-amber-50 text-amber-800"
-        : "bg-green-50 text-green-800";
-  const issuesSub = degraded
-    ? "No breakdown to check"
-    : total === 0
-      ? "Nothing to flag: this payroll is clean"
-      : [
-          counts.critical ? `${counts.critical} critical` : "",
-          counts.warning ? `${counts.warning} ${counts.warning === 1 ? "warning" : "warnings"}` : "",
-          counts.info ? `${counts.info} info` : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
+  // three tiles always (gross, deductions, days), plus the monthly salary and the per-day rate when there are
+  const tiles = 3 + [monthly, perDay].filter(Boolean).length;
 
   return (
     <div
       className={cn(
         "grid grid-cols-2 gap-3 sm:grid-cols-3",
-        [monthly, perDay].filter(Boolean).length === 2 ? "xl:grid-cols-6" : "xl:grid-cols-5",
+        tiles >= 5 ? "xl:grid-cols-5" : tiles === 4 ? "xl:grid-cols-4" : "xl:grid-cols-3",
       )}
       data-testid="pd-kpis"
     >
@@ -139,16 +99,6 @@ export function KpiStrip({
         icon={kind === "production" ? Factory : CalendarCheck}
         tone="bg-sky-50 text-sky-800"
         testId="pd-kpi-days"
-      />
-      <KpiTile
-        label="Issues"
-        value={degraded ? "—" : total}
-        sub={issuesSub}
-        icon={total === 0 && !degraded ? ShieldCheck : AlertTriangle}
-        tone={issuesTone}
-        onClick={() => onJump("issues")}
-        className={perDay ? "col-span-2 sm:col-span-1" : "col-span-2 xl:col-span-1"}
-        testId="pd-kpi-issues"
       />
     </div>
   );

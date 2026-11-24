@@ -311,7 +311,25 @@ describe("Overview", () => {
 
   it("tiles count the range's passes and filter the list; the search and the status filter narrow it", async () => {
     mountPage(`${OUTPASS}/overview/passes`);
-    await waitFor(() => ready("outpass-passes") && passNames().length === 4, "the passes");
+    // This Month (the date filter's default): every pass of October, 4 on the 14th and 1 out on the 10th
+    await waitFor(() => ready("outpass-passes") && passNames().length === 5, "the passes");
+    expect(["passes", "waiting", "approved", "rejected", "qr"].map((t) => tileValue(`overview-tile-${t}`))).toEqual([
+      "5",
+      "2",
+      "2",
+      "1",
+      "5",
+    ]);
+    click(must("overview-tile-waiting"));
+    await waitFor(() => passNames().join() === "Employee 1,Employee 2", "the waiting ones");
+    expect(text(q("outpass-passes"))).toContain("2 passes of 5");
+    expect(must("overview-tile-waiting").getAttribute("aria-pressed")).toBe("true");
+    click(must("overview-tile-waiting"));
+    await waitFor(() => passNames().length === 5, "all again");
+
+    // Today: the tiles follow the days (the pass that went out on the 10th drops out)
+    click(must("overview-dates-today"));
+    await waitFor(() => passNames().length === 4, "today's passes");
     expect(["passes", "waiting", "approved", "rejected", "qr"].map((t) => tileValue(`overview-tile-${t}`))).toEqual([
       "4",
       "2",
@@ -319,12 +337,6 @@ describe("Overview", () => {
       "1",
       "2",
     ]);
-    click(must("overview-tile-waiting"));
-    await waitFor(() => passNames().join() === "Employee 1,Employee 2", "the waiting ones");
-    expect(text(q("outpass-passes"))).toContain("2 passes of 4");
-    expect(must("overview-tile-waiting").getAttribute("aria-pressed")).toBe("true");
-    click(must("overview-tile-waiting"));
-    await waitFor(() => passNames().length === 4, "all again");
 
     choose("passes-status", "out");
     await waitFor(() => passNames().join() === "Employee 3", "out now");

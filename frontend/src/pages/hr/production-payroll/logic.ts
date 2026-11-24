@@ -1,14 +1,13 @@
 /**
  * Pure helpers of the Production Payroll cycle pages (Weekly / BiWeekly / Monthly): how a period is written, which one
  * is picked by default, what a roster row says about an employee, who Payroll skipped, the Payroll register, and the
- * state of the page in its address (?tab=salary&period=2026-02-02_2026-02-08&view=issues).
+ * state of the page in its address (?tab=salary&period=2026-02-02_2026-02-08&view=skipped).
  */
 
 import { parsePeriodParam } from "@/components/payroll/kit/url-state";
 import { PRODUCTION_NOT_INCLUDED_URL_DEFAULTS } from "@/components/payroll/not-included/logic";
 import { PAYSLIP_URL_DEFAULTS } from "@/components/payroll/period-payslips/logic";
 import { FILTER_URL_DEFAULTS } from "@/components/payroll/panels/filters";
-import { DEFAULT_ISSUE_FILTERS, sanitizeFilters, type IssueFilterState } from "@/components/payroll/panels/issues";
 import type { SkippedItem } from "@/components/payroll/panels/skipped";
 import type {
   CyclePeriod,
@@ -156,37 +155,18 @@ export function unassignedNotice(unassigned: number): string | null {
 export type ProductionTab = "payroll" | "employees" | "salary" | "payslip";
 // "moved": the workers who moved from this cycle to another (owner 2026-11-16); "not_included": every employee who is not
 // in the period's payroll, with the reason (2026-11-20)
-export type ProductionView = "records" | "issues" | "skipped" | "not_included" | "rules" | "moved";
+export type ProductionView = "records" | "skipped" | "not_included" | "rules" | "moved";
 
 export const PRODUCTION_TABS: readonly ProductionTab[] = ["payroll", "employees", "salary", "payslip"];
-export const PRODUCTION_VIEWS: readonly ProductionView[] = [
-  "records",
-  "issues",
-  "skipped",
-  "not_included",
-  "rules",
-  "moved",
-];
+// The Issues view was taken off the page (owner 2026-11-24): an old ?view=issues address opens Records. Each payroll's
+// own issues are still on its Payroll Details page and as the badge on its Records row.
+export const PRODUCTION_VIEWS: readonly ProductionView[] = ["records", "skipped", "not_included", "rules", "moved"];
 
 export const isProductionTab = (v: string): v is ProductionTab => (PRODUCTION_TABS as readonly string[]).includes(v);
 export const isProductionView = (v: string): v is ProductionView => (PRODUCTION_VIEWS as readonly string[]).includes(v);
 
 /** What a page hands its tabs to change the address. */
 export type UrlSetter = (patch: Record<string, string>) => void;
-
-/**
- * The Issues view's own filters in the address: prefixed, so they never collide with the records' filters (q, dept ...).
- * The same keys, with the same defaults, as the Staff Payroll page's.
- */
-export const ISSUE_URL_DEFAULTS = {
-  iq: "",
-  icode: "",
-  isev: "",
-  idept: "",
-  ifrom: "",
-  ito: "",
-  igroup: DEFAULT_ISSUE_FILTERS.groupBy,
-} as const;
 
 /** The Employees tab's search (eq) and state filter (estate: "all" or one of the roster states). */
 export const ROSTER_URL_DEFAULTS = { eq: "", estate: "all" } as const;
@@ -203,7 +183,6 @@ export const PRODUCTION_URL_DEFAULTS: Record<string, string> = {
   period: "",
   layout: "cards",
   ...FILTER_URL_DEFAULTS,
-  ...ISSUE_URL_DEFAULTS,
   ...ROSTER_URL_DEFAULTS,
   ...PRODUCTION_NOT_INCLUDED_URL_DEFAULTS,
   ...PAYSLIP_URL_DEFAULTS,
@@ -229,31 +208,3 @@ export const productionScope = (cycle: PayCycle, period: CyclePeriod): PayrollSc
   periodStart: period.periodStart,
   periodEnd: period.periodEnd,
 });
-
-// ── The Issues view's filters <-> the address ──────────────────────────────────
-
-export function issueFiltersFromUrl(values: Partial<Record<string, string | null | undefined>>): IssueFilterState {
-  return sanitizeFilters({
-    q: values.iq ?? "",
-    code: values.icode ?? "",
-    severity: (values.isev ?? "") as IssueFilterState["severity"],
-    dept: values.idept ?? "",
-    from: values.ifrom ?? "",
-    to: values.ito ?? "",
-    groupBy: (values.igroup || DEFAULT_ISSUE_FILTERS.groupBy) as IssueFilterState["groupBy"],
-  });
-}
-
-export function issueFiltersToUrl(
-  patch: Partial<IssueFilterState>,
-): Partial<Record<keyof typeof ISSUE_URL_DEFAULTS, string>> {
-  const out: Partial<Record<keyof typeof ISSUE_URL_DEFAULTS, string>> = {};
-  if (patch.q !== undefined) out.iq = patch.q;
-  if (patch.code !== undefined) out.icode = patch.code;
-  if (patch.severity !== undefined) out.isev = patch.severity;
-  if (patch.dept !== undefined) out.idept = patch.dept;
-  if (patch.from !== undefined) out.ifrom = patch.from;
-  if (patch.to !== undefined) out.ito = patch.to;
-  if (patch.groupBy !== undefined) out.igroup = patch.groupBy;
-  return out;
-}

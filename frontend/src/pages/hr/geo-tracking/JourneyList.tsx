@@ -14,12 +14,14 @@ import {
   Timer,
   X,
 } from "lucide-react";
+import { DateRangeBar, type DateRange } from "@/components/date-range";
 import { Button } from "@/components/ui/button";
 import { Avatar, SectionCard } from "@/components/payroll/kit/parts";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListEmployeesLite } from "@/lib/api-client";
+import type { DateRangeValue } from "@/lib/date-range";
 import { cn } from "@/lib/utils";
 import {
   isTrackingForbidden,
@@ -39,10 +41,9 @@ import {
 } from "./logic";
 import { ApprovalChip, Chip, EmptyNote, LiveBadge, StatePill } from "./ui";
 
+/** The list's own filters. Its dates are the HR portal's date filter (in the address: JourneyHistoryTab's useDateRange). */
 export type JourneyFilters = {
   employee: { id: number; label: string } | null;
-  from: string;
-  to: string;
   status: "" | "active" | "ended";
   endReason: string;
   page: number;
@@ -51,8 +52,6 @@ export type JourneyFilters = {
 
 export const DEFAULT_FILTERS: JourneyFilters = {
   employee: null,
-  from: "",
-  to: "",
   status: "",
   endReason: "",
   page: 1,
@@ -60,7 +59,7 @@ export const DEFAULT_FILTERS: JourneyFilters = {
 };
 
 export const filtersAreSet = (f: JourneyFilters): boolean =>
-  f.employee !== null || f.from !== "" || f.to !== "" || f.status !== "" || f.endReason !== "";
+  f.employee !== null || f.status !== "" || f.endReason !== "";
 
 const SELECT_CLASS = "h-9 w-full rounded-md border bg-background px-3 text-sm";
 
@@ -331,28 +330,29 @@ function Row({
 export default function JourneyList({
   filters,
   onFilters,
+  dates,
+  onDates,
   onOpen,
   onSimulate,
 }: {
   filters: JourneyFilters;
   onFilters: (patch: Partial<JourneyFilters>) => void;
+  /** The dates (a journey is for the day it started, India): This Month unless the address says otherwise. */
+  dates: DateRange;
+  onDates: (next: DateRangeValue) => void;
   onOpen: (id: number) => void;
   /** Replay a journey on the map (Journey Simulation). */
   onSimulate?: (id: number) => void;
 }) {
-  const badRange = filters.from !== "" && filters.to !== "" && filters.from > filters.to;
-  const query = useJourneys(
-    {
-      employeeId: filters.employee?.id ?? null,
-      from: filters.from,
-      to: filters.to,
-      status: filters.status,
-      endReason: filters.endReason,
-      page: filters.page,
-      pageSize: filters.pageSize,
-    },
-    !badRange,
-  );
+  const query = useJourneys({
+    employeeId: filters.employee?.id ?? null,
+    from: dates.days.from,
+    to: dates.days.to,
+    status: filters.status,
+    endReason: filters.endReason,
+    page: filters.page,
+    pageSize: filters.pageSize,
+  });
 
   // The end reason is also sent to the server; checking it here as well keeps the page right if the server does not know it.
   const rows = useMemo(
@@ -366,7 +366,7 @@ export default function JourneyList({
     (query.data?.results ?? []).some((r) => !sameReason(r, filters.endReason));
   const total = query.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / filters.pageSize));
-  const loading = query.isPending && !badRange;
+  const loading = query.isPending;
   const filtered = filtersAreSet(filters);
 
   const liveNow = rows.filter((r) => r.status === "active");
@@ -374,38 +374,16 @@ export default function JourneyList({
   return (
     <div className="space-y-4" data-testid="journey-list">
       <section className="clay-card rounded-2xl border border-slate-100 p-3.5 sm:p-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(4,minmax(0,1fr))]">
+        <div className="mb-3">
+          <p className="mb-1 block text-xs font-semibold text-gray-600">Dates</p>
+          <DateRangeBar value={dates.value} onChange={onDates} accent="#006496" testId="journey-dates" />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,2fr)_repeat(2,minmax(0,1fr))]">
           <div className="sm:col-span-2 lg:col-span-1">
             <label htmlFor="journey-employee" className="mb-1 block text-xs font-semibold text-gray-600">
               Employee
             </label>
             <EmployeePicker value={filters.employee} onChange={(employee) => onFilters({ employee, page: 1 })} />
-          </div>
-          <div>
-            <label htmlFor="journey-from" className="mb-1 block text-xs font-semibold text-gray-600">
-              From
-            </label>
-            <Input
-              id="journey-from"
-              type="date"
-              value={filters.from}
-              max={filters.to || undefined}
-              onChange={(e) => onFilters({ from: e.target.value, page: 1 })}
-              className="h-9 text-sm"
-            />
-          </div>
-          <div>
-            <label htmlFor="journey-to" className="mb-1 block text-xs font-semibold text-gray-600">
-              To
-            </label>
-            <Input
-              id="journey-to"
-              type="date"
-              value={filters.to}
-              min={filters.from || undefined}
-              onChange={(e) => onFilters({ to: e.target.value, page: 1 })}
-              className="h-9 text-sm"
-            />
           </div>
           <div>
             <label htmlFor="journey-status" className="mb-1 block text-xs font-semibold text-gray-600">
@@ -441,11 +419,6 @@ export default function JourneyList({
             </select>
           </div>
         </div>
-        {badRange && (
-          <p role="alert" className="mt-2 text-xs font-medium text-red-600" data-testid="range-error">
-            The "From" date is after the "To" date: no journey can match. Change one of them.
-          </p>
-        )}
         <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-2.5">
           <p className="text-xs text-gray-500">
             Every On-Duty request is tracked from the moment it is submitted. Times are India time (IST).
@@ -467,7 +440,11 @@ export default function JourneyList({
 
       <SectionCard
         title="Journeys"
-        description={total > 0 ? `${total} ${total === 1 ? "journey" : "journeys"}, newest first` : "Newest first"}
+        description={
+          total > 0
+            ? `${total} ${total === 1 ? "journey" : "journeys"} · ${dates.label}, newest first`
+            : `${dates.label}, newest first`
+        }
         icon={RouteIcon}
         className="overflow-hidden"
         bodyClassName="p-0 pt-3"
@@ -509,7 +486,7 @@ export default function JourneyList({
           <EmptyNote icon={<RouteIcon size={30} />} testId="journey-empty">
             {filtered ? (
               <>
-                <p className="font-semibold text-gray-700">No journey matches these filters.</p>
+                <p className="font-semibold text-gray-700">No journey for {dates.label} matches these filters.</p>
                 <p className="mt-1">Widen the dates, pick another employee, or clear the filters.</p>
                 <Button
                   variant="outline"
@@ -522,10 +499,10 @@ export default function JourneyList({
               </>
             ) : (
               <>
-                <p className="font-semibold text-gray-700">No journeys yet.</p>
+                <p className="font-semibold text-gray-700">No journeys for {dates.label}.</p>
                 <p className="mt-1">
-                  A journey starts when an employee submits an On-Duty request, and it appears here with its route,
-                  stops and events.
+                  Pick other dates above. A journey starts when an employee submits an On-Duty request, and it appears
+                  here with its route, stops and events.
                 </p>
               </>
             )}

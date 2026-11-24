@@ -13,6 +13,7 @@ import {
   useVisitorQr,
   type VisitorVisit,
 } from "@/lib/api-client/custom-hooks";
+import { rangeLabel, readDateRange } from "@/lib/date-range";
 import { useLevel } from "@/lib/tab-access";
 import { cn } from "@/lib/utils";
 import { GateQrDialog } from "../GateQrDialog";
@@ -49,6 +50,9 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const qr = useVisitorQr(qrBranch, { enabled: isBranchScoped || qrBranch !== undefined });
   const summary = useVisitorDashboard(apiQuery(f.params, { paging: false }));
   const s = summary.data;
+  // the figures of the dates follow the date filter (This Month by default); Inside now / over 2 h are about right now
+  const datesText = rangeLabel(readDateRange(f.filters));
+  const totals = s?.rangeTotals;
 
   const [openId, setOpenId] = useState<number | null>(null);
   const [registerOpen, setRegisterOpen] = useState(false);
@@ -56,8 +60,18 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
   const checkOut = useCheckOutVisitor();
 
   const setView = (next: VisitorsView) => f.set({ view: next });
-  const showToday = (status: "inside" | "checked_out") =>
-    f.set({ view: "visits", status: f.filters.status === status ? "" : status, range: "today", from: "", to: "" });
+  // Inside now is always today's: its tile shows today; Checked out narrows the dates already chosen
+  const showToday = () =>
+    f.set({
+      view: "visits",
+      status: f.filters.status === "inside" ? "" : "inside",
+      range: "today",
+      month: "",
+      from: "",
+      to: "",
+    });
+  const showCheckedOut = () =>
+    f.set({ view: "visits", status: f.filters.status === "checked_out" ? "" : "checked_out" });
 
   const confirmCheckOut = async (note: string) => {
     const target = checkOutTarget;
@@ -139,21 +153,29 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
           icon={UserCheck}
           tone="amber"
           loading={!s}
-          onClick={() => showToday("inside")}
+          onClick={showToday}
           active={view === "visits" && f.filters.status === "inside"}
           title="Show who is inside now"
           testId="visitors-stat-inside"
         />
-        <StatTile label="Visits today" value={s?.today} icon={UsersRound} loading={!s} testId="visitors-stat-today" />
         <StatTile
-          label="Checked out today"
-          value={s?.checkedOutToday}
+          label="Visits"
+          value={totals ? totals.visits : s?.today}
+          hint={totals ? datesText : "Today"}
+          icon={UsersRound}
+          loading={!s}
+          testId="visitors-stat-today"
+        />
+        <StatTile
+          label="Checked out"
+          value={totals ? totals.checkedOut : s?.checkedOutToday}
+          hint={totals ? datesText : "Today"}
           icon={LogOut}
           tone="teal"
           loading={!s}
-          onClick={() => showToday("checked_out")}
+          onClick={showCheckedOut}
           active={view === "visits" && f.filters.status === "checked_out"}
-          title="Show today's check-outs"
+          title="Show the check-outs of these dates"
           testId="visitors-stat-checked-out"
         />
         <StatTile
@@ -167,8 +189,8 @@ export function VisitorsTab({ isBranchScoped }: { isBranchScoped: boolean }) {
         />
         <StatTile
           label="Repeat visitors"
-          value={s?.repeatThisMonth}
-          hint="This month"
+          value={totals ? totals.repeat : s?.repeatThisMonth}
+          hint={totals ? datesText : "This month"}
           icon={Repeat}
           tone="indigo"
           loading={!s}

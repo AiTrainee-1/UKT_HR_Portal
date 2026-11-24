@@ -10,6 +10,18 @@ Requests hub: one list of every request an employee (or HR) raises and somebody 
     &export=1 (one page of up to EXPORT_MAX rows, for the Excel / CSV export). The response then also carries `page`,
     `pageSize`, `total` and `pages`; `items` is that page only, already filtered and sorted by the server.
 
+    Date filter (the HR portal's Today / Yesterday / This Month / Custom, 2026-11-24): add &from=YYYY-MM-DD&to=YYYY-MM-DD
+    (India days, both included, either may be left out) and only the requests FOR those days are listed (date_span.py):
+    a leave whose days overlap them, a permission / casual leave / missing punch / attendance correction by its date, an
+    On-Duty punch by its punch date, a compensation claim by its work date; an On-Duty request, an outpass and a general
+    request by the day they were made (the day they are for); a resignation and an advance by the day they were made too
+    (a last working day / a deduction month is usually ahead, where a filter that never goes past today cannot reach).
+    The figures (`stats`) and each kind's waiting counts then follow those days as well: waiting for HR / HOD and the
+    oldest waiting among the requests for those days, and approvedThisMonth / rejectedThisMonth become the requests for
+    those days that ended approved / rejected. `stats` also gains `range` {from, to}, `allWaiting` (every waiting request,
+    any day), `outsideWaiting` (the waiting ones for other days) and `outsideEarliest` (the earliest day one of those is
+    for). `since` / `until` (the submitted date) still work beside it. Without from / to everything is as before.
+
 The HR portal's Requests page used to merge three of the lists the HRMS keeps (leave, permission, manual outpass). This is
 the same thing for every kind in approval_workflow.DEFINITIONS plus the general employee requests: ONE response with, per
 kind, how many are waiting and who for, the request rows themselves (employee, what was asked, where it stands in its
@@ -38,6 +50,7 @@ from . import approval_workflow as approval
 from .auth import require_hr
 from .branch_scope import scope_to_branch
 from .clock import FACTORY_TZ, ist_today
+from .date_span import DaySpan, DaySpanError, parse_day_span
 from .employee_photo import employee_photo_link, photo_links
 from .models import AttendanceLog
 from .permission_registry import effective_permissions, resolve_permission
@@ -81,6 +94,11 @@ class Kind:
     select: tuple[str, ...] = ("employee__department", "employee__designation", "employee__branch")
     # the request's own text columns the paged search looks in (besides the employee's name, code, department ...)
     search: tuple[str, ...] = ("reason",)
+    # the day the request is FOR, for the from / to date filter (2026-11-24): a date column (with the column of its last
+    # day for a span, `day_text` when they hold YYYY-MM-DD text); None = the India day it was made (created_at)
+    day_field: str | None = None
+    day_end_field: str | None = None
+    day_text: bool = False
 
 
 # The Compensation claims list (the Sunday / holiday work section's Claims tab lists every claim kind).
@@ -97,6 +115,9 @@ KINDS: tuple[Kind, ...] = (
         "Leave & Holiday",
         ("pending",),
         search=("reason", "type"),
+        day_field="start_date",
+        day_end_field="end_date",
+        day_text=True,
     ),
     Kind(
         "permission",
@@ -107,6 +128,7 @@ KINDS: tuple[Kind, ...] = (
         "/hr/leave?tab=permissions",
         "Leave & Holiday",
         ("pending",),
+        day_field="date",
     ),
     Kind(
         "casual_leave",
@@ -117,6 +139,7 @@ KINDS: tuple[Kind, ...] = (
         "/hr/casual-leave",
         "Casual Leave",
         ("pending",),
+        day_field="date",
     ),
     Kind(
         "missing_punch",
@@ -127,6 +150,7 @@ KINDS: tuple[Kind, ...] = (
         "/hr/missing-punch",
         "Missing Punch",
         ("pending_hod", "pending_hr"),
+        day_field="date",
     ),
     Kind(
         "on_duty",
@@ -153,6 +177,7 @@ KINDS: tuple[Kind, ...] = (
         ("pending",),
         select=("employee__department", "employee__designation", "employee__branch", "session"),
         search=("session__destination",),
+        day_field="punch_date",
     ),
     Kind(
         "outpass",
@@ -187,6 +212,7 @@ KINDS: tuple[Kind, ...] = (
         None,
         None,
         ("pending",),
+        day_field="date",
     ),
     # every compensation claim kind since 2026-11-19 (Sunday / holiday work, OT allowance / shift credit, birthday credit,
     # use of the balance): the Department Head decides them, so HR opens the Compensation claims list
@@ -199,6 +225,7 @@ KINDS: tuple[Kind, ...] = (
         COMPENSATION_CLAIMS_PATH,
         "Compensation",
         ("pending",),
+        day_field="work_date",
     ),
     Kind(
         "resignation",
@@ -704,8 +731,30 @@ def _with_related(kind: Kind, request: Request):
     return _base_qs(kind, request).select_related(*kind.select).defer(*unread)
 
 
+def _day_q(kind: Kind, span: DaySpan) -> Q:
+    """The requests of `kind` that are for one of the span's days (see Kind.day_field)."""
+    if kind.day_field is None:
+        return span.instant_q("created_at")
+    return span.day_q(kind.day_field, kind.day_end_field, text=kind.day_text)
+
+
+def _day_of(kind: Kind, obj) -> date | None:
+    """The (first) day a request is for, the same rule as _day_q."""
+    if kind.day_field is None:
+        return obj.created_at.astimezone(FACTORY_TZ).date() if obj.created_at else None
+    value = getattr(obj, kind.day_field, None)
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return None
+    return value
+
+
 def _filtered_qs(kind: Kind, request: Request, params: dict):
     qs = _with_related(kind, request)
+    if params.get("span") is not None:
+        qs = qs.filter(_day_q(kind, params["span"]))
     status = params["status"]
     waiting = Q(status__in=kind.waiting)
     if status in ("waiting", "waiting_hr", "waiting_hod"):
@@ -763,6 +812,10 @@ def _parse_params(request: Request) -> tuple[dict | None, str | None]:
     if unknown:
         return None, f"unknown kind: {', '.join(unknown)}"
     out["kinds"] = wanted
+    try:
+        out["span"] = parse_day_span(q)
+    except DaySpanError as exc:
+        return None, str(exc)
     return out, None
 
 
@@ -825,17 +878,31 @@ def _access_by_kind(request: Request) -> tuple[dict[str, str], dict[str, bool]]:
     return out, may
 
 
-def _stats_and_waiting(kinds: list[Kind], request: Request, month_start: datetime) -> tuple[dict, dict]:
-    """The card figures and, per kind, how many requests are waiting (all time, whatever filters the list has)."""
+def _stats_and_waiting(
+    kinds: list[Kind], request: Request, month_start: datetime, span: DaySpan | None = None
+) -> tuple[dict, dict]:
+    """The card figures and, per kind, how many requests are waiting (all time, whatever filters the list has). With a
+    `span` (the date filter) both are about the requests for those days, and the waiting ones for other days are counted
+    apart (outsideWaiting / outsideEarliest)."""
     waiting_by_kind: dict[str, dict] = {}
     totals = {"waitingHr": 0, "waitingHod": 0, "waitingOther": 0, "approvedThisMonth": 0, "rejectedThisMonth": 0}
     oldest = None
+    outside = {"count": 0, "earliest": None}
     lookback = _day_start(_shift_month(month_start.date(), -DECISION_LOOKBACK_MONTHS))
     for kind in kinds:
         cfg = approval.get_config(kind.key)
         counts = {"total": 0, "hr": 0, "hod": 0, "other": 0}
         base = _with_related(kind, request)
-        for obj in base.filter(status__in=kind.waiting):
+        waiting_qs = base.filter(status__in=kind.waiting)
+        if span is not None:
+            in_span = waiting_qs.filter(_day_q(kind, span))
+            for obj in waiting_qs.exclude(pk__in=in_span.values("pk")):
+                outside["count"] += 1
+                day = _day_of(kind, obj)
+                if day is not None and (outside["earliest"] is None or day < outside["earliest"]):
+                    outside["earliest"] = day
+            waiting_qs = in_span
+        for obj in waiting_qs:
             queue = _queue(approval.progress(kind.key, obj, cfg)) or "other"
             counts["total"] += 1
             counts[queue] += 1
@@ -845,6 +912,13 @@ def _stats_and_waiting(kinds: list[Kind], request: Request, month_start: datetim
         totals["waitingHr"] += counts["hr"]
         totals["waitingHod"] += counts["hod"]
         totals["waitingOther"] += counts["other"]
+        if span is not None:
+            # the requests for these days that ended approved / rejected (whenever they were decided)
+            decided = base.exclude(status__in=kind.waiting).filter(_day_q(kind, span)).order_by()
+            rejected = decided.filter(status__in=kind.rejected).count()
+            totals["rejectedThisMonth"] += rejected
+            totals["approvedThisMonth"] += decided.count() - rejected
+            continue
         for obj in base.exclude(status__in=kind.waiting).filter(created_at__gte=lookback):
             parts = BUILDERS[kind.key](obj) if kind.key in BUILDERS else {}
             when = _decision_of(kind, obj, parts)["at"]
@@ -863,6 +937,11 @@ def _stats_and_waiting(kinds: list[Kind], request: Request, month_start: datetim
         if oldest
         else None
     )
+    if span is not None:
+        totals["range"] = span.as_json()
+        totals["outsideWaiting"] = outside["count"]
+        totals["allWaiting"] = totals["waiting"] + outside["count"]
+        totals["outsideEarliest"] = outside["earliest"].isoformat() if outside["earliest"] else None
     return totals, waiting_by_kind
 
 
@@ -1044,7 +1123,7 @@ def hr_requests(request: Request) -> Response:
     access, may_approve = _access_by_kind(request)
     allowed = [k for k in KINDS if k.key in access]
     month_start = _day_start(ist_today().replace(day=1))
-    totals, waiting_by_kind = _stats_and_waiting(allowed, request, month_start)
+    totals, waiting_by_kind = _stats_and_waiting(allowed, request, month_start, params["span"])
 
     wanted = [k for k in allowed if not params["kinds"] or k.key in params["kinds"]]
     extra = {"permission": _permission_row_builder()}

@@ -73,7 +73,8 @@ from .biometric_sync import _ingest_punches
 from .branch_scope import scope_to_branch
 from .geo_tracking import sessions as geo_sessions, settings as geo_settings
 from .geo_utils import haversine_distance_m
-from .clock import ist_time, ist_today
+from .clock import FACTORY_TZ, ist_time, ist_today
+from .date_span import DaySpanError, parse_day_span
 from .hod_scope import manager_may_act_on, managers_to_notify
 from .models import (
     AttendanceLog, Employee, LiveLocationPing, Notification,
@@ -1176,8 +1177,18 @@ def on_duty_sessions_hr(request: Request) -> Response:
     """GET /api/on-duty-sessions?status=pending|pending_hod|pending_hr|active|completed|rejected|all
     -branch-scoped. "pending" (the default) covers both pending_hod and
     pending_hr so HR's Pending Approvals tab sees everything awaiting either
-    stage in one list."""
+    stage in one list.
+
+    Optional &from=YYYY-MM-DD&to=YYYY-MM-DD (2026-11-24, the HR portal's date
+    filter, date_span.py): only the requests FOR those India days -the day a
+    request was made, since an On-Duty session never runs past its day (the
+    same rule as the mobile app's on-duty-sessions/mine?month=). The 200-row
+    cap then applies to those days only. Without them: exactly as before."""
     status_filter = request.query_params.get("status", "pending")
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return _error(str(exc))
     # Never the employee's photo (a base64 data URL, up to ~2 MB each): no row shows it.
     qs = OnDutySession.objects.select_related(
         "employee__department", "employee__designation", "branch"
@@ -1187,6 +1198,8 @@ def on_duty_sessions_hr(request: Request) -> Response:
         qs = qs.filter(status__in=[OnDutySession.STATUS_PENDING_HOD, OnDutySession.STATUS_PENDING_HR])
     elif status_filter != "all":
         qs = qs.filter(status=status_filter)
+    if span is not None:
+        qs = qs.filter(span.instant_q("created_at"))
     qs = with_pending_punch_count(qs).order_by("-created_at")[:200]
     cfg = approval.get_config(WORKFLOW)
     return Response([_on_duty_session_dict(s, cfg=cfg) for s in qs])
@@ -1226,8 +1239,17 @@ def on_duty_session_hr_status(request: Request, pk: int) -> Response:
 @api_view(["GET"])
 @require_hr
 def on_duty_punch_verifications_hr(request: Request) -> Response:
-    """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all -branch-scoped."""
+    """GET /api/on-duty-punch-verifications?status=pending|approved|rejected|all -branch-scoped.
+
+    Optional &from=YYYY-MM-DD&to=YYYY-MM-DD (2026-11-24, the HR portal's date
+    filter, date_span.py): only the punches whose punch date is one of those
+    days. The 200-row cap then applies to those days only. Without them:
+    exactly as before."""
     status_filter = request.query_params.get("status", "pending")
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return _error(str(exc))
     # Never the employee's photo (a base64 data URL, up to ~2 MB each): no row shows it, and the sidebar's badge reads the
     # pending list on every HR page.
     qs = OnDutyPunchVerification.objects.select_related(
@@ -1236,6 +1258,8 @@ def on_duty_punch_verifications_hr(request: Request) -> Response:
     qs = scope_to_branch(qs, request, field="employee__branch_id")
     if status_filter != "all":
         qs = qs.filter(status=status_filter)
+    if span is not None:
+        qs = qs.filter(span.day_q("punch_date"))
     qs = qs.order_by("-created_at")[:200]
     return Response([_on_duty_punch_verification_dict(v) for v in qs])
 
@@ -1432,10 +1456,36 @@ def live_location_route(request: Request, employee_id: int) -> Response:
     """GET /api/live-location/team/<employee_id>/route?date=YYYY-MM-DD (defaults today)
     Full-day breadcrumb trail for the Route Map tab -like trail() above but
     scoped to a specific calendar day within the retention window, ordered
-    for drawing a directional path rather than just "latest position"."""
+    for drawing a directional path rather than just "latest position".
+
+    Optional &from=YYYY-MM-DD&to=YYYY-MM-DD (2026-11-24, the On-Duty Map's
+    date filter): every ping of those India days instead of one day's (the
+    pings are only kept PING_RETENTION_HOURS, so older days are empty); the
+    reply then carries "from" / "to" and "date" is the last day."""
     emp = scope_to_branch(Employee.objects, request).filter(pk=employee_id).first()
     if not emp:
         return _error("Employee not found", 404)
+
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return _error(str(exc))
+    if span is not None:
+        pings = emp.location_pings.filter(span.instant_q("recorded_at")).order_by("recorded_at")
+        return Response({
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "date": str(span.end or ist_today()),
+            **span.as_json(),
+            "points": [
+                {
+                    "latitude": float(p.latitude), "longitude": float(p.longitude),
+                    "recordedAt": p.recorded_at.isoformat(), "isMocked": p.is_mocked,
+                }
+                for p in pings
+            ],
+        })
 
     date_str = request.query_params.get("date")
     d = ist_today()
@@ -1470,7 +1520,21 @@ def on_duty_map(request: Request) -> Response:
     Every employee with On-Duty activity on the given day (a session opened
     that day, or one still active), each with their current live position
     (if location tracking is enabled), today's route points, and their
-    session + punch-verification status, for the dedicated On-Duty Map tab."""
+    session + punch-verification status, for the dedicated On-Duty Map tab.
+
+    Optional &from=YYYY-MM-DD&to=YYYY-MM-DD (2026-11-24, the HR portal's date
+    filter, date_span.py) instead of `date`: every employee with an On-Duty
+    request made on one of those India days (plus the sessions still active
+    when the days include today), one entry each with their LATEST request of
+    the days and its punches, the route points of those days (kept only
+    PING_RETENTION_HOURS) and "days" (how many of the days they were On-Duty).
+    The reply then carries "from" / "to" and "date" is the last day."""
+    try:
+        span = parse_day_span(request.query_params)
+    except DaySpanError as exc:
+        return _error(str(exc))
+    if span is not None:
+        return _on_duty_map_span(request, span)
     date_str = request.query_params.get("date")
     d = ist_today()
     if date_str:
@@ -1527,3 +1591,62 @@ def on_duty_map(request: Request) -> Response:
         }
 
     return Response({"date": str(d), "employees": list(by_employee.values())})
+
+
+def _on_duty_map_span(request: Request, span) -> Response:
+    """The On-Duty Map over several days (on_duty_map with from / to): see its docstring."""
+    match = span.instant_q("created_at")
+    if span.has_today:
+        match |= Q(status=OnDutySession.STATUS_ACTIVE)
+    sessions = scope_to_branch(
+        OnDutySession.objects.select_related("employee__department", "employee__branch", "branch")
+        .defer("employee__photo_url")
+        .prefetch_related(
+            Prefetch(
+                "punch_verifications",
+                queryset=OnDutyPunchVerification.objects.order_by("punch_number", "id"),
+            )
+        ),
+        request,
+    ).filter(match).order_by("employee_id", "-created_at")
+
+    cutoff = timezone.now() - timedelta(hours=PING_RETENTION_HOURS)
+    ping_span = span.instant_q("recorded_at")
+    by_employee: dict[int, dict] = {}
+    days: dict[int, set] = {}
+    for s in sessions:
+        emp = s.employee
+        days.setdefault(emp.id, set()).add(timezone.localtime(s.created_at, FACTORY_TZ).date())
+        if emp.id in by_employee:
+            continue  # one entry per employee -their latest request of the days (already ordered)
+        latest = None
+        points = []
+        if emp.location_tracking_enabled:
+            latest = emp.location_pings.filter(recorded_at__gte=cutoff).order_by("-recorded_at").first()
+            points = [
+                {"latitude": float(p.latitude), "longitude": float(p.longitude), "recordedAt": p.recorded_at.isoformat()}
+                for p in emp.location_pings.filter(ping_span).order_by("recorded_at")
+            ]
+        by_employee[emp.id] = {
+            "employeeId": emp.id,
+            "employeeCode": emp.employee_code,
+            "employeeName": f"{emp.first_name} {emp.last_name}",
+            "department": emp.department.name if emp.department_id and emp.department else None,
+            "locationTrackingEnabled": emp.location_tracking_enabled,
+            "latitude": float(latest.latitude) if latest else None,
+            "longitude": float(latest.longitude) if latest else None,
+            "lastSeenAt": latest.recorded_at.isoformat() if latest else None,
+            "routePoints": points,
+            "session": {"id": s.id, "destination": s.destination, "status": s.status},
+            "punches": [
+                {"punchNumber": v.punch_number, "punchType": v.punch_type, "punchTime": v.punch_time.strftime("%H:%M:%S"), "status": v.status}
+                for v in s.punch_verifications.all()
+            ],
+        }
+    for emp_id, entry in by_employee.items():
+        entry["days"] = len(days.get(emp_id, ()))
+    return Response({
+        "date": str(span.end or ist_today()),
+        **span.as_json(),
+        "employees": list(by_employee.values()),
+    })

@@ -40,20 +40,30 @@ import {
   clBalanceDetail,
   clBalanceText,
   clUseText,
+  compensationText,
   editGroups,
   findTile,
+  GROUP_LOOK,
   groupLook,
   groupNote,
   groupTiles,
   isClassicGroup,
+  lockMessage,
+  otText,
+  penaltyText,
   pickOf,
+  portionFor,
+  proposalTitle,
   sendBlocker,
   serverSentence,
+  shiftQuestion,
   showsPunches,
+  startShifts,
   tileTitle,
   type EditPick,
   type EditTile,
 } from "./edit-options";
+import { LockedBanner, PortionPicker, PunchTimeField } from "./EditDetails";
 import { HrEditStageLine } from "./HrEditMark";
 
 type Icon = ComponentType<{ size?: number; className?: string }>;
@@ -421,6 +431,7 @@ export function OptionGroup({
   pick,
   clBalance,
   wide,
+  said = null,
   onChoose,
 }: {
   group: AttendanceEditGroup;
@@ -428,11 +439,13 @@ export function OptionGroup({
   clBalance: AttendanceEditContext["clBalance"];
   /** The first three groups run across the whole form; the newer ones sit two to a row on a wide screen. */
   wide: boolean;
+  /** A reason the form already says above every group (the Payroll Done lock): not repeated on the group or its tiles. */
+  said?: string | null;
   onChoose: (tile: EditTile) => void;
 }) {
   const look = groupLook(group);
-  const tiles = groupTiles(group);
-  const note = groupNote(group);
+  const tiles = groupTiles(group, said);
+  const note = groupNote(group, said);
   const balance = group.key === "casual_leave" ? clBalanceText(clBalance) : null;
   const balanceDetail = group.key === "casual_leave" ? clBalanceDetail(clBalance) : null;
   return (
@@ -520,8 +533,9 @@ function ToggleMark({
  * change (the employee's Department Head by name, or that there is none), and the Attendance Edit form inline. A change is only
  * proposed here: the Department Head approves it first, then HR, and the attendance record is written only after both (the
  * same pipeline as the Attendance page's edit page). The form draws the server's option catalogue: Worked / Compensation /
- * Not worked as always, then Permission, Late, Casual Leave and On-Duty, each greyed out with the server's reason when it
- * cannot be chosen for the day. Shows nothing for a login that has no access to Attendance.
+ * Not worked as always, then Permission, Late, Early-Out, Casual Leave, Leave, On-Duty, Missing Punch, Penalty Waiver and
+ * OT Pay, each greyed out with the server's reason when it cannot be chosen for the day. A day whose payroll is finalized
+ * (Payroll Done) says so at the top and nothing can be sent. Shows nothing for a login that has no access to Attendance.
  */
 export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: number; date: string; accent: Accent }) {
   const { toast } = useToast();
@@ -536,6 +550,9 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
   const [earlyOut, setEarlyOut] = useState(false);
   const [note, setNote] = useState("");
   const [destination, setDestination] = useState("");
+  // Leave: the part of the day; Missing Punch: the time of the punch
+  const [portion, setPortion] = useState<string | null>(null);
+  const [punchTime, setPunchTime] = useState("");
   // the server's own sentence when it refused the last try ("02 Nov 2026 is already marked Late.")
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -551,6 +568,8 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
     setPick(null);
     setNote("");
     setDestination("");
+    setPortion(null);
+    setPunchTime("");
     setProblem(null);
   }, [employeeId, date]);
   // the form starts from the day as it stands
@@ -576,25 +595,44 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
 
   const pending = data.requests.find((r) => r.status === "pending");
   const noHod = !data.hod;
+  const locked = lockMessage(data);
   const reasonOk = note.trim().length >= 3;
-  const blocker = sendBlocker({ noHod, future: data.future, tile, note });
+  const blocker = sendBlocker({ noHod, future: data.future, tile, note, locked, shifts, portion, punchTime });
   const canSend = blocker === null && !submit.isPending;
   const classic = groups.filter((g) => isClassicGroup(g.key));
   const extra = groups.filter((g) => !isClassicGroup(g.key));
   const clUse = selected?.group === "casual_leave" ? clUseText(data.clBalance, tile?.choice?.days) : null;
+  const compensationLine = selected?.group === "compensation" ? compensationText(selected) : null;
+  const otLine = selected?.group === "ot_pay" ? otText(selected) : null;
+  const penaltyLine = selected?.group === "penalty_waiver" ? penaltyText(selected) : null;
 
   const choose = (t: EditTile) => {
+    // a different option starts from its own shift value (OT Pay: the overtime detected); the same one keeps the choice
+    if (pick?.itemKey !== t.item.key) setShifts(startShifts(t.item));
+    if (t.item.group === "leave") setPortion((p) => portionFor(t.item, p));
     setPick(pickOf(t));
-    if (t.item.shifts) setShifts(t.item.shifts);
     setProblem(null);
   };
 
   const send = async () => {
     if (!tile || blocker) return;
-    const what = tileTitle(tile);
+    const what = proposalTitle(tile, { portion, punchTime, shifts });
     try {
       await submit.mutateAsync(
-        buildProposal({ employeeId, date, tile, note, shifts, firstIn, lastOut, late, earlyOut, destination }),
+        buildProposal({
+          employeeId,
+          date,
+          tile,
+          note,
+          shifts,
+          firstIn,
+          lastOut,
+          late,
+          earlyOut,
+          destination,
+          portion,
+          punchTime,
+        }),
       );
       toast({
         title: "Sent for approval",
@@ -604,6 +642,7 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
       setPick(null);
       setNote("");
       setDestination("");
+      setPunchTime("");
       setProblem(null);
     } catch (e) {
       const sentence = serverSentence(e);
@@ -645,7 +684,9 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
           >
             <PenLine size={15} /> Edit attendance
           </Button>
-          <span className="text-xs text-slate-500">Propose a different status for {dateLong(date)}.</span>
+          <span className="text-xs text-slate-500" data-testid="pd-day-edit-open-hint">
+            {locked ?? `Propose a different status for ${dateLong(date)}.`}
+          </span>
         </div>
       )}
 
@@ -680,12 +721,21 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
           </header>
 
           <div className="space-y-5 p-4">
-            {/* 0. where the day's last HR edit stands */}
+            {/* 0. the day's payroll is finalized: nothing can be sent; where the day's last HR edit stands */}
+            {locked && <LockedBanner message={locked} testId="pd-day-edit-locked" />}
             {data.hrEdit && <HrEditStageLine edit={data.hrEdit} />}
 
             {/* 1. what the day should be: the three groups it always had, then the newer options */}
             {classic.map((g) => (
-              <OptionGroup key={g.key} group={g} pick={pick} clBalance={data.clBalance} wide onChoose={choose} />
+              <OptionGroup
+                key={g.key}
+                group={g}
+                pick={pick}
+                clBalance={data.clBalance}
+                wide
+                said={locked}
+                onChoose={choose}
+              />
             ))}
             {extra.length > 0 && (
               <div className="grid gap-5 lg:grid-cols-2" data-testid="pd-edit-more-options">
@@ -696,6 +746,7 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                     pick={pick}
                     clBalance={data.clBalance}
                     wide={false}
+                    said={locked}
                     onChoose={choose}
                   />
                 ))}
@@ -710,9 +761,25 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                   <span className="text-xs text-slate-500">{tile.description}</span>
                 </div>
 
+                {compensationLine && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-compensation-line">
+                    {compensationLine}
+                  </p>
+                )}
+                {selected.group === "compensation" && selected.shiftChoices.length === 0 && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-compensation-none">
+                    {selected.unavailableReason ?? "No amount fits the balance and the day."}
+                  </p>
+                )}
+                {otLine && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-ot-line">
+                    {otLine}
+                  </p>
+                )}
+
                 {selected.shiftChoices.length > 0 && (
                   <div>
-                    <p className="mb-1.5 text-sm font-semibold text-slate-800">How much is the day worth?</p>
+                    <p className="mb-1.5 text-sm font-semibold text-slate-800">{shiftQuestion(selected)}</p>
                     <div
                       className="inline-flex rounded-xl bg-white p-1 ring-1 ring-slate-200"
                       role="group"
@@ -727,7 +794,9 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                           onClick={() => setShifts(c)}
                           className={cn(
                             "rounded-lg px-3.5 py-1.5 text-sm font-semibold tabular-nums transition-colors",
-                            shifts === c ? "bg-violet-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100",
+                            shifts === c
+                              ? cn(GROUP_LOOK[selected.group]?.solid ?? GROUP_LOOK.compensation.solid, "shadow-sm")
+                              : "text-slate-600 hover:bg-slate-100",
                           )}
                         >
                           {c}
@@ -736,6 +805,20 @@ export function DayAttendanceEdit({ employeeId, date, accent }: { employeeId: nu
                     </div>
                     <span className="ml-2 text-xs text-slate-500">shift</span>
                   </div>
+                )}
+
+                {selected.group === "leave" && (
+                  <PortionPicker item={selected} value={portion} onChange={setPortion} testIdPrefix="pd-edit" />
+                )}
+
+                {selected.group === "missing_punch" && (
+                  <PunchTimeField value={punchTime} onChange={setPunchTime} testId="pd-edit-punch-time" />
+                )}
+
+                {penaltyLine && (
+                  <p className="text-xs leading-relaxed text-slate-600" data-testid="pd-edit-penalty-line">
+                    {penaltyLine}
+                  </p>
                 )}
 
                 {showsPunches(selected) && (

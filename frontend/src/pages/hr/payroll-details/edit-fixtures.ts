@@ -41,8 +41,15 @@ export const item = (
 
 const SHIFT_CHOICES = ["0.25", "0.50", "0.75", "1.00"];
 
-/** The whole catalogue for a staff day: Late can only be taken away (the day is already Late), the Morning Late-In
- *  permission is already approved, and only half a day of Casual Leave is left. */
+export const FULL_DAY_REFUSAL =
+  "02 Nov 2026 has punches, so the attendance counts it as worked and a full-day leave would not apply. Choose Absent, or correct the punches first.";
+export const LOCK_MESSAGE =
+  "November 2026 payroll is finalized (Payroll Done), so the attendance of 02 Nov 2026 can no longer change.";
+
+/** The whole catalogue for a staff day: Late can only be taken away (the day is already Late) and Early-Out only marked,
+ *  the Morning Late-In permission is already approved, only half a day of Casual Leave is left, the day counts 0.50 so
+ *  at most 0.50 of the compensation balance fits, a full-day leave is refused (the day has punches), a Lunch Check-In
+ *  request is already waiting, the day has a 0.25 Penalty Early-Out deduction and 95 minutes of overtime (0.50 shift). */
 export function staffOptions(): AttendanceEditGroup[] {
   return [
     {
@@ -64,7 +71,8 @@ export function staffOptions(): AttendanceEditGroup[] {
     {
       key: "compensation",
       label: "Compensation",
-      description: "A paid day given in return for extra work (the compensation balance is not touched).",
+      description:
+        "Use the employee's compensation balance: the shift chosen is added to the day and taken from the balance.",
       items: [
         item({
           key: "sunday_compensation",
@@ -72,9 +80,13 @@ export function staffOptions(): AttendanceEditGroup[] {
           group: "compensation",
           status: "present",
           shifts: "1.00",
-          shiftChoices: SHIFT_CHOICES,
-          worked: true,
+          // only the amounts that fit: the day counts 0.50 already
+          shiftChoices: ["0.25", "0.50"],
+          worked: false,
           compensation: true,
+          staffOnly: true,
+          dayShifts: "0.50",
+          balanceAvailable: 2.5,
         }),
       ],
     },
@@ -82,7 +94,10 @@ export function staffOptions(): AttendanceEditGroup[] {
       key: "not_worked",
       label: "Not worked",
       description: "The day was not worked.",
-      items: [item({ key: "absent", label: "Absent", group: "not_worked", status: "absent", shifts: "0.00" })],
+      items: [
+        item({ key: "absent", label: "Absent", group: "not_worked", status: "absent", shifts: "0.00" }),
+        item({ key: "holiday", label: "Holiday", group: "not_worked", status: "holiday", shifts: "0.00" }),
+      ],
     },
     {
       key: "permission",
@@ -137,6 +152,33 @@ export function staffOptions(): AttendanceEditGroup[] {
       ],
     },
     {
+      key: "early_out",
+      label: "Early-Out",
+      description: "Mark the day Early-Out, or take its Early-Out mark away.",
+      items: [
+        item({
+          key: "early_out",
+          label: "Early-Out",
+          group: "early_out",
+          worked: true,
+          choices: [
+            choice({
+              value: "mark",
+              label: "Mark as Early-Out",
+              description: "The day counts as one Early-Out in the late deductions.",
+            }),
+            choice({
+              value: "unmark",
+              label: "Unmark Early-Out",
+              description: "The Early-Out mark is taken away: the day no longer counts toward the late deductions.",
+              available: false,
+              unavailableReason: "02 Nov 2026 is not marked Early-Out, so there is no Early-Out mark to take away.",
+            }),
+          ],
+        }),
+      ],
+    },
+    {
       key: "casual_leave",
       label: "Casual Leave",
       description: "Give the day as paid Casual Leave: it uses the employee's yearly Casual Leave balance.",
@@ -163,21 +205,176 @@ export function staffOptions(): AttendanceEditGroup[] {
       ],
     },
     {
+      key: "leave",
+      label: "Leave",
+      description: "Record the day as an approved leave, with its reason. A leave day is not paid.",
+      items: [
+        item({
+          key: "leave",
+          label: "Leave",
+          group: "leave",
+          status: "on_leave",
+          choices: [
+            choice({ value: "sick", label: "Sick Leave", description: "A leave for illness." }),
+            choice({ value: "emergency", label: "Emergency", description: "A leave for an emergency." }),
+            choice({ value: "personal", label: "Personal", description: "A leave for personal reasons." }),
+            choice({ value: "other", label: "Other Reasons", description: "A leave for any other reason." }),
+          ],
+          portions: [
+            choice({
+              value: "full",
+              label: "Full day",
+              description: "The whole day is leave.",
+              shifts: "1.00",
+              days: 1,
+              available: false,
+              unavailableReason: FULL_DAY_REFUSAL,
+            }),
+            choice({
+              value: "first_half",
+              label: "First half",
+              description: "The first half is leave; the other half counts by the punches.",
+              shifts: "0.50",
+              days: 0.5,
+            }),
+            choice({
+              value: "second_half",
+              label: "Second half",
+              description: "The second half is leave; the other half counts by the punches.",
+              shifts: "0.50",
+              days: 0.5,
+            }),
+          ],
+        }),
+      ],
+    },
+    {
       key: "on_duty",
       label: "On-Duty",
-      description: "The employee worked away from the branch: the day counts as Present (1.00 shift).",
+      description:
+        "The employee worked away from the branch: the day counts as Present (1.00 shift) and an On-Duty record is added.",
       items: [
         item({ key: "on_duty", label: "On-Duty", group: "on_duty", status: "present", shifts: "1.00", worked: true }),
+      ],
+    },
+    {
+      key: "missing_punch",
+      label: "Missing Punch",
+      description: "Add the punch the device missed: it is recorded as an approved missing-punch request.",
+      items: [
+        item({
+          key: "missing_punch",
+          label: "Missing Punch",
+          group: "missing_punch",
+          worked: true,
+          needsTime: true,
+          choices: [
+            choice({ value: "morning_in", label: "Morning Check-In", description: "The first punch of the day (IN)." }),
+            choice({ value: "lunch_out", label: "Lunch Check-Out", description: "Going out for lunch (OUT)." }),
+            choice({
+              value: "lunch_in",
+              label: "Lunch Check-In",
+              description: "Back from lunch (IN).",
+              available: false,
+              unavailableReason:
+                "A Lunch Check-In request for 02 Nov 2026 is waiting for approval: decide that request instead.",
+            }),
+            choice({
+              value: "evening_out",
+              label: "Evening Check-Out",
+              description: "The last punch of the day (OUT).",
+            }),
+          ],
+        }),
+      ],
+    },
+    {
+      key: "penalty_waiver",
+      label: "Penalty Waiver",
+      description: "Take back the day's Penalty Early-Out deduction: the shift it took off is added back.",
+      items: [
+        item({
+          key: "penalty_waiver",
+          label: "Penalty Waiver",
+          group: "penalty_waiver",
+          description: "Take back the Penalty Early-Out deduction of 02 Nov 2026: 0.25 shift is added back to the day.",
+          status: "present",
+          shifts: "0.25",
+          penaltyMinutes: 80,
+        }),
+      ],
+    },
+    {
+      key: "ot_pay",
+      label: "OT Pay",
+      description: "Pay the day's overtime: its overtime record is set to Pay with the shifts chosen.",
+      items: [
+        item({
+          key: "ot_pay",
+          label: "OT Pay",
+          group: "ot_pay",
+          shiftChoices: SHIFT_CHOICES,
+          staffOnly: true,
+          defaultShifts: "0.50",
+          otMinutes: 95,
+        }),
       ],
     },
   ];
 }
 
-/** The same for a production employee: no Permission and no Casual Leave (the server says why, once per item). */
+/** The same day once its payroll is finalized (Payroll Done): every item, choice and part of the day refused with the
+ *  lock's sentence, exactly as option_catalogue does. */
+export function lockedOptions(message = LOCK_MESSAGE): AttendanceEditGroup[] {
+  const off = <T extends { available: boolean; unavailableReason: string | null }>(x: T): T => ({
+    ...x,
+    available: false,
+    unavailableReason: message,
+  });
+  return staffOptions().map((g) => ({
+    ...g,
+    items: g.items.map((i) => ({
+      ...off(i),
+      choices: i.choices.map(off),
+      ...(i.portions ? { portions: i.portions.map(off) } : {}),
+    })),
+  }));
+}
+
+/** The same for a production employee: no Permission, no Casual Leave, no compensation balance and no OT Pay (the server
+ *  says why, once per item). */
 export function productionOptions(): AttendanceEditGroup[] {
   const permissionReason = "Permission applies to staff only: production attendance has no permissions.";
   const clReason = "Casual Leave is available only for staff employees.";
+  const compensationReason =
+    "Compensation applies to staff employees only: production attendance has no compensation balance.";
+  const otReason = "OT pay applies to staff employees only.";
   return staffOptions().map((g) => {
+    if (g.key === "compensation") {
+      return {
+        ...g,
+        items: g.items.map((i) => ({
+          ...i,
+          shiftChoices: [],
+          dayShifts: "0.00",
+          balanceAvailable: 0,
+          available: false,
+          unavailableReason: compensationReason,
+        })),
+      };
+    }
+    if (g.key === "ot_pay") {
+      return {
+        ...g,
+        items: g.items.map((i) => ({
+          ...i,
+          defaultShifts: null,
+          otMinutes: null,
+          available: false,
+          unavailableReason: otReason,
+        })),
+      };
+    }
     if (g.key === "permission") {
       return {
         ...g,

@@ -2,24 +2,26 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import GeoAttendance from "../GeoAttendance";
 import { DUTY_PALETTE } from "./dutyColors";
 import { mapSpy, resetMap } from "./leafletMock";
-import { todayIst } from "./dutyMap";
 import {
   all,
   click,
   clickId,
   css,
+  here,
   installBrowserStubs,
   installWorld,
   mount,
+  must,
   newWorld,
   q,
   settle,
   text,
-  typeAt,
   unmount,
   waitFor,
   type Raw,
   type World,
+  pinClock,
+  TEST_NOW,
 } from "./testing";
 
 // The On-Duty Map tab in jsdom: every employee's journey on one map in a colour of their own, drawn like the Journey History map
@@ -49,7 +51,8 @@ vi.mock("@/components/HrLayout", () => ({
 vi.mock("@/components/PageRefreshBar", () => ({ RefreshButton: () => null }));
 
 const SUPER = { role: "hr", employeeId: null, isSuperAdmin: true, permissions: {} };
-const TODAY = todayIst();
+// the pinned clock's day (testing.tsx pinClock): This Month, the date filter's default, is October 2026
+const TODAY = TEST_NOW.slice(0, 10);
 const at = (hhmm: string, date = TODAY) => `${date}T${hhmm}:00+05:30`;
 
 let world: World;
@@ -188,14 +191,19 @@ function installFeeds() {
   const base = h.fetch.getMockImplementation()!;
   h.fetch.mockImplementation(async (url: string, options?: RequestInit) => {
     const [path, query = ""] = url.split("?");
-    const date = new URLSearchParams(query).get("date") ?? TODAY;
+    // the date filter's days (from / to), or one day (the old `date`): the fixtures are TODAY's
+    const params = new URLSearchParams(query);
+    const from = params.get("from");
+    const to = params.get("to");
+    const key = from && to ? `${from}..${to}` : (params.get("date") ?? TODAY);
+    const date = from && to ? (from <= TODAY && TODAY <= to ? TODAY : key) : key;
     if (path === "/api/tracking/journeys/day-map") {
-      calls.push(`day-map ${date}`);
+      calls.push(`day-map ${key}`);
       if (dayMapFails) throw new Error("boom");
       return JSON.parse(JSON.stringify(dayFeeds(date).dayMap));
     }
     if (path === "/api/on-duty-map") {
-      calls.push(`on-duty-map ${date}`);
+      calls.push(`on-duty-map ${key}`);
       return JSON.parse(JSON.stringify(dayFeeds(date).onDutyMap));
     }
     return base(url, options);
@@ -204,6 +212,7 @@ function installFeeds() {
 
 beforeAll(installBrowserStubs);
 beforeEach(() => {
+  pinClock();
   vi.clearAllMocks();
   resetMap();
   h.user.current = SUPER;
@@ -215,6 +224,7 @@ beforeEach(() => {
 afterEach(() => {
   expect(world.unexpected).toEqual([]);
   unmount();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -425,25 +435,35 @@ describe("the map's own buttons", () => {
   });
 });
 
-describe("the day", () => {
-  it("opens on today (India), asks both feeds for it, and asks again for another day", async () => {
+describe("the dates", () => {
+  it("opens on This Month (India), asks both feeds for its days, and asks again for other days", async () => {
     await open();
-    expect(calls).toContain(`on-duty-map ${TODAY}`);
-    expect(calls).toContain(`day-map ${TODAY}`);
-    typeAt('input[type="date"]', "2026-10-20");
+    expect(calls).toContain("on-duty-map 2026-10-01..2026-10-31");
+    expect(calls).toContain("day-map 2026-10-01..2026-10-31");
+    expect(rows()).toHaveLength(4);
+    expect(text(q("onduty-dates-label"))).toContain("October 2026");
+    clickId("onduty-dates-yesterday");
     await waitFor(() => q("duty-empty") !== null, "the empty day");
-    expect(calls).toContain("on-duty-map 2026-10-20");
-    expect(calls).toContain("day-map 2026-10-20");
-    expect(text(q("duty-empty"))).toContain("No employees were On-Duty on 2026-10-20.");
-    expect(text(q("duty-empty"))).toContain("Pick another day above.");
-    expect(text(q("duty-map-empty"))).toContain("No live positions to show for On-Duty staff on 2026-10-20.");
+    expect(calls).toContain("on-duty-map 2026-10-27..2026-10-27");
+    expect(calls).toContain("day-map 2026-10-27..2026-10-27");
+    expect(text(q("duty-empty"))).toContain("No employees were On-Duty for Yesterday, 27 Oct.");
+    expect(text(q("duty-empty"))).toContain("Pick other dates above.");
+    expect(text(q("duty-map-empty"))).toContain("No live positions to show for On-Duty staff for Yesterday, 27 Oct.");
     // the map is still there, on Tiruppur, so the page does not collapse
     expect(JSON.parse(css('[data-testid="leaflet-map"]')!.dataset.center!)).toEqual([11.1085, 77.3411]);
+    // an earlier month, stepped back to: its whole month
+    clickId("onduty-dates-prev");
+    await waitFor(() => calls.includes("day-map 2026-09-01..2026-09-30"), "September");
+    expect(here()).toContain("month=2026-09");
   });
 
   it("cannot look into the future", async () => {
     await open();
-    expect((css('input[type="date"]') as HTMLInputElement).max).toBe(TODAY);
+    expect((must("onduty-dates-next") as HTMLButtonElement).disabled).toBe(true);
+    clickId("onduty-dates-custom");
+    await waitFor(() => q("onduty-dates-from") !== null, "the custom days");
+    expect((must("onduty-dates-from") as HTMLInputElement).max).toBe(TODAY);
+    expect((must("onduty-dates-to") as HTMLInputElement).max).toBe(TODAY);
   });
 });
 

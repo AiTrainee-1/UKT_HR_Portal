@@ -1,5 +1,20 @@
 import type { OutpassRequestItem, OutpassScanStatus } from "@/lib/api-client/custom-hooks";
+import { dayInRange, istDayOf, type RangeDays } from "@/lib/date-range";
 import type { KitTone } from "../kit";
+
+/** The day a pass is for (the date filter, as the server's outpass-requests?from=&to=): the day the employee went out,
+ *  or the day it was asked for while they have not gone out. */
+export const passDay = (r: Pick<OutpassRequestItem, "createdAt" | "exitedAt">): string =>
+  istDayOf(r.exitedAt || r.createdAt);
+
+/** The passes for the filter's days, newest first (the server already sent only those; an older server sent every pass). */
+export const passesForDays = <T extends Pick<OutpassRequestItem, "createdAt" | "exitedAt">>(
+  rows: readonly T[] | undefined,
+  days: RangeDays,
+): T[] =>
+  (rows ?? [])
+    .filter((r) => dayInRange(passDay(r), days))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
 /** Where a pass stands at the gate (backend outpass_request_views._outpass_scan_status), as a chip: a tone and a word. */
 export const SCAN_STATUS_CHIP: Record<OutpassScanStatus, { label: string; tone: KitTone } | null> = {

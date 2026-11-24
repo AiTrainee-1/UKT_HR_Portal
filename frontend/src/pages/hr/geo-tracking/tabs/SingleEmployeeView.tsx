@@ -1,6 +1,7 @@
-// On-Duty Map -> Single Employee: a detailed, directional route lookup for ONE tracking-enabled employee on the chosen day, from
-// the position pings the phone sent (the old live-location feed). The route is one line with direction arrows; the start (a flag)
-// and the latest position (a person) are one colour, as on the Journey History map.
+// On-Duty Map -> Single Employee: a detailed, directional route lookup for ONE tracking-enabled employee over the chosen days
+// (the page's date filter), from the position pings the phone sent (the old live-location feed, kept only 72 hours). The
+// route is one line with direction arrows; the start (a flag) and the latest position (a person) are one colour, as on the
+// Journey History map.
 import { useEffect, useMemo, useState } from "react";
 import { MapContainer, Marker, Polyline, Popup } from "react-leaflet";
 import { Route as RouteIcon, Search } from "lucide-react";
@@ -20,7 +21,15 @@ type Tracked = Employee & { locationTrackingEnabled?: boolean };
 
 const time = (iso?: string): string => (iso ? new Date(iso).toLocaleTimeString() : "");
 
-export default function SingleEmployeeView({ date }: { date: string }) {
+export default function SingleEmployeeView({
+  days,
+  rangeText,
+}: {
+  /** The days of the page's date filter (from / to, YYYY-MM-DD, India). */
+  days: { from: string; to: string };
+  /** The same in words ("November 2026"). */
+  rangeText: string;
+}) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const view = useMapView();
@@ -32,7 +41,7 @@ export default function SingleEmployeeView({ date }: { date: string }) {
     (e) => !q || e.employeeCode.toLowerCase().includes(q) || `${e.firstName} ${e.lastName}`.toLowerCase().includes(q),
   );
 
-  const { data: route, isLoading: routeLoading } = useLiveLocationRoute(selectedId, date);
+  const { data: route, isLoading: routeLoading } = useLiveLocationRoute(selectedId, days.to, days);
   const points = useMemo(
     () => (route?.points ?? []).map((p) => [p.latitude, p.longitude] as [number, number]),
     [route],
@@ -41,7 +50,7 @@ export default function SingleEmployeeView({ date }: { date: string }) {
 
   // the map fits the route when it arrives (and again for another employee or day), not on every refresh
   const { map } = view;
-  const routeKey = points.length > 0 ? `${selectedId}|${date}` : "";
+  const routeKey = points.length > 0 ? `${selectedId}|${days.from}|${days.to}` : "";
   useEffect(() => {
     if (map && routeKey) viewPlaces(map, points);
     // only when a different route arrives
@@ -155,7 +164,8 @@ export default function SingleEmployeeView({ date }: { date: string }) {
             <MapOverlayNote testId="single-empty">Select an employee to view their travel route.</MapOverlayNote>
           ) : !routeLoading && points.length === 0 ? (
             <MapOverlayNote testId="single-no-route">
-              No location pings recorded for {route?.employeeName ?? "this employee"} on {date}.
+              No location pings recorded for {route?.employeeName ?? "this employee"} for {rangeText}. Pings are kept
+              for three days.
             </MapOverlayNote>
           ) : null}
         </div>

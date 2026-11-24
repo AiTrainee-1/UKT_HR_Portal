@@ -5,22 +5,17 @@ import { SECTIONS } from "./logic";
 
 /**
  * The page's own navigation: it sticks to the top while the long page scrolls, jumps to a section when one is
- * pressed and marks the section being read. The Issues entry carries the issue count, so what is worth a look is
- * visible from anywhere on the page.
+ * pressed and marks the section being read. (The Issues entry and its count went with the Issues section, 2026-11-24.)
  */
 export function SectionNav({
   active,
   onJump,
   accent,
-  issues,
-  criticalIssues,
   who,
 }: {
   active: string;
   onJump: (sectionId: string) => void;
   accent: Accent;
-  issues: number;
-  criticalIssues: number;
   /** "Meena Subramanian · UKT-0142": who the page is about, kept in view while scrolling. */
   who: string;
 }) {
@@ -63,17 +58,6 @@ export function SectionNav({
                 )}
               >
                 {section.label}
-                {section.id === "issues" && issues > 0 && (
-                  <span
-                    className={cn(
-                      "min-w-[18px] rounded-full px-1.5 text-center text-[10px] font-black leading-[18px]",
-                      criticalIssues > 0 ? "bg-red-500 text-white" : "bg-amber-400 text-amber-950",
-                    )}
-                    data-testid="pd-nav-issues-count"
-                  >
-                    {issues}
-                  </span>
-                )}
               </button>
             );
           })}

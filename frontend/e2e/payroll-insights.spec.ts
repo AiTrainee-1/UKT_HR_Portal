@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import ExcelJS from "exceljs";
 import { HR_PASSWORD, HR_USERNAME, loginAsHr } from "./helpers";
 
-// The Staff Payroll page's insight views (dashboard, Issues, Skipped, Rules), the Salary Statement (the Payroll tab's Export;
+// The Staff Payroll page's insight views (Skipped, Rules; the Issues view went 2026-11-24), the Salary Statement (the Payroll tab's Export;
 // the Salary tab is the Excess tab since 2026-11-20, see payroll-excess.spec.ts for it in full) and the details page, all
 // read-only explanations of the payroll the engine already stored. Data (seed_e2e.py, February 2026, 24 Mon-Sat days):
 //   Asha Kumar  E2E001 - 24,000, present all 24 days -> paid 24,000 (no shift assigned, no bank details)
@@ -82,52 +82,14 @@ test.afterAll(async ({ request }) => {
   await purge(request);
 });
 
-test.describe("Issues: every detection, with the day it was detected", () => {
-  test("lists each absent working day on its own date, with the details and the rule behind it", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&view=issues`);
-    const absent = issueRows(page, "absent");
-    // Ravi was absent from 16 Feb: 12 working days (Mon-Sat), one issue each
-    await expect(absent).toHaveCount(12);
-    const first = absent.first();
-    await expect(first.getByTestId("issue-detected")).toContainText("Detected on Mon, 16 Feb 2026");
-    await expect(first.getByTestId("issue-detail")).toContainText("No attendance recorded");
-    await expect(first).toContainText("Ravi Nair");
-    await expect(first.getByTestId("issue-impact")).toContainText("1 day");
-    await expect(first.getByTestId("issue-rule")).toContainText("Absent");
-    await expect(absent.last().getByTestId("issue-detected")).toContainText("Sat, 28 Feb 2026");
-    // an absence is a routine loss-of-pay day, not a payroll fault
-    await expect(first).toHaveAttribute("data-severity", "warning");
-  });
-
-  test("the date range narrows the list and lives in the address", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&view=issues&ifrom=2026-02-20&ito=2026-02-21`);
-    await expect(issueRows(page, "absent")).toHaveCount(2);
-    await expect(issueRows(page, "absent").first().getByTestId("issue-detected")).toContainText("Fri, 20 Feb 2026");
-    // changing it by hand keeps the rest of the page's state
-    await page.getByTestId("issues-from").fill("2026-02-26");
-    await page.getByTestId("issues-to").fill("2026-02-26");
-    await expect(issueRows(page, "absent")).toHaveCount(1);
-    await expect(page).toHaveURL(/ifrom=2026-02-26/);
-    await expect(page).toHaveURL(/view=issues/);
-    await expect(page).toHaveURL(/month=2/);
-  });
-
-  test("the employee skipped at generation is listed as a critical issue, with how to fix it", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&view=issues`);
-    const skipped = issueRows(page, "skipped");
-    await expect(skipped).toHaveCount(1);
-    await expect(skipped).toContainText("Meena Nosalary");
-    await expect(skipped).toContainText("No Salary Amount");
-    await expect(skipped.getByTestId("issue-fix")).toContainText("monthly salary");
-    await expect(skipped).toHaveAttribute("data-severity", "critical");
-    // the Issues view's count includes it too
-    await expect(page.getByTestId("view-issues-count")).toHaveText("17");
-  });
-
-  test("an address can open the Issues view on one type, and it lists only that type", async ({ page }) => {
-    await openAs(page, adminToken, `${FEB}&view=issues&icode=absent`);
-    await expect(issueRows(page, "absent")).toHaveCount(12);
-    await expect(issueRows(page, "bank_missing")).toHaveCount(0);
+// The Issues view was taken off the Payroll page (owner 2026-11-24): an old address opens Records, and each payroll's
+// issues stay as the badge on its card (see "the record cards carry each employee's rules and issue badges").
+test.describe("No Issues view", () => {
+  test("an old ?view=issues address opens the records, with no Issues view to choose", async ({ page }) => {
+    await openAs(page, adminToken, `${FEB}&view=issues&layout=cards`);
+    await expect(card(page, "Ravi Nair")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("view-issues")).toHaveCount(0);
+    await expect(issueRows(page, "absent")).toHaveCount(0);
   });
 });
 
@@ -350,7 +312,6 @@ test.describe("Phone width", () => {
     await openAs(page, adminToken, FEB);
     for (const query of [
       "",
-      "&view=issues",
       "&view=skipped",
       "&view=rules",
       "&view=not_included",
@@ -382,8 +343,8 @@ test.describe("Who may see what", () => {
     // reading is untouched: filters, views, the export menu, the details link
     await page.getByTestId("staff-pf-search").fill("Ravi");
     await expect(card(page, "Asha Kumar")).toHaveCount(0);
-    await page.getByTestId("view-issues").click();
-    await expect(issueRows(page, "absent").first()).toBeVisible();
+    await page.getByTestId("view-skipped").click();
+    await expect(page.getByText("Meena Nosalary")).toBeVisible();
     await page.getByTestId("view-records").click();
     await expect(page.getByTestId("staff-export")).toBeEnabled();
 
@@ -571,7 +532,7 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("staff-payroll-tab")).toBeVisible();
   });
 
-  test("explains the payroll: the figures, the days with their attendance categories, every issue with its date and the pay", async ({
+  test("explains the payroll: the figures, the days with their attendance categories and the pay", async ({
     page,
     request,
   }) => {
@@ -597,19 +558,16 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-status")).toContainText("Pending");
     await expect(page.getByTestId("pd-net-bridge")).toBeVisible();
 
-    // a simple page: the days first, then the issues, then the pay; no Overview, Rules, Employee or History
-    await expect(page.getByTestId("pd-nav").getByRole("button")).toHaveText([
-      /^Attendance$/,
-      /^Issues/,
-      /^Pay & deductions$/,
-    ]);
-    for (const gone of ["overview", "rules", "employee", "history"]) {
+    // a simple page: the days first, then the pay; no Overview, Rules, Employee, History or Issues (2026-11-24)
+    await expect(page.getByTestId("pd-nav").getByRole("button")).toHaveText([/^Attendance$/, /^Pay & deductions$/]);
+    await expect(page.getByTestId("pd-kpi-issues")).toHaveCount(0);
+    for (const gone of ["overview", "rules", "employee", "history", "issues"]) {
       await expect(page.getByTestId(`pd-nav-${gone}`)).toHaveCount(0);
       await expect(page.getByTestId(`pd-section-${gone}`)).toHaveCount(0);
     }
     const attendance = await page.getByTestId("pd-section-attendance").boundingBox();
-    const issues = await page.getByTestId("pd-section-issues").boundingBox();
-    expect(attendance!.y).toBeLessThan(issues!.y);
+    const pay = await page.getByTestId("pd-section-pay").boundingBox();
+    expect(attendance!.y).toBeLessThan(pay!.y);
 
     // Attendance: the key names every kind of day (each in a colour of its own) and the other attendance categories
     for (const kind of [
@@ -634,14 +592,6 @@ test.describe("Details page", () => {
     }
     await expect(page.getByTestId("pd-sync")).toBeVisible();
 
-    // Issues: one per absent day, each on its own date
-    await page.getByTestId("pd-nav-issues").click();
-    const absent = page.getByTestId(`pd-issue-${ravi}:absent:2026-02-16`);
-    await expect(absent).toBeVisible();
-    await expect(absent.getByTestId("pd-issue-date")).toContainText("Mon, 16 Feb 2026");
-    await expect(absent.getByTestId("pd-issue-detail")).toContainText("No attendance recorded");
-    await expect(page.getByTestId("pd-issue-count")).toContainText("14");
-
     // Attendance: the calendar says what each day counted as; the table lists the same days
     await page.getByTestId("pd-nav-attendance").click();
     await expect(page.getByTestId("pd-day-2026-02-16")).toBeVisible();
@@ -658,22 +608,14 @@ test.describe("Details page", () => {
 
   test("?section= opens the page on that section", async ({ page, request }) => {
     const ravi = await idOf(request, "E2E002");
+    await openAs(page, adminToken, detailsPath(ravi, "pay"));
+    await expect(page.getByTestId("pd-nav-pay")).toHaveAttribute("aria-current", "location", { timeout: 30_000 });
+    await expect(page.getByTestId("pd-section-pay")).toBeInViewport();
+    // a link made when the page still had an Issues section opens the attendance
     await openAs(page, adminToken, detailsPath(ravi, "issues"));
-    await expect(page.getByTestId("pd-nav-issues")).toHaveAttribute("aria-current", "location", { timeout: 30_000 });
-    await expect(page.getByTestId(`pd-issue-${ravi}:absent:2026-02-16`)).toBeInViewport();
-  });
-
-  test("the Issues section filters by type and by date, and groups by type", async ({ page, request }) => {
-    const ravi = await idOf(request, "E2E002");
-    await openAs(page, adminToken, detailsPath(ravi, "issues"));
-    await expect(page.getByTestId(`pd-issue-${ravi}:absent:2026-02-16`)).toBeVisible({ timeout: 30_000 });
-    await page.getByTestId("pd-issue-from").fill("2026-02-26");
-    await expect(page.locator('[data-testid^="pd-issue-' + ravi + ':absent"]')).toHaveCount(3);
-    await page.getByTestId("pd-issue-reset").click();
-    await expect(page.locator('[data-testid^="pd-issue-' + ravi + ':absent"]')).toHaveCount(12);
-    await page.getByTestId("pd-issue-group-type").click();
-    await expect(page.getByTestId("pd-issues-by-type")).toBeVisible();
-    await expect(page.getByTestId("pd-issue-type-absent")).toBeVisible();
+    await expect(page.getByTestId("pd-nav-attendance")).toHaveAttribute("aria-current", "location", {
+      timeout: 30_000,
+    });
   });
 
   test("Previous and Next move between the month's payrolls without piling up history", async ({ page, request }) => {
@@ -692,11 +634,14 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("staff-pf-search")).toHaveValue("Asha");
   });
 
-  test("the details export: workbook, issues as Excel and CSV, with the detection dates", async ({ page, request }) => {
+  test("the details export: the workbook, with its issues sheet and the detection dates", async ({ page, request }) => {
     const ravi = await idOf(request, "E2E002");
     await openAs(page, adminToken, detailsPath(ravi));
     await expect(page.getByTestId("pd-kpis")).toBeVisible({ timeout: 30_000 });
     await page.getByTestId("export-menu").click();
+    // the Issues Excel / CSV items went with the Issues section (owner 2026-11-24): the workbook still has the issues
+    await expect(page.getByTestId("export-menu-issues-xlsx")).toHaveCount(0);
+    await expect(page.getByTestId("export-menu-issues-csv")).toHaveCount(0);
     const [workbook] = await Promise.all([
       page.waitForEvent("download"),
       page.getByTestId("export-menu-workbook").click(),
@@ -705,6 +650,7 @@ test.describe("Details page", () => {
     const book = new ExcelJS.Workbook();
     await book.xlsx.readFile((await workbook.path())!);
     expect(book.worksheets.length).toBeGreaterThanOrEqual(4);
+    expect(book.worksheets.map((sheet) => sheet.name)).toContain("Issues");
     const text = book.worksheets
       .flatMap((sheet) => {
         const out: string[] = [];
@@ -713,24 +659,8 @@ test.describe("Details page", () => {
       })
       .join("\n");
     expect(text).toContain("Ravi Nair");
+    expect(text).toContain("Date detected");
     expect(text).toContain("No attendance recorded on this working day");
-
-    // the menu closes by itself once the workbook is made: wait for that, or the next click would toggle it shut again
-    await expect(page.getByTestId("export-menu-workbook")).toHaveCount(0);
-    await page.getByTestId("export-menu").click();
-    const [csv] = await Promise.all([
-      page.waitForEvent("download"),
-      page.getByTestId("export-menu-issues-csv").click(),
-    ]);
-    expect(csv.suggestedFilename()).toMatch(/\.csv$/);
-    const fs = await import("node:fs/promises");
-    const lines = (await fs.readFile((await csv.path())!, "utf8")).split(/\r?\n/).filter(Boolean);
-    expect(lines[0]).toMatch(/detected/i);
-    // one line per issue (12 absences + the whole-period ones) and the header
-    expect(lines.length).toBeGreaterThanOrEqual(13);
-    expect(lines.some((l) => l.includes("16-02-2026") || l.includes("2026-02-16") || l.includes("16 Feb 2026"))).toBe(
-      true,
-    );
   });
 
   test("Mark as Cleared from the details page updates the status, and generating again keeps it Cleared", async ({
@@ -777,8 +707,8 @@ test.describe("Details page", () => {
     await expect(page.getByTestId("pd-kpis")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("pd-mark-paid")).toBeDisabled();
     await expect(page.getByTestId("export-menu")).toBeEnabled();
-    await page.getByTestId("pd-nav-issues").click();
-    await expect(page.getByTestId(`pd-issue-${ravi}:absent:2026-02-16`)).toBeVisible();
+    await page.getByTestId("pd-nav-pay").click();
+    await expect(page.getByTestId("pd-section-pay")).toBeVisible();
   });
 
   test("no section of the page scrolls sideways on a phone", async ({ page, request }) => {

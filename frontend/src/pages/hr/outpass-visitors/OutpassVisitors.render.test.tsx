@@ -249,7 +249,8 @@ describe("Outpass: each tab renders only its section", () => {
   it("Overview > Gate QR submissions: only the QR submissions", async () => {
     mountPage(`${OUTPASS}/overview/qr-submissions`);
     await waitFor(() => ready("outpass-qr-submissions"), "the QR submissions");
-    expect(text(q("outpass-qr-submissions"))).toContain("Asha QR");
+    // This Month (the date filter's default): the month's submissions
+    expect(text(q("outpass-qr-submissions"))).toContain("Person 1 QR");
     expect(q("outpass-passes")).toBeNull();
     expect(q("outpass-requests")).toBeNull();
     expect(q("outpass-in-out")).toBeNull();
@@ -326,31 +327,45 @@ describe("Outpass: switching", () => {
     expect(here()).toBe(`${OUTPASS}/requests?x=1`);
   });
 
-  it("the Today / This Week / This Month filter is still set after a nested switch and after a trip to another tab", async () => {
+  it("the date filter (This Month by default) is still set after a nested switch and after a trip to another tab", async () => {
     mountPage(`${OUTPASS}/overview/passes`);
     await waitFor(() => ready("outpass-passes"), "the passes");
-    expect(selected("Today")).toBe(true);
-    expect(text(q("outpass-passes"))).toContain("4 passes");
+    const pressed = (id: string) => must(id).getAttribute("aria-pressed") === "true";
+    expect(pressed("overview-dates-month")).toBe(true);
+    expect(text(q("outpass-passes"))).toContain("5 passes");
+    expect(text(q("outpass-passes"))).toContain("October 2026");
 
-    click(tab("This Month"));
-    await waitFor(() => text(q("outpass-passes")).includes("5 passes"), "the month's passes");
-    expect(selected("This Month")).toBe(true);
+    click(must("overview-dates-today"));
+    await waitFor(() => text(q("outpass-passes")).includes("4 passes"), "today's passes");
+    expect(pressed("overview-dates-today")).toBe(true);
+    expect(here()).toContain("range=today");
 
-    // the other section of Overview shares the filter, and asks for the same range
+    // the other section of Overview shares the filter, and asks for the same days
     click(nestedTab("outpass-overview-nested", "qr-submissions"));
     await waitFor(() => ready("outpass-qr-submissions"), "the QR submissions");
-    expect(selected("This Month")).toBe(true);
-    await waitFor(() => text(q("outpass-qr-submissions")).includes("Person 5 QR"), "the month's submissions");
-    expect(text(q("outpass-qr-submissions"))).toContain("5 submissions");
+    expect(pressed("overview-dates-today")).toBe(true);
+    await waitFor(() => text(q("outpass-qr-submissions")).includes("Babu QR"), "today's submissions");
+    expect(text(q("outpass-qr-submissions"))).toContain("2 submissions");
 
-    // away to Requests (no range there) and back: still the month
+    // away to Requests (no dates there) and back: still today
     click(tab("Requests"));
     await waitFor(() => ready("outpass-requests"), "the requests");
+    expect(here()).not.toContain("range=");
     click(tab("Overview"));
     await waitFor(() => ready("outpass-passes"), "the passes");
-    expect(selected("This Month")).toBe(true);
-    expect(text(q("outpass-passes"))).toContain("5 passes");
-    expect(rangeCalls("/api/outpass/records").some((s) => s.includes("range=month"))).toBe(true);
+    expect(pressed("overview-dates-today")).toBe(true);
+    expect(text(q("outpass-passes"))).toContain("4 passes");
+    expect(rangeCalls("/api/outpass/records").some((s) => s.includes("from=2026-10-14&to=2026-10-14"))).toBe(true);
+  });
+
+  it("an earlier month: the passes of that month only (none in September here)", async () => {
+    mountPage(`${OUTPASS}/overview/passes`);
+    await waitFor(() => ready("outpass-passes") && text(q("outpass-passes")).includes("5 passes"), "the passes");
+    click(must("overview-dates-prev"));
+    await waitFor(() => text(q("outpass-passes")).includes("No gate passes for September 2026"), "September");
+    expect(here()).toContain("month=2026-09");
+    expect(rangeCalls("/api/outpass-requests").some((s) => s.includes("from=2026-09-01&to=2026-09-30"))).toBe(true);
+    expect(must("overview-tile-passes").textContent).toContain("0");
   });
 });
 
@@ -359,10 +374,10 @@ describe("pill counts", () => {
     mountPage(`${OUTPASS}/overview/passes`);
     await waitFor(() => ready("outpass-passes"), "the passes");
     await waitFor(() => nestedLabels("outpass-overview-nested").every((l) => /\(\d+\)/.test(l)), "the nested counts");
-    // 4 passes today; the 2 QR submissions of today
+    // This Month (the default): all 5 passes; the month's 5 QR submissions
     expect(nestedLabels("outpass-overview-nested").map((l) => l.replace(/\s+/g, ""))).toEqual([
-      "Passes(4)",
-      "GateQRsubmissions(2)",
+      "Passes(5)",
+      "GateQRsubmissions(5)",
     ]);
     // 1 request HR can decide (the other waits for a HOD); 2 people still out today (In/Out's own summary)
     const labels = pillLabels("outpass-subtabs").map((l) => l.replace(/\s+/g, ""));
@@ -372,13 +387,13 @@ describe("pill counts", () => {
   it("follow the filter: the passes and the QR submissions of the chosen range", async () => {
     mountPage(`${OUTPASS}/overview/passes`);
     await waitFor(() => ready("outpass-passes"), "the passes");
-    click(tab("This Month"));
+    click(must("overview-dates-today"));
     await waitFor(
       () =>
         nestedLabels("outpass-overview-nested")
           .map((l) => l.replace(/\s+/g, ""))
-          .join() === "Passes(5),GateQRsubmissions(5)",
-      "the month's counts",
+          .join() === "Passes(4),GateQRsubmissions(2)",
+      "today's counts",
     );
   });
 
@@ -423,26 +438,26 @@ describe("Tea Break", () => {
   it("the dates and the status are still set after a trip to Rule (they live in the address)", async () => {
     mountPage(`${TEA}/records`);
     await waitFor(() => ready("tea-break-list"), "the records");
-    click(must("tea-dates-week"));
+    click(must("tea-dates-today"));
     await waitFor(() => !!q("tea-tile-overtime"), "the tiles");
     click(must("tea-tile-overtime"));
     await waitFor(() => !text(q("tea-break-list")).includes("Tea Ontime"), "the filtered list");
     expect(text(q("tea-break-list"))).toContain("Tea Overtime");
-    expect(here()).toBe(`${TEA}/records?range=week&status=overtime`);
+    expect(here()).toBe(`${TEA}/records?range=today&status=overtime`);
 
     click(tab("Rule"));
-    expect(here()).toBe(`${TEA}/rule?range=week&status=overtime`);
+    expect(here()).toBe(`${TEA}/rule?range=today&status=overtime`);
     await waitFor(() => ready("tea-break-rule"), "the rule");
     click(tab("Records"));
     await waitFor(() => ready("tea-break-list"), "the records");
-    expect(must("tea-dates-week").getAttribute("aria-pressed")).toBe("true");
+    expect(must("tea-dates-today").getAttribute("aria-pressed")).toBe("true");
     expect(must("tea-tile-overtime").getAttribute("aria-pressed")).toBe("true");
     await waitFor(() => text(q("tea-break-list")).includes("Tea Overtime"), "the list");
     expect(text(q("tea-break-list"))).not.toContain("Tea Ontime");
     // the list itself (not its summary or options) was asked for with both
     const list = world.gets.filter((u) => u.split("?")[0] === "/api/tea-break/records").at(-1);
     expect(list).toContain("status=overtime");
-    expect(list).toContain("from=2026-10-12");
+    expect(list).toContain("from=2026-10-14&to=2026-10-14");
   });
 
   it("the records of a tab that is not on screen are not asked for", async () => {

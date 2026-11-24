@@ -15,8 +15,6 @@ import {
   haystack,
   matchesQuery,
   normalizeHub,
-  periodRange,
-  rangeInvalid,
   serverParams,
   sortItems,
   statusChip,
@@ -118,34 +116,19 @@ describe("normalizeHub", () => {
   });
 });
 
-describe("period and server parameters", () => {
-  const now = new Date(2026, 9, 10, 15, 30); // 10 Oct 2026
-
-  it("turns each period into a submitted-date window", () => {
-    expect(periodRange("all", now)).toEqual({});
-    expect(periodRange("today", now)).toEqual({ since: "2026-10-10", until: "2026-10-10" });
-    expect(periodRange("week", now)).toEqual({ since: "2026-10-04", until: "2026-10-10" });
-    expect(periodRange("month", now)).toEqual({ since: "2026-10-01", until: "2026-10-10" });
-    expect(periodRange("custom", now, "2026-09-01", "")).toEqual({ since: "2026-09-01" });
-    expect(periodRange("custom", now, "2026-09-01", "2026-09-30")).toEqual({
-      since: "2026-09-01",
-      until: "2026-09-30",
-    });
-  });
-
-  it("a week that crosses a month end starts in the month before", () => {
-    expect(periodRange("week", new Date(2026, 10, 3)).since).toBe("2026-10-28");
-  });
-
-  it("sends only what the server filters on", () => {
-    expect(serverParams(NO_FILTERS, now)).toEqual({ kind: "all" });
+describe("server parameters", () => {
+  it("sends only what the server filters on, the date filter's days as from / to", () => {
+    expect(serverParams(NO_FILTERS)).toEqual({ kind: "all" });
     expect(
-      serverParams(filters({ status: "approved", period: "today", branch: "10", department: "5", type: "staff" }), now),
+      serverParams(filters({ status: "approved", branch: "10", department: "5", type: "staff" }), undefined, {
+        from: "2026-10-10",
+        to: "2026-10-10",
+      }),
     ).toEqual({
       kind: "all",
       status: "approved",
-      since: "2026-10-10",
-      until: "2026-10-10",
+      from: "2026-10-10",
+      to: "2026-10-10",
       branchId: "10",
       departmentId: "5",
       employeeType: "staff",
@@ -154,17 +137,11 @@ describe("period and server parameters", () => {
 
   it("'waiting for HR / HOD' asks the server for the waiting ones and splits them here", () => {
     for (const status of ["waiting", "waiting_hr", "waiting_hod"] as const) {
-      expect(serverParams(filters({ status }), now).status, status).toBe("waiting");
+      expect(serverParams(filters({ status })).status, status).toBe("waiting");
     }
-    expect(serverParams(filters({ query: "asha", sort: "oldest", requestType: "general" }), now)).toEqual({
+    expect(serverParams(filters({ query: "asha", sort: "oldest", requestType: "general" }))).toEqual({
       kind: "all",
     });
-  });
-
-  it("notices a range that ends before it starts", () => {
-    expect(rangeInvalid(filters({ period: "custom", from: "2026-10-05", to: "2026-10-01" }))).toBe(true);
-    expect(rangeInvalid(filters({ period: "custom", from: "2026-10-01", to: "2026-10-05" }))).toBe(false);
-    expect(rangeInvalid(filters({ period: "month", from: "2026-10-05", to: "2026-10-01" }))).toBe(false);
   });
 
   it("counts the filters that narrow the list, not the search or the order", () => {
