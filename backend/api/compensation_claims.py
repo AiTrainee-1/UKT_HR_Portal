@@ -414,16 +414,22 @@ def _window_error(day: dt.date, ctx: Context) -> ClaimError | None:
 
 
 def _old_rule_error(kind: str, day: dt.date, ctx: Context) -> ClaimError | None:
-    """ot_* and birthday follow the claim rules only from claims_from on (owner decision 6: no history rewrite)."""
+    """ot_* and birthday follow the claim rules only from claims_from on (owner decision 6: no history rewrite); a
+    birthday also from the birthday-only CompensationConfig.birthday_claims_from (owner 2026-11-25)."""
+    if kind == HolidayWorkClaim.KIND_BIRTHDAY:
+        if ctx.cfg.birthday_claims_apply_on(day):
+            return None
+        since = date_text(min(d for d in (ctx.cfg.claims_from, ctx.cfg.birthday_claims_from) if d is not None))
+        return ClaimError(
+            "not_eligible", f"Before {since} birthday leave was applied automatically, so there is nothing to claim."
+        )
     if ctx.cfg.claims_apply_on(day):
         return None
     since = date_text(ctx.cfg.claims_from)
     if kind == HolidayWorkClaim.KIND_OT_ALLOWANCE:
         text = f"Before {since} the late-in allowance was applied automatically, so there is nothing to claim."
-    elif kind == HolidayWorkClaim.KIND_OT_SHIFT:
-        text = f"Before {since} OT shift compensation was given by HR: please contact HR about this day."
     else:
-        text = f"Before {since} birthday leave was applied automatically, so there is nothing to claim."
+        text = f"Before {since} OT shift compensation was given by HR: please contact HR about this day."
     return ClaimError("not_eligible", text)
 
 

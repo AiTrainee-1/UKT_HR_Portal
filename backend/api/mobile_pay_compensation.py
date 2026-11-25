@@ -141,7 +141,7 @@ def _birthday_source_label(item: dict, cfg) -> str | None:
         day = date.fromisoformat(item["date"][:10])
     except ValueError:
         return None
-    if not cfg.claims_apply_on(day):
+    if not cfg.birthday_claims_apply_on(day):
         return None
     if item["kind"] == "birthday_credit":
         claim = item.get("claim") or {}

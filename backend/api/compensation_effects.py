@@ -428,7 +428,7 @@ def birthday_outcomes(
                 day,
             )
             continue
-        if not config.claims_apply_on(day):
+        if not config.birthday_claims_apply_on(day):
             out[key] = _result(
                 BIRTHDAY_OLD_RULE,
                 "Before the claim rules started, a birthday on a working day was paid automatically.",

@@ -962,7 +962,7 @@ def _birthday_items(
                 saturday_off = bool(assignment and assignment.saturday_off)
             why = birthday_employee_problem(emp, day, saturday_off)
             benefits = not why
-        if benefits and cfg.claims_apply_on(day):
+        if benefits and cfg.birthday_claims_apply_on(day):
             items.append(_birthday_claim_item(emp, day, today, claimed.get(day), ctx))
             continue
         applied = day in records

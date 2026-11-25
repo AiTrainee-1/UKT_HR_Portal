@@ -460,7 +460,9 @@ def birthday_rule(emp, d: date_type, ctx: CompContext, assignments=None) -> str 
         return None
     if is_off_day(emp, d, assignments):
         return None
-    return BIRTHDAY_RULE_NEW if ctx.config.claims_apply_on(d) else BIRTHDAY_RULE_OLD
+    # the birthday's own claims date (CompensationConfig.birthday_claims_from) may start the claim rules before
+    # claims_from for birthdays only (owner 2026-11-25)
+    return BIRTHDAY_RULE_NEW if ctx.config.birthday_claims_apply_on(d) else BIRTHDAY_RULE_OLD
 
 
 def birthday_applies(emp, d: date_type, ctx: CompContext, assignments=None) -> bool:

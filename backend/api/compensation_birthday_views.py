@@ -103,6 +103,17 @@ def _claim_json(claim: dict | None) -> dict | None:
     }
 
 
+def _birthday_claims_start(cfg) -> str | None:
+    """The first birthday that follows the claim rules (CompensationConfig.birthday_claims_apply_on), as ISO text;
+    None = every birthday (no claims date)."""
+    if cfg.claims_from is None:
+        return None
+    start = cfg.claims_from
+    if cfg.birthday_claims_from is not None and cfg.birthday_claims_from < start:
+        start = cfg.birthday_claims_from
+    return start.isoformat()
+
+
 def _marker_trusted(record) -> bool:
     """The stored day carries the engine's birthday marker and is not a day set by hand that pays less than a full day
     (compensation_effects._birthday_from_day reads the marker the same way)."""
@@ -250,7 +261,8 @@ def compensation_birthdays(request: Request) -> Response:
                 "birthday": master and cfg.birthday_enabled,
                 "effectiveFrom": cfg.birthday_effective_from.isoformat() if cfg.birthday_effective_from else None,
                 # the claim rules (absent = paid leave, worked = a credit to claim) apply to birthdays from this day on
-                "claimsFrom": cfg.claims_from.isoformat() if cfg.claims_from else None,
+                # (the birthday's own claims date when that is earlier: CompensationConfig.birthday_claims_from)
+                "claimsFrom": _birthday_claims_start(cfg),
             },
             "count": len(rows),
             "benefitCount": sum(1 for r in rows if r["benefits"]),

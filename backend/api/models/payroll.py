@@ -1517,6 +1517,12 @@ class CompensationConfig(models.Model):
     # birthday_enabled and the birthday is on or after this day). Days before it keep the old rules even when recomputed.
     # Set to the day 0166 ran (IST) by its data step; editable later only forward. See claims_apply_on().
     claims_from = models.DateField(null=True, blank=True, db_column="claims_from")
+    # Birthdays only (owner 2026-11-25, migration 0185): a birthday on or after this day follows the claim rules even
+    # when it is before claims_from (worked = one 1.00 credit the employee claims by hand; absent / on leave = paid
+    # birthday leave) instead of the old automatic paid day. Null = birthdays follow claims_from like everything else.
+    # It only ever brings the birthday claim rules EARLIER: OT, holiday work and the late-in allowance keep claims_from.
+    # See birthday_claims_apply_on().
+    birthday_claims_from = models.DateField(null=True, blank=True, db_column="birthday_claims_from")
     # Type 2 credit by the quarters rule: OT minutes / the employee's working shift length, in quarters, rounded down,
     # capped at 1.00 a day (below 0.25 = no Type 2 credit). Off = the old last-punch ladder (CompensationRule kind=shift).
     ot_quarter_rule = models.BooleanField(default=True, db_default=True, db_column="ot_quarter_rule")
@@ -1543,6 +1549,15 @@ class CompensationConfig(models.Model):
         a fresh install with no history to protect) = every day. The single place both the claims (BE-1) and the engine /
         detection (BE-2) ask; the feature switches (allowance_enabled, birthday_enabled ...) are checked by the callers."""
         return self.claims_from is None or day >= self.claims_from
+
+    def birthday_claims_apply_on(self, day: date) -> bool:
+        """Whether the birthday `day` follows the claim rules (a normal working day: worked = a 1.00 credit to claim,
+        absent / on leave = paid birthday leave) rather than the old automatic paid day: from claims_from on, or from the
+        birthday-only `birthday_claims_from` when that is earlier. The one place every birthday reader asks (the engine's
+        compensation_engine.birthday_rule, the outcomes, the claims, the employee pages); never used for OT / holiday work."""
+        if self.claims_apply_on(day):
+            return True
+        return self.birthday_claims_from is not None and day >= self.birthday_claims_from
 
     def ot_quarter_rule_on(self, day: date) -> bool:
         """Whether the Type 2 quarters rule decides the OT of `day`: the day follows the claim rules (claims_apply_on) and
