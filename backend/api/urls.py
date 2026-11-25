@@ -303,6 +303,7 @@ from .connector_views import (
 )
 from .chat_views import (
     chat_channels, chat_messages, chat_message_reactions,
+    chat_media_upload, chat_message_media, chat_settings,
 )
 from .backup_views import (
     backup_status, run_backup, download_backup, backup_schedule_view, backup_drive_view,
@@ -886,6 +887,10 @@ urlpatterns = [
     path("chat/channels", chat_channels),
     path("chat/channels/<int:pk>/messages", chat_messages),
     path("chat/messages/<int:pk>/reactions", chat_message_reactions),
+    # GIFs and voice messages (owner 2026-11-25): upload, the file (channel members only), HR's expiry setting
+    path("chat/channels/<int:pk>/media", chat_media_upload),
+    path("chat/messages/<int:pk>/media", chat_message_media),
+    path("chat/settings", chat_settings),
 
     # ── Database Backup (Settings → Backup) ──────────────────────────────────
     path("backup", backup_status),
@@ -1056,6 +1061,8 @@ urlpatterns = [
     path("", include("api.urls_mobile_settlement")),
     path("", include("api.urls_mobile_reminders")),
     path("", include("api.urls_mobile_approvals")),
+    # ── Mobile Home "My Insights" (owner 2026-11-25) ──
+    path("", include("api.urls_mobile_analytics")),
     # ── Mobile round 2026-11-24: withdraw my own Leave / Permission / Casual Leave request ──
     path("", include("api.urls_mobile_withdraw")),
     # ── Employee Enquiries (mobile "Enquiries" + the HR portal's Enquiries page) ──

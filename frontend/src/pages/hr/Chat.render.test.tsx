@@ -24,15 +24,35 @@ const UNIT1: Channel = { id: 3, type: "company", name: "Company - Unit1", branch
 
 let channels: Channel[] = [];
 let posts: { path: string; body: Record<string, unknown> }[] = [];
+// Chat media expiry (2026-11-25): what GET /api/chat/settings answers, and every PUT
+let mediaDays = 7;
+let settingsPuts: Record<string, unknown>[] = [];
+const settingsBody = () => ({
+  mediaExpiryDays: mediaDays,
+  minDays: 1,
+  maxDays: 90,
+  defaultDays: 7,
+  updatedBy: null,
+  updatedAt: null,
+});
 
 function install(list: Channel[]) {
   channels = list;
   posts = [];
+  mediaDays = 7;
+  settingsPuts = [];
   h.fetch.mockReset();
   h.fetch.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const path = url.split("?")[0];
     if (method === "GET" && path === "/api/chat/channels") return channels;
+    if (method === "GET" && path === "/api/chat/settings") return settingsBody();
+    if (method === "PUT" && path === "/api/chat/settings") {
+      const body = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
+      settingsPuts.push(body);
+      mediaDays = Number(body.mediaExpiryDays);
+      return settingsBody();
+    }
     if (method === "GET" && /^\/api\/chat\/channels\/\d+\/messages$/.test(path)) return [];
     if (method === "POST" && /^\/api\/chat\/channels\/\d+\/messages$/.test(path)) {
       const body = JSON.parse(init?.body ?? "{}") as Record<string, unknown>;
@@ -169,5 +189,43 @@ describe("Send to all branches", () => {
     });
     await waitFor(() => !!q("chat-also-posted"), "the note");
     expect(text(q("chat-also-posted"))).toBe("Also posted in 1 other company chat");
+  });
+});
+
+describe("Chat media expiry (days)", () => {
+  async function setDays(value: string) {
+    const input = q("chat-media-expiry-input") as HTMLInputElement;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await settle(10);
+  }
+  const saveButton = () => q("chat-media-expiry-save");
+
+  it("shows how long GIFs and voice messages stay, and saves a new number of days", async () => {
+    install([HEAD_OFFICE]);
+    await open();
+    await waitFor(() => text(q("chat-media-expiry-value")).includes("7 days"), "the setting");
+    await click(q("chat-media-expiry-edit"));
+    expect((q("chat-media-expiry-input") as HTMLInputElement).value).toBe("7");
+    await setDays("30");
+    await click(saveButton());
+    await waitFor(() => settingsPuts.length === 1, "the save");
+    expect(settingsPuts[0]).toEqual({ mediaExpiryDays: 30 });
+    await waitFor(() => text(q("chat-media-expiry-value")).includes("30 days"), "the new value");
+  });
+
+  it("does not save a number outside 1-90 and says why", async () => {
+    install([HEAD_OFFICE]);
+    await open();
+    await waitFor(() => !!q("chat-media-expiry-edit"), "the setting");
+    await click(q("chat-media-expiry-edit"));
+    await setDays("120");
+    await click(saveButton());
+    expect(text(q("chat-media-expiry-error"))).toBe("Choose from 1 to 90 days.");
+    await setDays("0");
+    expect(text(q("chat-media-expiry-error"))).toBe("Choose from 1 to 90 days.");
+    expect(settingsPuts).toEqual([]);
   });
 });

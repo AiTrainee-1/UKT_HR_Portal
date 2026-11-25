@@ -12,7 +12,7 @@ from django.test import TestCase
 
 from . import approval_workflow as approval
 from .jwt_utils import sign_token
-from .mobile_settlement_views import schedule_plan, window
+from .mobile_settlement_views import schedule_plan, term_window, window
 from .models import Advance, AdvanceRepayment, Department, Employee, HRUser
 from .payroll_views import _pending_advance_repayments
 from .settlement_views import whole_rupee_emi
@@ -25,6 +25,10 @@ def _bearer(payload: dict) -> dict:
 def on(day: date):
     """Pretend the factory date is `day`."""
     return patch("api.mobile_settlement_views.ist_today", return_value=day)
+
+
+# A day inside the Salary Advance window (the 20th to the 22nd, owner 2026-11-25), so both forms can be sent.
+DAY = date(2026, 10, 21)
 
 
 class _Base(TestCase):
@@ -49,7 +53,7 @@ class _Base(TestCase):
     def tearDown(self):
         approval.clear_cache()
 
-    def apply(self, body: dict, day: date = date(2026, 10, 25), auth=None):
+    def apply(self, body: dict, day: date = DAY, auth=None):
         with on(day):
             r = self.client.post("/api/my/advances", body, content_type="application/json", **(auth or self.me))
         if r.status_code == 201:
@@ -60,10 +64,10 @@ class _Base(TestCase):
             )
         return r
 
-    def general(self, amount=10000, day: date = date(2026, 10, 25), auth=None):
+    def general(self, amount=10000, day: date = DAY, auth=None):
         return self.apply({"advanceType": "general", "amount": amount, "purpose": "School fees"}, day, auth)
 
-    def term(self, amount=10000, months=3, day: date = date(2026, 10, 25), auth=None):
+    def term(self, amount=10000, months=3, day: date = DAY, auth=None):
         return self.apply(
             {"advanceType": "term", "amount": amount, "repaymentMonths": months, "purpose": "House repair"}, day, auth
         )
@@ -80,20 +84,34 @@ class _Base(TestCase):
 
 
 class WindowTests(_Base):
+    """Owner decision 2026-11-25: a Salary Advance only from the 20th to the 22nd of each month (both included, factory
+    date); a Term Loan on any day."""
+
     def test_the_19th_is_refused_with_the_opening_date(self):
         r = self.general(day=date(2026, 11, 19))
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(r.json()["code"], "window_closed")
         self.assertIn("20 November", r.json()["error"])
+        self.assertIn("20th to the 22nd", r.json()["error"])
         self.assertFalse(Advance.objects.exists())
 
-    def test_the_20th_and_the_last_day_are_open(self):
-        self.assertEqual(self.term(day=date(2026, 11, 20)).status_code, 201)
-        self.assertEqual(self.general(day=date(2026, 11, 30)).status_code, 201)
+    def test_a_salary_advance_is_open_from_the_20th_to_the_22nd(self):
+        self.assertEqual(self.general(day=date(2026, 11, 20)).status_code, 201)
+        self.assertEqual(self.general(day=date(2026, 11, 22), auth=self.them).status_code, 201)
 
-    def test_the_first_of_the_month_is_closed_for_both_forms(self):
-        self.assertEqual(self.term(day=date(2026, 12, 1)).json()["code"], "window_closed")
-        self.assertEqual(self.general(day=date(2026, 12, 1)).json()["code"], "window_closed")
+    def test_the_23rd_and_the_month_end_are_closed_for_a_salary_advance(self):
+        for day in (date(2026, 11, 23), date(2026, 11, 30), date(2026, 12, 1)):
+            r = self.general(day=day)
+            self.assertEqual((r.status_code, r.json()["code"]), (400, "window_closed"), day)
+        self.assertIn("20 December", self.general(day=date(2026, 11, 25)).json()["error"])
+        self.assertFalse(Advance.objects.exists())
+
+    def test_a_term_loan_can_be_applied_for_on_any_day(self):
+        for n, day in enumerate((date(2026, 12, 1), date(2026, 12, 19), date(2026, 12, 23), date(2026, 12, 31))):
+            r = self.term(day=day)
+            self.assertEqual(r.status_code, 201, (day, r.content))
+            # one Term Loan may wait for HR at a time: decide it before the next day's application
+            self.hr_put(r.json()["id"], {"status": "rejected", "decisionRemark": f"Test {n}"})
 
     def test_the_window_follows_the_factory_date_not_utc(self):
         class FakeDateTime(datetime):
@@ -116,16 +134,43 @@ class WindowTests(_Base):
             body = self.client.get("/api/my/advances/eligibility", **self.me).json()
         w = body["window"]
         self.assertEqual(
-            (w["isOpen"], w["opensOn"], w["closesOn"], w["daysUntilOpen"]), (False, "2026-11-20", "2026-11-30", 15)
+            (w["isOpen"], w["opensOn"], w["closesOn"], w["daysUntilOpen"]), (False, "2026-11-20", "2026-11-22", 15)
         )
         self.assertFalse(body["salaryAdvance"]["canApply"])
         self.assertIn("20 November", body["salaryAdvance"]["reason"])
-        self.assertFalse(body["termLoan"]["canApply"])
+        self.assertTrue(body["termLoan"]["canApply"])  # a Term Loan has no window
+        self.assertIsNone(body["termLoan"]["reason"])
+        # each form's own window; `window` (what older apps read) is the Salary Advance one
+        self.assertEqual(body["windows"]["general"], w)
+        t = body["windows"]["term"]
+        self.assertEqual((t["isOpen"], t["alwaysOpen"], t["closesOn"], t["type"]), (True, True, None, "term"))
+        self.assertEqual((w["type"], w["alwaysOpen"], w["opensOnDay"], w["closesOnDay"]), ("general", False, 20, 22))
+
+    def test_after_the_22nd_the_window_is_next_months(self):
+        with on(date(2026, 11, 25)):
+            body = self.client.get("/api/my/advances/eligibility", **self.me).json()
+        w = body["window"]
+        self.assertEqual(
+            (w["isOpen"], w["opensOn"], w["closesOn"], w["nextOpensOn"], w["daysUntilOpen"], w["daysLeft"]),
+            (False, "2026-12-20", "2026-12-22", "2026-12-20", 25, 0),
+        )
+        self.assertIn("20 December", w["message"])
+        self.assertIn("Term Loan on any day", w["message"])
+        self.assertFalse(body["salaryAdvance"]["canApply"])
+        self.assertIn("20 December", body["salaryAdvance"]["reason"])
+        self.assertTrue(body["termLoan"]["canApply"])
 
     def test_window_rules(self):
-        self.assertTrue(window(date(2027, 2, 28))["isOpen"])
-        self.assertEqual(window(date(2027, 2, 28))["daysLeft"], 1)
+        self.assertFalse(window(date(2027, 2, 28))["isOpen"])
+        self.assertEqual(window(date(2027, 2, 28))["opensOn"], "2027-03-20")
+        self.assertTrue(window(date(2027, 2, 22))["isOpen"])
+        self.assertEqual(window(date(2027, 2, 22))["daysLeft"], 1)
+        self.assertEqual(window(date(2027, 2, 20))["daysLeft"], 3)
+        self.assertEqual(window(date(2026, 12, 21))["nextOpensOn"], "2027-01-20")
         self.assertEqual(window(date(2026, 12, 25))["nextOpensOn"], "2027-01-20")
+        self.assertEqual(window(date(2026, 12, 25))["closesOn"], "2027-01-22")
+        self.assertEqual(window(date(2026, 12, 19))["daysUntilOpen"], 1)
+        self.assertTrue(term_window(date(2026, 12, 25))["isOpen"])
 
 
 class SalaryAdvanceTests(_Base):
@@ -403,3 +448,12 @@ class RecordsTests(_Base):
         self.assertEqual(body["termLoan"]["firstDeductionLabel"], "January 2027")
         self.assertTrue(body["salaryAdvance"]["canApply"] and body["termLoan"]["canApply"])
         self.assertEqual(len(body["rules"]), 5)
+
+    def test_closed_window_names_the_salary_of_the_next_window(self):
+        # 2026-11-25: after the 22nd the next Salary Advance can only be asked for next month, so next month's salary.
+        with on(date(2026, 12, 25)):
+            after = self.client.get("/api/my/advances/eligibility", **self.me).json()["salaryAdvance"]
+        with on(date(2026, 12, 5)):
+            before = self.client.get("/api/my/advances/eligibility", **self.me).json()["salaryAdvance"]
+        self.assertEqual(after["deductionLabel"], "January 2027")
+        self.assertEqual(before["deductionLabel"], "December 2026")

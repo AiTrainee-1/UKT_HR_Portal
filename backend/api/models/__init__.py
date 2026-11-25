@@ -151,6 +151,7 @@ from .chat import (
     ChatChannel,
     ChatMessage,
     ChatReaction,
+    ChatSettings,
 )
 from .whatsapp import (
     EmployeeOtp,

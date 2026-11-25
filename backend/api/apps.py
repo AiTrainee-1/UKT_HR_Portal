@@ -199,3 +199,11 @@ class ApiConfig(AppConfig):
             push_delivery_scheduler.start_scheduler_if_needed()
         except Exception as e:
             logger.warning("Phone push sweep bootstrap skipped: %s", e)
+
+        try:
+            # chat GIFs / voice messages past their expiry (HR's Chat media expiry, 7 days by default): every 30 minutes
+            from . import chat_media_scheduler
+
+            chat_media_scheduler.start_scheduler_if_needed()
+        except Exception as e:
+            logger.warning("Chat media expiry sweep bootstrap skipped: %s", e)

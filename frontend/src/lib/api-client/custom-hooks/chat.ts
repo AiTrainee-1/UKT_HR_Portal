@@ -31,6 +31,10 @@ export type ChatMessageItem = {
   createdAt: string | null;
   /** Set on an Attendance Notify report (null / missing on every other message). */
   report?: ChatReport | null;
+  /** "gif" / "voice" for a GIF or voice message from the Employee App (2026-11-25); `text` then says "🎤 Voice message"
+   *  or "🖼️ GIF". Older servers send neither field. */
+  kind?: "text" | "gif" | "voice";
+  media?: { url: string | null; expiresAt: string | null; expired: boolean; durationMs?: number | null } | null;
 };
 
 /** The message the server sends back for a post; with "all branches", how many other company chats got it too. */
@@ -92,6 +96,58 @@ export const useSendChatMessage = () => {
       queryClient.invalidateQueries({
         queryKey: vars.allBranches ? ["/api/chat/channels"] : ["/api/chat/channels", vars.channelId, "messages"],
       });
+    },
+  });
+};
+
+// ── Chat media expiry (owner 2026-11-25) ─────────────────────────────────────
+// GIFs and voice messages sent from the Employee App are deleted from the server after this many days (7 by default).
+// HR changes it on the Chat page; the change also applies to GIFs and voice messages still on the server.
+
+export type ChatSettingsItem = {
+  mediaExpiryDays: number;
+  minDays: number;
+  maxDays: number;
+  defaultDays: number;
+  updatedBy: string | null;
+  updatedAt: string | null;
+};
+
+export const CHAT_MEDIA_EXPIRY_LIMITS = { min: 1, max: 90, default: 7 } as const;
+
+/** The number of days HR typed, or the sentence that says why it cannot be saved. */
+export function parseMediaExpiryDays(
+  input: string,
+  min: number = CHAT_MEDIA_EXPIRY_LIMITS.min,
+  max: number = CHAT_MEDIA_EXPIRY_LIMITS.max,
+): { days: number; error: null } | { days: null; error: string } {
+  const value = input.trim();
+  if (!value) return { days: null, error: "Enter the number of days." };
+  if (!/^\d+$/.test(value)) return { days: null, error: `Use a whole number of days from ${min} to ${max}.` };
+  const days = Number(value);
+  if (days < min || days > max) return { days: null, error: `Choose from ${min} to ${max} days.` };
+  return { days, error: null };
+}
+
+export const chatSettingsQueryKey = ["/api/chat/settings"] as const;
+
+export const useChatSettings = () =>
+  useQuery<ChatSettingsItem>({
+    queryKey: chatSettingsQueryKey,
+    queryFn: () => customFetch<ChatSettingsItem>("/api/chat/settings"),
+    retry: false,
+  });
+
+export const useSaveChatSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (mediaExpiryDays: number) =>
+      customFetch<ChatSettingsItem>("/api/chat/settings", {
+        method: "PUT",
+        body: JSON.stringify({ mediaExpiryDays }),
+      }),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(chatSettingsQueryKey, saved);
     },
   });
 };

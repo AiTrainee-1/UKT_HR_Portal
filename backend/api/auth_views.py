@@ -8,7 +8,6 @@ from .audit_utils import _get_ip, log_action
 from .auth import get_bearer_token, require_auth
 from .jwt_utils import sign_token, verify_token
 from .models import Employee, HRUser, HrLoginAttempt, LoginSession
-from .serializers import employee_full_name
 from .session_utils import parse_user_agent
 from .throttles import throttle
 from .view_common import _error
@@ -142,22 +141,27 @@ def employee_login(request: Request) -> Response:
     employee = Employee.objects.filter(
         Q(phone=identifier) | Q(email=identifier) | Q(employee_code=identifier)
     ).first()
+    # Distinct messages, each with a `code` the apps can key on (owner 2026-11-25): an employee code HRMS does not know,
+    # an account without a password yet, a wrong password.
     if not employee:
-        return _error("You are not registered. Please contact HR.", 401)
+        return Response(
+            {"error": "This employee code does not exist in HRMS.", "code": "unknown_employee"}, status=401
+        )
     if not employee.password_hash:
-        return _error("No password set. Please set your password first.", 401)
+        return Response(
+            {"error": "No password set. Please set your password first.", "code": "no_password"}, status=401
+        )
     if not bcrypt.checkpw(password.encode(), employee.password_hash.encode()):
-        return _error("Invalid password", 401)
+        return Response({"error": "Incorrect password.", "code": "wrong_password"}, status=401)
     # Feeds the HR portal's Mobile App Login page ("who has actually signed
     # in, and when"). Written on every successful login, not just the first.
     employee.last_mobile_login_at = timezone.now()
     employee.save(update_fields=["last_mobile_login_at", "updated_at"])
-    name = employee_full_name(employee)
     # A revocable session that lasts until the employee signs out (employee_sessions.py), not a 7-day token.
+    # An INACTIVE employee still signs in: the app then covers every screen and signs them out after 30 seconds, saying
+    # why (`accountStatus`, owner 2026-11-25).
     token = employee_sessions.issue_token(request, employee)
-    return Response(
-        {"token": token, "role": "employee", "employeeId": employee.id, "name": name}
-    )
+    return Response(employee_sessions.sign_in_json(employee, token))
 
 
 @api_view(["POST"])
@@ -245,6 +249,13 @@ def auth_me(request: Request) -> Response:
         "employeeId": user.get("employeeId"),
         "name": user.get("name", ""),
     }
+    if user.get("role") == "employee":
+        # Additive (owner 2026-11-25): whether the account is active in HRMS, read fresh on every call, so the app can
+        # block an employee whose account was made inactive while they were signed in (and sign them out).
+        emp = Employee.objects.filter(pk=user.get("employeeId")).only("id", "status").first()
+        if emp is not None:
+            payload["accountStatus"] = employee_sessions.account_status(emp)
+            payload["employeeStatus"] = emp.status
     if user.get("role") == "hr":
         # Resolved fresh from the DB (not trusted from the token) so a
         # permission change by an Admin is reflected on the next page load.

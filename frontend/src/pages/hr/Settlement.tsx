@@ -240,7 +240,7 @@ export default function Settlement() {
             <h2 className="text-2xl font-black text-gray-900">Settlement</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
               Term loans are repaid in monthly EMIs; term advances are deducted once. Employees can also apply from the
-              mobile app (20th to month end).
+              mobile app: Salary Advance from the 20th to the 22nd, Term Loan any day.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">

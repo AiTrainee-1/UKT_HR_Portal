@@ -29,7 +29,6 @@ from rest_framework.response import Response
 from . import otp_service
 from .audit_utils import _get_ip
 from .models import EmployeeOtp
-from .serializers import employee_full_name
 from .throttles import throttle
 from .view_common import error_response as _error
 
@@ -105,12 +104,13 @@ def otp_login(request: Request) -> Response:
     # Same bookkeeping and response shape as a password login (auth_views.employee_login).
     employee.last_mobile_login_at = timezone.now()
     employee.save(update_fields=["last_mobile_login_at", "updated_at"])
-    name = employee_full_name(employee)
     # A revocable session that lasts until the employee signs out (employee_sessions.py), not a 7-day token.
     from . import employee_sessions
 
     token = employee_sessions.issue_token(request, employee)
-    return Response({"token": token, "role": "employee", "employeeId": employee.id, "name": name})
+    # {token, role, employeeId, name} plus the additive accountStatus / employeeStatus (owner 2026-11-25). A code is only
+    # ever sent to an active employee (otp_service.find_employee), so this says "active" in practice.
+    return Response(employee_sessions.sign_in_json(employee, token))
 
 
 @api_view(["POST"])

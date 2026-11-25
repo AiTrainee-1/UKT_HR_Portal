@@ -10,6 +10,7 @@ import {
   type ChatMessageItem,
 } from "@/lib/api-client/custom-hooks";
 import ReportCard from "./attendance-notify/ReportCard";
+import MediaExpirySetting from "./chat/MediaExpirySetting";
 
 /** The channel the address names (?channel=), e.g. a link from Attendance Notify's history. */
 function channelFromAddress(): number | null {
@@ -105,12 +106,16 @@ export default function Chat() {
   return (
     <HrLayout>
       <div className="flex flex-col h-full gap-4">
-        <div className="shrink-0">
-          <h2 className="text-2xl font-black text-gray-900">Company Chat</h2>
-          <p className="text-muted-foreground text-sm mt-0.5">
-            One shared conversation with every staff member -messages sent here are
-            visible in the Employee App's Company chat too.
-          </p>
+        <div className="shrink-0 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-2xl font-black text-gray-900">Company Chat</h2>
+            <p className="text-muted-foreground text-sm mt-0.5">
+              One shared conversation with every staff member -messages sent here are
+              visible in the Employee App's Company chat too.
+            </p>
+          </div>
+          {/* how long GIFs and voice messages from the Employee App stay (owner 2026-11-25) */}
+          <MediaExpirySetting />
         </div>
 
         <Card className="border-0 shadow-sm flex-1 flex flex-col min-h-0">

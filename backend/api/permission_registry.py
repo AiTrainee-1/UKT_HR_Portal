@@ -296,6 +296,10 @@ _BASE_URL_MODULE_MAP: dict[str, str] = {
     "gmail-control": "gmail_control",
 
     "chat": "chat",
+    # The HR chat page's "Chat media expiry (days)" (owner 2026-11-25): view reads it, edit changes it. Same key as the
+    # chat itself; listed on its own so it is clear the setting is chat's. chat/channels/<id>/media and
+    # chat/messages/<id>/media (GIFs, voice messages) are under "chat" too; employees' tokens are never gated here.
+    "chat/settings": "chat",
 
     "notifications": "notifications",
 

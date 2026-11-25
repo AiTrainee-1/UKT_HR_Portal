@@ -35,6 +35,27 @@ TOKEN_LIFETIME = timedelta(days=180)
 TOUCH_EVERY_SECONDS = 300
 
 
+def account_status(employee: Employee | None) -> str:
+    """"active" or "inactive": what the mobile app reads (as `accountStatus`) to block an inactive account (owner
+    2026-11-25). Employee.status is free text; everything the rest of the HRMS treats as not active (`status != "active"`:
+    "inactive", a resignation approved, "terminated" ...) is "inactive" here."""
+    raw = (getattr(employee, "status", None) or "").strip().lower()
+    return "active" if raw == "active" else "inactive"
+
+
+def sign_in_json(employee: Employee, token: str) -> dict:
+    """The reply to a successful employee sign-in (password or one-time code). `accountStatus` / `employeeStatus` are
+    additive (owner 2026-11-25): the app shows its "account inactive" screen straight after signing in."""
+    return {
+        "token": token,
+        "role": "employee",
+        "employeeId": employee.id,
+        "name": employee_full_name(employee),
+        "accountStatus": account_status(employee),
+        "employeeStatus": employee.status,
+    }
+
+
 def issue_token(request, employee: Employee) -> str:
     """A new signed-in session for `employee` (one row) and its token."""
     jti = uuid.uuid4().hex

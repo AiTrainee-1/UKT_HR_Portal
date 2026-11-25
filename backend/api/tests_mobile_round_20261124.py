@@ -483,9 +483,12 @@ class AttendanceDaySheetTests(OvertimePunchTests):
         ).json()
         day = next(r for r in body["records"] if r["date"] == today.isoformat())
         kinds = [p["kind"] for p in day["allPunches"]]
-        self.assertEqual(kinds[:2], ["biometric", "geo"])
-        self.assertIn("on_duty", kinds)
-        self.assertIn("ot", kinds)
+        # Every source is there, in time order. (The On-Duty / OT punches are stamped "now", so where they fall among
+        # the 08:58 / 13:00 punches depends on when the test runs: no fixed order is asserted.)
+        for kind in ("biometric", "geo", "on_duty", "ot"):
+            self.assertIn(kind, kinds)
+        times = [(p.get("nextDay") is True, p["time"]) for p in day["allPunches"]]
+        self.assertEqual(times, sorted(times))
         ot = next(p for p in day["allPunches"] if p["kind"] == "ot")
         self.assertFalse(ot["counted"])
         self.assertIn("shiftsEarned", day)

@@ -107,6 +107,29 @@ class ChatMessage(models.Model):
     payload = models.JSONField(null=True, blank=True, db_column="payload")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
 
+    # ── GIFs and voice messages (owner 2026-11-25) ──────────────────────────
+    # A GIF (picked from the phone's gallery) or a voice message recorded in the app. `text` then carries a readable
+    # stand-in ("🎤 Voice message" / "🖼️ GIF") so an older app, the HR page and the phone notification still say
+    # something sensible. The file is only ever served to members of the channel (chat_views.chat_message_media) and is
+    # deleted from the server once `expires_at` passes (chat_media.sweep_expired, and on access); the row stays, so the
+    # conversation keeps its shape and the app shows "Voice message expired".
+    KIND_TEXT = "text"
+    KIND_GIF = "gif"
+    KIND_VOICE = "voice"
+    KIND_CHOICES = [(KIND_TEXT, "Text"), (KIND_GIF, "GIF"), (KIND_VOICE, "Voice message")]
+
+    kind = models.TextField(choices=KIND_CHOICES, default=KIND_TEXT, db_default=KIND_TEXT, db_column="kind")
+    media = models.FileField(upload_to="chat_media/%Y/%m/", blank=True, default="", db_default="", db_column="media")
+    media_mime = models.TextField(blank=True, default="", db_default="", db_column="media_mime")
+    media_size = models.PositiveIntegerField(null=True, blank=True, db_column="media_size")
+    media_duration_ms = models.PositiveIntegerField(null=True, blank=True, db_column="media_duration_ms")
+    media_width = models.PositiveIntegerField(null=True, blank=True, db_column="media_width")
+    media_height = models.PositiveIntegerField(null=True, blank=True, db_column="media_height")
+    # a voice message's loudness bars as the phone recorded them: up to 64 numbers 0-100
+    media_waveform = models.JSONField(null=True, blank=True, db_column="media_waveform")
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True, db_column="expires_at")
+    media_deleted_at = models.DateTimeField(null=True, blank=True, db_column="media_deleted_at")
+
     class Meta:
         db_table = "chat_messages"
         ordering = ["created_at"]
@@ -121,3 +144,26 @@ class ChatReaction(models.Model):
     class Meta:
         db_table = "chat_reactions"
         unique_together = [["message", "employee", "emoji"]]
+
+
+class ChatSettings(models.Model):
+    """One row (owner 2026-11-25): how many days GIFs and voice messages stay in the chat before their files are
+    deleted. HR changes it on the HR chat page; 7 days unless HR says otherwise."""
+
+    MEDIA_EXPIRY_DEFAULT = 7
+    MEDIA_EXPIRY_MIN = 1
+    MEDIA_EXPIRY_MAX = 90
+
+    media_expiry_days = models.PositiveSmallIntegerField(
+        default=MEDIA_EXPIRY_DEFAULT, db_default=MEDIA_EXPIRY_DEFAULT, db_column="media_expiry_days"
+    )
+    updated_by = models.TextField(blank=True, default="", db_default="", db_column="updated_by")
+    updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
+
+    class Meta:
+        db_table = "chat_settings"
+
+    @classmethod
+    def get(cls) -> "ChatSettings":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj

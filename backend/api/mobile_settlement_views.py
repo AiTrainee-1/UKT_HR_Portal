@@ -4,7 +4,9 @@ Until now only HR could record an advance (Settlement page, POST /api/advances).
 mobile app, and HR approves on the same Settlement page through the existing "advance" approval workflow (HR only).
 
 Owner's rules, all decided here and nowhere else:
-  * Applications are open from the 20th of the month to the month end (factory date, clock.ist_today), for both forms.
+  * When (owner decision 2026-11-25, factory date, clock.ist_today): a Salary Advance ("general") only from the 20th to
+    the 22nd of each month (3 days, both included); a Term Loan on any day, no date restriction. (Until then both forms
+    shared one window, the 20th to the month end.)
   * Salary Advance: at most 60 % of the employee's MONTHLY FIXED salary (`Employee.salary_amount`, the figure the staff
     payroll engine pays). It is deducted in full from THAT month's salary (the month the application is made in).
     No monthly salary on record (production staff are paid per shift) = no Salary Advance.
@@ -20,7 +22,9 @@ Payroll is not touched: approval creates the AdvanceRepayment rows (settlement_v
 for an advance HR records, and payroll deducts them as it always has.
 
 Endpoints (employee token only; an HR token gets 403):
-  GET  /api/my/advances/eligibility   window, salary, limit, deduction months, what is already applied, the rules
+  GET  /api/my/advances/eligibility   windows, salary, limit, deduction months, what is already applied, the rules.
+                                      `windows: {general, term}` holds each form's own window; `window` (what older apps
+                                      read) is the Salary Advance window, the only one with dates since 2026-11-25.
   GET  /api/my/advances               the employee's own applications with schedule, deductions and timeline
   GET  /api/my/advances/<id>          one of them (404 for anyone else's)
   POST /api/my/advances               {advanceType: "general"|"term", amount, repaymentMonths?, purpose}
@@ -44,7 +48,11 @@ from .settlement_views import advance_json, whole_rupee_emi
 
 WORKFLOW = "advance"
 
-WINDOW_OPENS_ON_DAY = 20
+# The Salary Advance window: the 20th to the 22nd of every month, both days included (owner 2026-11-25). A Term Loan has
+# no window.
+SALARY_ADVANCE_OPENS_ON_DAY = 20
+SALARY_ADVANCE_CLOSES_ON_DAY = 22
+WINDOW_OPENS_ON_DAY = SALARY_ADVANCE_OPENS_ON_DAY  # the old name (one window for both forms until 2026-11-25)
 SALARY_ADVANCE_PERCENT = 60
 MIN_TERM_MONTHS = 1
 MAX_TERM_MONTHS = 12
@@ -72,39 +80,88 @@ def next_month(month: int, year: int) -> tuple[int, int]:
     return (1, year + 1) if month == 12 else (month + 1, year)
 
 
+def _day_month(d: date) -> str:
+    """"20 December" (no leading zero)."""
+    return f"{d.day} {MONTH_NAMES[d.month]}"
+
+
+def _salary_advance_days(month: int, year: int) -> tuple[date, date]:
+    return date(year, month, SALARY_ADVANCE_OPENS_ON_DAY), date(year, month, SALARY_ADVANCE_CLOSES_ON_DAY)
+
+
+TERM_LOAN_ANY_DAY = "You can apply for a Term Loan on any day."
+
+
 def window(today: date) -> dict:
-    """The application window of `today`'s month: open from the 20th to the last day."""
-    last_day = calendar.monthrange(today.year, today.month)[1]
-    opens_on = date(today.year, today.month, WINDOW_OPENS_ON_DAY)
-    closes_on = date(today.year, today.month, last_day)
-    is_open = today >= opens_on
+    """The Salary Advance window around `today`: open from the 20th to the 22nd of the month (both included). Before the
+    20th it is this month's window that is coming; after the 22nd, next month's. Also the `window` key older apps read
+    (until 2026-11-25 one window, the 20th to the month end, held both forms)."""
+    opens_on, closes_on = _salary_advance_days(today.month, today.year)
+    if today > closes_on:
+        opens_on, closes_on = _salary_advance_days(*next_month(today.month, today.year))
+    is_open = opens_on <= today <= closes_on
     nm, ny = next_month(today.month, today.year)
-    next_opens_on = date(ny, nm, WINDOW_OPENS_ON_DAY)
+    next_opens_on = date(ny, nm, SALARY_ADVANCE_OPENS_ON_DAY) if is_open else opens_on
     if is_open:
         days_left = (closes_on - today).days + 1  # today included
         message = (
-            f"Applications are open until {closes_on.strftime('%d %B')}. "
-            f"They open again on {next_opens_on.strftime('%d %B')}."
+            f"Salary Advance applications are open until {_day_month(closes_on)} (the 20th to the 22nd of each month). "
+            + TERM_LOAN_ANY_DAY
         )
     else:
         days_left = 0
-        message = f"Applications open on {opens_on.strftime('%d %B')} and stay open until the end of the month."
+        message = (
+            f"Salary Advance applications open on {_day_month(opens_on)} and close on {_day_month(closes_on)}. "
+            + TERM_LOAN_ANY_DAY
+        )
     return {
         "isOpen": is_open,
         "opensOn": opens_on.isoformat(),
         "closesOn": closes_on.isoformat(),
-        "nextOpensOn": (next_opens_on if is_open else opens_on).isoformat(),
+        "nextOpensOn": next_opens_on.isoformat(),
         "daysUntilOpen": 0 if is_open else (opens_on - today).days,
         "daysLeft": days_left,
         "message": message,
+        # additive (2026-11-25): which form this window is for, and that it has dates
+        "type": "general",
+        "label": TYPE_LABEL["general"],
+        "alwaysOpen": False,
+        "opensOnDay": SALARY_ADVANCE_OPENS_ON_DAY,
+        "closesOnDay": SALARY_ADVANCE_CLOSES_ON_DAY,
     }
 
 
+def term_window(today: date) -> dict:
+    """A Term Loan has no window (owner 2026-11-25): open every day. The same keys as window(), with no closing date."""
+    return {
+        "isOpen": True,
+        "opensOn": today.isoformat(),
+        "closesOn": None,
+        "nextOpensOn": None,
+        "daysUntilOpen": 0,
+        "daysLeft": None,
+        "message": "Term Loan applications are open on any day.",
+        "type": "term",
+        "label": TYPE_LABEL["term"],
+        "alwaysOpen": True,
+        "opensOnDay": None,
+        "closesOnDay": None,
+    }
+
+
+def windows(today: date) -> dict:
+    """Each form's own window (the eligibility reply's `windows`)."""
+    return {"general": window(today), "term": term_window(today)}
+
+
 def window_closed_message(today: date) -> str:
-    opens_on = date(today.year, today.month, WINDOW_OPENS_ON_DAY)
+    """Why a Salary Advance cannot be sent today (outside the 20th to the 22nd)."""
+    w = window(today)
+    opens_on = date.fromisoformat(w["opensOn"])
+    closes_on = date.fromisoformat(w["closesOn"])
     return (
-        f"Advance and loan applications open on {opens_on.strftime('%d %B')}. "
-        "You can apply from the 20th until the end of the month."
+        "A Salary Advance can be applied for only from the 20th to the 22nd of each month. "
+        f"The next window is {_day_month(opens_on)} to {_day_month(closes_on)}. " + TERM_LOAN_ANY_DAY
     )
 
 
@@ -201,7 +258,8 @@ def pending_term_loan(emp: Employee) -> Advance | None:
 
 def rules_text() -> list[str]:
     return [
-        f"You can apply from the {WINDOW_OPENS_ON_DAY}th of each month until the month end.",
+        f"Salary Advance: apply from the {SALARY_ADVANCE_OPENS_ON_DAY}th to the {SALARY_ADVANCE_CLOSES_ON_DAY}nd of each "
+        "month. Term Loan: apply on any day.",
         f"Salary Advance: up to {SALARY_ADVANCE_PERCENT}% of your monthly fixed salary. "
         "It is deducted in full from that month's salary.",
         f"Term Loan: any amount from {inr(MIN_TERM_AMOUNT)}, repaid in {MIN_TERM_MONTHS} to {MAX_TERM_MONTHS} monthly EMIs "
@@ -382,7 +440,7 @@ def _own_rows(emp: Employee):
 
 
 def eligibility_json(emp: Employee, today: date) -> dict:
-    win = window(today)
+    win = window(today)  # the Salary Advance window (a Term Loan has none since 2026-11-25)
     cfg = approval.get_config(WORKFLOW)
     workflow_message = None
     if not cfg.enabled:
@@ -392,7 +450,9 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             workflow_message = exc.message
     active = emp.status == "active"
     inactive_reason = None if active else "Only active employees can apply. Please contact HR."
-    common_reason = inactive_reason or workflow_message or (None if win["isOpen"] else win["message"])
+    # Shared by both forms: the account is not active, or HR switched new applications off. The window is the Salary
+    # Advance's alone (below).
+    common_reason = inactive_reason or workflow_message
 
     salary = monthly_salary(emp)
     limit = salary_advance_limit(salary) if salary else None
@@ -404,6 +464,8 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             if emp.employment_type != Employee.EMPLOYMENT_TYPE_STAFF
             else "Your monthly salary is not recorded yet, so a Salary Advance cannot be worked out. Please contact HR."
         )
+    elif not win["isOpen"]:
+        general_reason = window_closed_message(today)
     elif existing is not None:
         general_reason = (
             f"You already have a Salary Advance for {month_label(today.month, today.year)} "
@@ -421,10 +483,16 @@ def eligibility_json(emp: Employee, today: date) -> dict:
     )
     nm, ny = next_month(today.month, today.year)
     active_terms = Advance.objects.filter(employee=emp, advance_type="term", status="approved").count()
+    # The salary a Salary Advance would come out of: this month's while its window is open or still ahead; after the 22nd
+    # the next chance is next month's window, so next month's salary (2026-11-25: the closed card said "November").
+    ded_month, ded_year = (nm, ny) if today.day > SALARY_ADVANCE_CLOSES_ON_DAY else (today.month, today.year)
 
     return {
         "today": today.isoformat(),
+        # what older apps (and the Employee Web App) read: the Salary Advance window
         "window": win,
+        # additive (2026-11-25): each form's own window; a Term Loan's is always open
+        "windows": windows(today),
         "workflowEnabled": cfg.enabled,
         "workflowMessage": workflow_message,
         "employeeActive": active,
@@ -434,9 +502,9 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             "reason": general_reason,
             "percent": SALARY_ADVANCE_PERCENT,
             "limit": float(limit) if limit is not None else None,
-            "deductionMonth": today.month,
-            "deductionYear": today.year,
-            "deductionLabel": month_label(today.month, today.year),
+            "deductionMonth": ded_month,
+            "deductionYear": ded_year,
+            "deductionLabel": month_label(ded_month, ded_year),
             "existing": (
                 {"id": existing.id, "status": existing.status, "amount": float(existing.amount)} if existing else None
             ),
@@ -519,7 +587,8 @@ def _apply(request: Request, emp: Employee) -> Response:
     if advance_type not in TYPE_LABEL:
         return _bad("Choose Salary Advance or Term Loan.", field="advanceType")
 
-    if today.day < WINDOW_OPENS_ON_DAY:
+    # Only a Salary Advance has a window: the 20th to the 22nd (owner 2026-11-25). A Term Loan is open every day.
+    if advance_type == "general" and not window(today)["isOpen"]:
         return _bad(window_closed_message(today), "window_closed")
 
     amount, problem = parse_amount(data.get("amount"))
