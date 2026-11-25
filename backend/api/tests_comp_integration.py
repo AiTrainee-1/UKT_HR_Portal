@@ -161,7 +161,14 @@ class CasualLeaveOnBirthdayTests(TestCase):
         settings.cl_balance_since = date(2026, 11, 2)
         settings.save()
         CompensationConfig.objects.update_or_create(
-            pk=1, defaults={"birthday_enabled": True, "birthday_effective_from": None, "claims_from": date(2026, 11, 1)}
+            pk=1,
+            defaults={
+                "birthday_enabled": True,
+                "birthday_effective_from": None,
+                "claims_from": date(2026, 11, 1),
+                # migration 0185 gives the test database's row the 1 Nov 2026 birthday claims date: claims_from decides here
+                "birthday_claims_from": None,
+            },
         )
         branch = Branch.objects.create(name="CLB Head Office", code="CLBHO", is_head_office=True)
         dept = Department.objects.create(name="CLB Cutting", branch=branch)
