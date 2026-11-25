@@ -17,6 +17,7 @@ from .auth_views import (
     employee_login,
     logout,
     refresh_token,
+    restore_session,
     set_password,
     auth_me,
 )

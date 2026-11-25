@@ -110,7 +110,8 @@ def otp_login(request: Request) -> Response:
     token = employee_sessions.issue_token(request, employee)
     # {token, role, employeeId, name} plus the additive accountStatus / employeeStatus (owner 2026-11-25). A code is only
     # ever sent to an active employee (otp_service.find_employee), so this says "active" in practice.
-    return Response(employee_sessions.sign_in_json(employee, token))
+    # A browser also keeps the session in an HttpOnly cookie, so the web app does not ask for a new code (owner 2026-11-25).
+    return employee_sessions.remember_browser(Response(employee_sessions.sign_in_json(employee, token)), request, token)
 
 
 @api_view(["POST"])

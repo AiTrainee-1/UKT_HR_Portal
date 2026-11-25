@@ -23,7 +23,7 @@ from datetime import timedelta
 from django.utils import timezone
 
 from .audit_utils import _get_ip
-from .jwt_utils import sign_token
+from .jwt_utils import sign_token, verify_token
 from .models import Employee, EmployeeLoginSession
 from .serializers import employee_full_name
 from .session_utils import parse_user_agent
@@ -127,3 +127,72 @@ def end_all(employee: Employee, reason: str) -> int:
     return EmployeeLoginSession.objects.filter(employee=employee, revoked_at__isnull=True).update(
         revoked_at=timezone.now(), revoked_reason=reason
     )
+
+
+# ── The Employee Web App's "remember this browser" cookie (owner 2026-11-25) ─────────────────────────────────────────
+#
+# A browser keeps the sign-in token in localStorage, and browsers lose that more often than people think: Safari wipes
+# script storage of a site not opened for 7 days, links opened inside WhatsApp / Instagram get a throw-away in-app
+# browser, "cleaner" apps clear site data. Each time the employee had to sign in (and ask for an OTP) again although
+# their session was still open on the server. So a browser sign-in ALSO gets the session token in a cookie that page
+# scripts cannot read (HttpOnly), sent only to /api/auth/ (POST /auth/session/restore signs the browser back in from it
+# when the page has no token). It is the same session: logout, HR ending sessions and an inactive account apply as
+# before. Phones never get it: only a request with an Origin header from an allowed web-app origin (CORS_ALLOWED_ORIGINS)
+# does, which the mobile app never sends.
+
+WEB_COOKIE = "ukt_emp_session"
+WEB_COOKIE_PATH = "/api/auth/"
+
+
+def _from_web_app(request) -> bool:
+    origin = request.headers.get("Origin") if request is not None else None
+    if not origin:
+        return False
+    from django.conf import settings
+
+    return origin in getattr(settings, "CORS_ALLOWED_ORIGINS", [])
+
+
+def _cookie_flags(request) -> dict:
+    # Over HTTPS: SameSite=None + Secure, so it is sent whether the web app and the API are on the same site
+    # (hrms.uktextiles.in -> api.uktextiles.in) or not. Plain http (local development): Lax, which localhost needs.
+    secure = bool(request is not None and request.is_secure())
+    return {"secure": secure, "samesite": "None" if secure else "Lax"}
+
+
+def remember_browser(response, request, token: str):
+    """Puts the session token in the web app's HttpOnly cookie (browser sign-ins only). Returns `response`."""
+    if token and _from_web_app(request):
+        response.set_cookie(
+            WEB_COOKIE,
+            token,
+            max_age=int(TOKEN_LIFETIME.total_seconds()),
+            path=WEB_COOKIE_PATH,
+            httponly=True,
+            **_cookie_flags(request),
+        )
+    return response
+
+
+def forget_browser(response, request):
+    """Deletes the cookie (sign-out, or a cookie that no longer opens a session). Returns `response`."""
+    if request is not None and WEB_COOKIE in request.COOKIES:
+        response.delete_cookie(WEB_COOKIE, path=WEB_COOKIE_PATH, samesite=_cookie_flags(request)["samesite"])
+    return response
+
+
+def restore(request) -> tuple[Employee | None, str | None, str | None]:
+    """(employee, fresh token, None) when the browser's cookie names an open session; else (None, None, reason)."""
+    raw = request.COOKIES.get(WEB_COOKIE) if request is not None else None
+    if not raw:
+        return None, None, "no_session"
+    try:
+        claims = verify_token(raw)
+    except Exception:
+        return None, None, "expired"
+    if not is_employee_session(claims) or check(claims):
+        return None, None, "ended"
+    employee = Employee.objects.filter(pk=claims.get("employeeId")).first()
+    if employee is None:
+        return None, None, "ended"
+    return employee, _sign(employee, claims["jti"]), None

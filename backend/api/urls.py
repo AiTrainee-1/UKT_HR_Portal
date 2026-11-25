@@ -328,6 +328,7 @@ urlpatterns = [
     path("auth/me", views.auth_me),
     path("auth/logout", views.logout),
     path("auth/refresh", views.refresh_token),
+    path("auth/session/restore", views.restore_session),
 
     # ── Organisation ────────────────────────────────────────────────────────
     path("branches", branches),

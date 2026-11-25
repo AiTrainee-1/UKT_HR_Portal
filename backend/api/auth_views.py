@@ -161,18 +161,19 @@ def employee_login(request: Request) -> Response:
     # An INACTIVE employee still signs in: the app then covers every screen and signs them out after 30 seconds, saying
     # why (`accountStatus`, owner 2026-11-25).
     token = employee_sessions.issue_token(request, employee)
-    return Response(employee_sessions.sign_in_json(employee, token))
+    # A browser also keeps the session in an HttpOnly cookie (employee_sessions.remember_browser).
+    return employee_sessions.remember_browser(Response(employee_sessions.sign_in_json(employee, token)), request, token)
 
 
 @api_view(["POST"])
 @require_auth
 def logout(request: Request) -> Response:
     if employee_sessions.revoke(request.jwt_user, "logout"):
-        return Response({"message": "Logged out"})
+        return employee_sessions.forget_browser(Response({"message": "Logged out"}), request)
     jti = request.jwt_user.get("jti")
     if jti:
         LoginSession.objects.filter(jti=jti, revoked_at__isnull=True).update(revoked_at=timezone.now())
-    return Response({"message": "Logged out"})
+    return employee_sessions.forget_browser(Response({"message": "Logged out"}), request)
 
 
 @api_view(["POST"])
@@ -187,13 +188,29 @@ def refresh_token(request: Request) -> Response:
     token, problem = employee_sessions.refresh(request, request.jwt_user)
     if problem:
         return _error(problem, 401)
-    return Response({
+    response = Response({
         "token": token,
         "role": "employee",
         "employeeId": request.jwt_user.get("employeeId"),
         "name": request.jwt_user.get("name", ""),
         "expiresInSeconds": int(employee_sessions.TOKEN_LIFETIME.total_seconds()),
     })
+    # the browser's cookie follows the renewed token (employee_sessions.remember_browser)
+    return employee_sessions.remember_browser(response, request, token)
+
+
+@api_view(["POST"])
+@throttle("employee_login")
+def restore_session(request: Request) -> Response:
+    """POST /api/auth/session/restore -the Employee Web App signs a browser back in from its HttpOnly session cookie
+    (employee_sessions.remember_browser) when the page lost its stored token. Same session, same rules: a session ended
+    by logout or by HR does not come back (401, and the cookie is deleted). Public: the cookie is the credential."""
+    employee, token, problem = employee_sessions.restore(request)
+    if problem:
+        refused = Response({"error": "No saved sign-in on this browser. Please sign in.", "code": problem}, status=401)
+        return employee_sessions.forget_browser(refused, request)
+    response = Response(employee_sessions.sign_in_json(employee, token))
+    return employee_sessions.remember_browser(response, request, token)
 
 
 @api_view(["POST"])
