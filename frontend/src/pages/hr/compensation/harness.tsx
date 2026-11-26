@@ -6,6 +6,8 @@ import { ApiError } from "@/lib/api-client/custom-fetch";
 import type {
   BalanceDetail,
   BalanceListRow,
+  BirthdayCompEntitlement,
+  BirthdayCompPortion,
   CompensationClaim,
   CompensationCreditRow,
   CompensationReport,
@@ -39,6 +41,8 @@ import {
   TODAY,
   WINDOWS,
   birthdaysOf,
+  compUse,
+  malaEntitlement,
   reportOf,
 } from "./fixtures";
 
@@ -68,6 +72,8 @@ export type World = {
   ledger: LedgerRow[];
   credits: CompensationCreditRow[];
   birthdayEnabled: boolean;
+  /** Birthday Compensation of each employee (GET /birthday-compensation?employeeId=), by employee id. */
+  birthdayComp: Record<number, BirthdayCompEntitlement>;
   report: (qs: URLSearchParams) => CompensationReport;
   departments: { id: number; name: string }[];
   branches: { id: number; name: string }[];
@@ -121,6 +127,7 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     ledger: copy(LEDGER),
     credits: copy(CREDITS),
     birthdayEnabled: true,
+    birthdayComp: { 31: malaEntitlement() },
     report: (qs) => reportOf(qs),
     departments: DEPARTMENTS,
     branches: BRANCHES,
@@ -368,6 +375,43 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
         );
       case GET && path === "/api/compensation/reports":
         return copy(world.report(qs));
+      // ── Birthday Compensation on a chosen date (2026-11-25) ──
+      case GET && path === "/api/compensation/birthday-compensation": {
+        const found = world.birthdayComp[Number(qs.get("employeeId"))];
+        if (!found) throw apiError(404, { error: "Employee not found.", code: "not_found" });
+        return copy(found);
+      }
+      case method === "POST" && path === "/api/compensation/birthday-compensation/uses": {
+        // placed for the employee, as the server would: waiting for the Department Head, holding its part of the 1.00
+        const ent = world.birthdayComp[Number(body.employeeId)];
+        if (!ent) throw apiError(404, { error: "Employee not found.", code: "not_found" });
+        const portion = String(body.portion) as BirthdayCompPortion;
+        const days = portion === "full" ? 1 : 0.5;
+        const use = compUse(500 + ent.uses.length, {
+          useDate: String(body.useDate),
+          portion,
+          portionLabel: portion === "full" ? "Full day" : portion === "first_half" ? "First half" : "Second half",
+          days,
+          reason: (body.reason as string | undefined) ?? null,
+        });
+        ent.uses.push(use);
+        if (ent.days) ent.days.held += days;
+        return use;
+      }
+      case method === "DELETE" && /^\/api\/compensation\/birthday-compensation\/uses\/\d+$/.test(path): {
+        const id = Number(path.split("/").pop());
+        for (const ent of Object.values(world.birthdayComp)) {
+          const use = ent.uses.find((u) => u.id === id);
+          if (!use) continue;
+          use.status = "withdrawn";
+          use.statusKey = "withdrawn";
+          use.statusLabel = "Withdrawn";
+          use.canWithdraw = false;
+          if (ent.days) ent.days.held = Math.max(0, ent.days.held - use.days);
+          return copy(use);
+        }
+        throw apiError(404, { error: "Birthday Compensation request not found.", code: "not_found" });
+      }
       // ── the claim workflow (Compensation Leave B) ──
       case GET && path === "/api/compensation/claims": {
         const month = qs.get("month");

@@ -1,6 +1,11 @@
 import type {
   BalanceDetail,
   BalanceListRow,
+  BirthdayCompBlock,
+  BirthdayCompDay,
+  BirthdayCompEntitlement,
+  BirthdayCompPortion,
+  BirthdayCompUse,
   BirthdayOutcome,
   BirthdayRow,
   BirthdaysResponse,
@@ -690,13 +695,34 @@ const birthday = (code: string, name: string, day: string, over: Partial<Birthda
   ...over,
 });
 
-// Mala worked on her birthday today (a credit nobody claimed yet); Naveen was absent (paid birthday leave); Priya worked and
-// claimed it from her app (waiting for the HOD); Omar's falls on a Sunday (nothing); Ravi's is still to come (month only).
+/** The `birthdayCompensation` block of a worked October birthday (1.00 day, placeable until 31 Oct). */
+export const compBlock = (over: Partial<BirthdayCompBlock> = {}): BirthdayCompBlock => ({
+  state: "available",
+  label: "1.00 day to place by 31 Oct",
+  total: 1,
+  held: 0,
+  used: 0,
+  available: 1,
+  lapsed: 0,
+  windowFrom: "2026-10-01",
+  lapsesOn: "2026-10-31",
+  windowOpen: true,
+  uses: [],
+  ...over,
+});
+
+// Mala worked on her birthday today (1.00 day of Birthday Compensation to place); Naveen was absent (paid birthday leave);
+// Priya worked and claimed a birthday credit from her app before the change (waiting for the HOD); Kavya worked hers and
+// placed all of it (a first half approved, a second half waiting); Omar's falls on a Sunday (nothing); Ravi's is still to
+// come (month only).
 const BIRTHDAYS_TODAY: BirthdayRow[] = [
   birthday("E31", "Mala Iyer", TODAY, {
-    outcome: "credit_claimable",
+    outcome: "comp_to_place",
     applied: false,
     compensationKind: null,
+    claimable: false,
+    canPlace: true,
+    birthdayCompensation: compBlock(),
   }),
 ];
 const BIRTHDAYS_WEEK: BirthdayRow[] = [
@@ -715,6 +741,48 @@ const BIRTHDAYS_WEEK: BirthdayRow[] = [
     firstPunch: "09:10",
     lastPunch: "18:00",
     claim: { id: 3006, status: "pending", shifts: 1, kind: "birthday" },
+    claimable: false,
+    canPlace: false,
+    birthdayCompensation: compBlock({ state: "credit_claim", label: "Birthday credit claim", total: 0, available: 0 }),
+  }),
+  birthday("E36", "Kavya Rao", "2026-10-12", {
+    weekday: "Monday",
+    outcome: "comp_placed",
+    applied: false,
+    compensationKind: null,
+    firstPunch: "09:02",
+    lastPunch: "17:40",
+    claimable: false,
+    canPlace: false,
+    birthdayCompensation: compBlock({
+      state: "placed",
+      label: "Placed: 7 Oct (first half, approved), 20 Oct (second half, pending)",
+      held: 0.5,
+      used: 0.5,
+      available: 0,
+      uses: [
+        {
+          id: 41,
+          useDate: "2026-10-07",
+          portion: "first_half",
+          portionLabel: "First half",
+          days: 0.5,
+          status: "approved",
+          statusKey: "approved",
+          statusLabel: "Approved: first half paid on 7 Oct",
+        },
+        {
+          id: 42,
+          useDate: "2026-10-20",
+          portion: "second_half",
+          portionLabel: "Second half",
+          days: 0.5,
+          status: "pending",
+          statusKey: "pending_hr",
+          statusLabel: "Approved by the Department Head, waiting for HR",
+        },
+      ],
+    }),
   }),
   ...BIRTHDAYS_TODAY,
   birthday("E33", "Omar Ali", "2026-10-18", {
@@ -780,6 +848,167 @@ export function birthdaysOf(
     benefitCount: results.filter((r) => r.benefits).length,
     results: JSON.parse(JSON.stringify(results)) as BirthdayRow[],
     summary: { byOutcome },
+  };
+}
+
+// ── Birthday Compensation on a chosen date (the "Choose date for employee" dialog) ──
+
+const HALVES = { first: "09:00-13:00", second: "14:00-18:00" };
+const OCTOBER_WEEKDAYS = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"]; // 1 Oct 2026 is a Thursday
+
+const compDay = (date: string, over: Partial<BirthdayCompDay> = {}): BirthdayCompDay => {
+  const n = Number(date.slice(8, 10));
+  return {
+    date,
+    weekday: OCTOBER_WEEKDAYS[(n - 1) % 7],
+    status: "future",
+    label: "Still to come",
+    selectable: true,
+    portions: ["full", "first_half", "second_half"],
+    suggested: "full",
+    reason: null,
+    worked: null,
+    firstPunch: null,
+    lastPunch: null,
+    manual: false,
+    halves: HALVES,
+    placed: [],
+    ...over,
+  };
+};
+
+const refused = (status: string, label: string, reason: string): Partial<BirthdayCompDay> => ({
+  status,
+  label,
+  selectable: false,
+  portions: [],
+  suggested: null,
+  reason,
+  halves: null,
+});
+
+/** Every day of October 2026 as the server offers it for a birthday on Wednesday 14 October (today). */
+export function octoberDays(): BirthdayCompDay[] {
+  const days: BirthdayCompDay[] = [];
+  for (let n = 1; n <= 31; n++) {
+    const date = `2026-10-${String(n).padStart(2, "0")}`;
+    const weekday = OCTOBER_WEEKDAYS[(n - 1) % 7];
+    let over: Partial<BirthdayCompDay> = {};
+    if (weekday === "Sun") over = refused("off_day", "Sunday", "A Sunday is already a day off: choose a working day.");
+    else if (n === 1) over = { status: "absent", label: "Absent" };
+    else if (n === 2)
+      over = refused(
+        "holiday",
+        "Holiday: Gandhi Jayanti",
+        "Friday 2 Oct 2026 is a declared holiday (Gandhi Jayanti): choose a working day.",
+      );
+    else if (n === 5)
+      over = {
+        status: "half_shift",
+        label: "Half Day · worked the morning",
+        portions: ["second_half", "full"],
+        suggested: "second_half",
+        reason: "On Monday 5 Oct 2026 only a second half or full day can be placed.",
+        worked: "morning",
+        firstPunch: "09:00",
+        lastPunch: "13:00",
+      };
+    else if (n === 7) over = { status: "on_leave", label: "On Leave · Sick Leave" };
+    else if (n === 9)
+      over = refused(
+        "casual_leave",
+        "Casual Leave",
+        "Friday 9 Oct 2026 already holds Casual Leave: choose another day.",
+      );
+    else if (n === 14)
+      over = refused(
+        "birthday",
+        "Birthday",
+        "The birthday itself cannot be chosen: choose another day of October 2026.",
+      );
+    else if (n < 14)
+      over = {
+        ...refused(
+          "present",
+          "Present",
+          `${weekday} ${n} Oct 2026: Mala Iyer was present this day (a full day worked): there is nothing to make up.`,
+        ),
+        firstPunch: "09:00",
+        lastPunch: "18:00",
+      };
+    days.push(compDay(date, over));
+  }
+  return days;
+}
+
+/** A placement as the server returns it (HR's view). */
+export const compUse = (id: number, over: Partial<BirthdayCompUse> = {}): BirthdayCompUse => ({
+  id,
+  kind: "birthday_compensation",
+  employeeId: 31,
+  employeeCode: "E31",
+  employeeName: "Mala Iyer",
+  department: "Sales",
+  departmentId: 1,
+  branch: "Head Office",
+  branchId: 2,
+  birthday: TODAY,
+  useDate: "2026-10-20",
+  portion: "first_half",
+  portionLabel: "First half",
+  days: 0.5,
+  status: "pending",
+  statusKey: "pending",
+  statusLabel: "Waiting for the Department Head",
+  reason: null,
+  raisedByRole: "hr",
+  requestedBy: "Meena",
+  createdAt: "2026-10-14T06:00:00+00:00",
+  reviewedBy: null,
+  reviewedAt: null,
+  reviewComment: null,
+  canWithdraw: true,
+  approval: null,
+  ...over,
+});
+
+/** GET /api/compensation/birthday-compensation?employeeId=31&year=2026: Mala's October, nothing placed yet. */
+export function malaEntitlement(over: Partial<BirthdayCompEntitlement> = {}): BirthdayCompEntitlement {
+  return {
+    employeeId: 31,
+    employeeCode: "E31",
+    employeeName: "Mala Iyer",
+    department: "Sales",
+    branch: "Head Office",
+    birthday: TODAY,
+    birthdayText: "Wednesday 14 Oct 2026",
+    weekday: "Wednesday",
+    month: { year: 2026, month: 10, label: "October 2026", from: "2026-10-01", to: "2026-10-31" },
+    state: "available",
+    stateLabel: "To place",
+    message:
+      "Mala Iyer worked on the birthday (Wednesday 14 Oct 2026): 1.00 day of Birthday Compensation to place on a day (or two halves) of October 2026, by 31 Oct.",
+    worked: true,
+    dayStatus: "present",
+    days: { total: 1, held: 0, used: 0, available: 1, lapsed: 0 },
+    windowOpen: true,
+    lapsesOn: "2026-10-31",
+    canPlace: true,
+    placeMessage: null,
+    portions: (["full", "first_half", "second_half"] as BirthdayCompPortion[]).map((key) => ({
+      key,
+      label: key === "full" ? "Full day" : key === "first_half" ? "First half" : "Second half",
+      days: key === "full" ? 1 : 0.5,
+    })),
+    uses: [],
+    eligibleDates: octoberDays(),
+    creditClaim: null,
+    approvalPath: "Employee or HR → HOD → HR",
+    workflowEnabled: true,
+    isStaff: true,
+    enabled: { master: true, birthday: true, workflow: true, canPlace: true },
+    today: TODAY,
+    ...over,
   };
 }
 

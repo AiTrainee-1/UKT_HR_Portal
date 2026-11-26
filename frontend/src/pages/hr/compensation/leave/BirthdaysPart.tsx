@@ -1,25 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
-import { Cake, CalendarClock, Gift, HandCoins, Hourglass, Loader2, SearchX } from "lucide-react";
+import { Cake, CalendarCheck2, CalendarClock, CalendarX2, Gift, SearchX } from "lucide-react";
 import { SectionCard } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { NestedTabs } from "@/components/ui/nested-tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/use-toast";
-import {
-  useCompensationBirthdays,
-  useRaiseCompensationClaims,
-  type BirthdayOutcome,
-  type BirthdayRow,
-} from "@/lib/api-client/custom-hooks";
+import { useCompensationBirthdays, type BirthdayOutcome, type BirthdayRow } from "@/lib/api-client/custom-hooks";
 import { ATTENDANCE_STATUS_TONE } from "@/lib/statusTones";
 import {
   ClearFilters,
@@ -33,15 +18,22 @@ import {
   StatusChip as KitChip,
   type DataColumn,
 } from "@/pages/hr/outpass-visitors/kit";
-import { dateLong, dateShort, errorMessage, rangeLabel, shiftsText, todayIst } from "../logic";
+import { dateShort, errorMessage, rangeLabel, shiftsText, todayIst } from "../logic";
 import { PeriodBar, isPeriod } from "../period";
 import { LEAVE_NESTED, subPath } from "../routes";
-import { keepOpenNested, useCanOpen, useClaimRight } from "../visible";
-import { ErrorNotice, Field, Notice, StatusChip, SwitchOffNotice, useSingleFlight } from "../ui";
-import { OUTCOME_META, OUTCOME_OPTIONS, canClaimBirthday, outcomeOf } from "./claims-logic";
+import { keepOpenNested, useCanOpen, usePlaceRight } from "../visible";
+import { Notice, StatusChip, SwitchOffNotice } from "../ui";
+import { BirthdayCompDialog, type BirthdayCompMode } from "./BirthdayCompDialog";
+import {
+  placementStatusText,
+  placementSummary,
+  placementTone,
+  placementWhenText,
+  showsPlacement,
+} from "./birthday-comp-logic";
+import { OUTCOME_META, OUTCOME_OPTIONS, canPlaceBirthday, outcomeOf, outcomeText } from "./claims-logic";
 import { OrgFilters } from "./LeaveFilters";
 import { claimLink, idOf, useLeaveUrl } from "./leave-url";
-import { CLAIM_REASON_MAX } from "./leave-logic";
 
 const PAGE_SIZE = 25;
 
@@ -64,10 +56,12 @@ const fromText = (value: string | null | undefined): string | null =>
 /**
  * Compensation Leave C: birthdays, by attendance. From the claims date a birthday is a normal working day: a staff member
  * who is ABSENT (no punch) or ON APPROVED LEAVE that day gets an automatic paid birthday leave (1 shift, no leave used); one
- * who is PRESENT (or works half a day) earns ONE 1-shift credit to claim, from the app or here by HR, which the Department
- * Head approves into the compensation balance. A Sunday, a declared holiday or an off Saturday gives nothing. The list shows
- * what each birthday gave (the outcome), filtered by period, department, branch, name and outcome; a credit nobody claimed
- * yet can be claimed here for the employee. The year of birth is never shown.
+ * who WORKS it (present, or even half a day) gets 1.00 day of Birthday Compensation to place on working days of the
+ * birthday month (owner 2026-11-25): a full day, or a first and a second half on two dates, each going to the Department
+ * Head and then HR; HR's approval pays that day like Casual Leave and what is not placed lapses when the month ends. A
+ * Sunday, a declared holiday or an off Saturday gives nothing. The list shows what each birthday gave (the outcome) and where
+ * the compensation was placed, filtered by period, department, branch, name and outcome; HR can choose the date for an
+ * employee here. Birthday credit claims raised before stay readable. The year of birth is never shown.
  */
 export function BirthdaysPart({ nested }: { nested: string }) {
   const canOpen = useCanOpen();
@@ -89,11 +83,11 @@ export function BirthdaysPart({ nested }: { nested: string }) {
   const viewKey = `${period}|${date}|${lu.bdept}|${lu.bbranch}|${lu.bq}|${lu.boutcome}|${rows.length}`;
   const current = page.key === viewKey ? page.page : 1;
   const shown = rows.slice((current - 1) * PAGE_SIZE, current * PAGE_SIZE);
-  const [claiming, setClaiming] = useState<BirthdayRow | null>(null);
+  const [opened, setOpened] = useState<{ row: BirthdayRow; mode: BirthdayCompMode } | null>(null);
   const master = data?.enabled.master ?? true;
   const claimsFrom = fromText(data?.enabled.claimsFrom);
-  // raising a claim for an employee needs Edit on Leave > Holiday work > Claims (the server refuses anybody else)
-  const { reason: rightProblem } = useClaimRight();
+  // placing Birthday Compensation for an employee needs Edit on Leave > Birthdays (the server refuses anybody else)
+  const { reason: rightProblem } = usePlaceRight();
 
   // the figures: the server's count per outcome (before the outcome filter) when it sends it, else the rows on screen
   const byOutcome = useMemo(() => {
@@ -138,11 +132,33 @@ export function BirthdaysPart({ nested }: { nested: string }) {
         cell: (r) => {
           const o = outcomeOf(r);
           const meta = OUTCOME_META[o];
+          const block = r.birthdayCompensation;
           return (
             <div className="flex max-w-xs flex-col items-start gap-0.5">
               <KitChip tone={meta.tone} testId={`birthday-outcome-${r.employeeCode}`}>
-                {r.outcomeLabel || meta.label}
+                {outcomeText(r)}
               </KitChip>
+              {showsPlacement(block) && (
+                <div className="space-y-0.5" data-testid={`birthday-placement-${r.employeeCode}`}>
+                  <p className="text-[11px] font-semibold leading-snug text-slate-700">{placementSummary(block)}</p>
+                  {block.uses.length > 0 && (
+                    <ul className="space-y-0.5">
+                      {block.uses.map((u) => (
+                        <li
+                          key={u.id}
+                          className="flex flex-wrap items-center gap-1 text-[11px] text-slate-600"
+                          data-testid={`birthday-use-${u.id}`}
+                        >
+                          <span className="font-medium">{placementWhenText(u)}</span>
+                          <KitChip tone={placementTone(u)} className="px-1.5 py-0 text-[10px]">
+                            {placementStatusText(u)}
+                          </KitChip>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
               {r.reason && (
                 <span
                   className="whitespace-normal text-[11px] leading-snug text-slate-500"
@@ -190,7 +206,7 @@ export function BirthdaysPart({ nested }: { nested: string }) {
         align: "right",
         truncate: false,
         cell: (r) =>
-          canClaimBirthday(r) ? (
+          canPlaceBirthday(r) ? (
             <Button
               type="button"
               size="sm"
@@ -199,12 +215,25 @@ export function BirthdaysPart({ nested }: { nested: string }) {
               disabled={!!rightProblem}
               title={
                 rightProblem ??
-                `Claim for employee: send the birthday credit of ${r.employeeName} to the Department Head`
+                `Choose date for employee: place the birthday compensation of ${r.employeeName} on a day of the birthday month and send it to the Department Head`
               }
-              onClick={() => setClaiming(r)}
-              data-testid={`birthday-claim-button-${r.employeeCode}`}
+              onClick={() => setOpened({ row: r, mode: "place" })}
+              data-testid={`birthday-place-button-${r.employeeCode}`}
             >
-              Claim for employee
+              Choose date for employee
+            </Button>
+          ) : showsPlacement(r.birthdayCompensation) && r.birthdayCompensation.uses.length > 0 ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-11 sm:h-8"
+              title={`See where the birthday compensation of ${r.employeeName} was placed`}
+              onClick={() => setOpened({ row: r, mode: "view" })}
+              data-view-safe=""
+              data-testid={`birthday-view-button-${r.employeeCode}`}
+            >
+              See placements
             </Button>
           ) : null,
       },
@@ -216,7 +245,8 @@ export function BirthdaysPart({ nested }: { nested: string }) {
     <div className="space-y-4" data-testid="birthdays-part">
       {data && master && !data.enabled.birthday && (
         <SwitchOffNotice testId="birthday-off" title="Birthday leave is switched off." setting="birthday-enabled">
-          Nobody gets it right now: no paid birthday leave and no birthday credit. The birthdays below stay readable.
+          Nobody gets it right now: no paid birthday leave and no new birthday compensation. The birthdays below stay
+          readable.
         </SwitchOffNotice>
       )}
 
@@ -241,7 +271,7 @@ export function BirthdaysPart({ nested }: { nested: string }) {
               testId="birthday-period"
             />
 
-            <StatRow columns={5} testId="birthday-kpis">
+            <StatRow columns={6} testId="birthday-kpis">
               <StatTile
                 label="Birthdays"
                 value={data?.count ?? 0}
@@ -264,29 +294,41 @@ export function BirthdaysPart({ nested }: { nested: string }) {
                 testId="birthday-kpi-leave"
               />
               <StatTile
-                label="Credit to claim"
-                value={n("credit_claimable")}
-                hint="worked, not claimed yet"
-                icon={HandCoins}
+                label="To place"
+                value={n("comp_to_place")}
+                hint="worked, not placed yet"
+                icon={Gift}
                 tone="amber"
                 emphasis
                 loading={query.isLoading}
-                onClick={() => outcomeFilter("credit_claimable")}
-                active={lu.boutcome === "credit_claimable"}
-                title="Show only the credits nobody claimed yet"
-                testId="birthday-kpi-claimable"
+                onClick={() => outcomeFilter("comp_to_place")}
+                active={lu.boutcome === "comp_to_place"}
+                title="Show only the birthday compensation still to place"
+                testId="birthday-kpi-to-place"
               />
               <StatTile
-                label="Claimed"
-                value={n("credit_pending", "credit_approved")}
-                hint={`${n("credit_pending")} waiting for HOD`}
-                icon={Hourglass}
+                label="Placed"
+                value={n("comp_placed")}
+                hint="waiting or approved"
+                icon={CalendarCheck2}
                 tone="indigo"
                 loading={query.isLoading}
-                onClick={() => outcomeFilter("credit_pending")}
-                active={lu.boutcome === "credit_pending"}
-                title="Show only the claims waiting for the Department Head"
-                testId="birthday-kpi-claimed"
+                onClick={() => outcomeFilter("comp_placed")}
+                active={lu.boutcome === "comp_placed"}
+                title="Show only the birthday compensation placed in full"
+                testId="birthday-kpi-placed"
+              />
+              <StatTile
+                label="Lapsed"
+                value={n("comp_lapsed")}
+                hint="not placed in the month"
+                icon={CalendarX2}
+                tone="rose"
+                loading={query.isLoading}
+                onClick={() => outcomeFilter("comp_lapsed")}
+                active={lu.boutcome === "comp_lapsed"}
+                title="Show only the birthday compensation that lapsed"
+                testId="birthday-kpi-lapsed"
               />
               <StatTile
                 label="Upcoming"
@@ -306,7 +348,7 @@ export function BirthdaysPart({ nested }: { nested: string }) {
               testId="birthday-list"
               icon={Cake}
               title="Who has a birthday"
-              description="Staff only. What each birthday gave, from that day's attendance."
+              description="Staff only. What each birthday gave, from that day's attendance, and where its birthday compensation was placed."
               bodyClassName="space-y-3"
               actions={
                 data ? (
@@ -384,12 +426,23 @@ export function BirthdaysPart({ nested }: { nested: string }) {
             <ul className="list-disc space-y-1 pl-5">
               <li>
                 <strong>Absent</strong> (no punch) <strong>or on approved leave</strong> (casual leave included): an
-                automatic paid birthday leave of 1 shift. No leave or casual-leave balance is used.
+                automatic paid birthday leave of 1 shift on the day. No leave or casual-leave balance is used.
               </li>
               <li>
-                <strong>Present</strong> (or half a day): one 1-shift credit to claim. The employee claims it in the
-                mobile app or the Employee Web App, or HR claims it here for them; the Department Head approves it, and
-                then it is in the compensation balance to use as a day off on another day.
+                <strong>Worked</strong> (present, or even half a day): 1.00 day of birthday compensation to place on
+                working days of the birthday month, as a full day or a first and a second half (the two halves can go on
+                two different dates). A day can be chosen when it is still to come, or when it has passed and was marked
+                Absent, On Leave or Half Day (then the missed half or a full day). The birthday itself, Sundays,
+                holidays and off Saturdays cannot be chosen.
+              </li>
+              <li>
+                The employee chooses the date in the mobile app or the Employee Web App, or HR chooses it here with{" "}
+                <strong>Choose date for employee</strong>. Each choice goes to the Department Head, then HR; on
+                HR&apos;s approval that day (or half) is paid like Casual Leave, without using any leave balance.
+              </li>
+              <li>
+                What is not placed by the last day of the birthday month <strong>lapses</strong>. New birthday credit
+                claims are no longer possible; credit claims raised before stay here and are decided as before.
               </li>
               <li>
                 A Sunday, a declared holiday or an off Saturday gives no birthday benefit (working that day is ordinary
@@ -411,110 +464,7 @@ export function BirthdaysPart({ nested }: { nested: string }) {
         )}
       </NestedTabs>
 
-      <ClaimBirthdayDialog row={claiming} onClose={() => setClaiming(null)} />
+      <BirthdayCompDialog row={opened?.row ?? null} mode={opened?.mode ?? "place"} onClose={() => setOpened(null)} />
     </div>
-  );
-}
-
-/** HR claims a birthday credit for an employee who worked on their birthday: it goes to their Department Head. */
-function ClaimBirthdayDialog({ row, onClose }: { row: BirthdayRow | null; onClose: () => void }) {
-  return (
-    <Dialog open={row !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent data-testid="birthday-claim-dialog">
-        {row && <ClaimBirthdayForm key={`${row.employeeId}-${row.birthday}`} row={row} onClose={onClose} />}
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function ClaimBirthdayForm({ row, onClose }: { row: BirthdayRow; onClose: () => void }) {
-  const { toast } = useToast();
-  const raise = useRaiseCompensationClaims();
-  const { reason: rightProblem } = useClaimRight();
-  const [reason, setReason] = useState("Worked on the birthday");
-  const [error, setError] = useState<string | null>(null);
-  const text = reason.trim();
-  const problem =
-    text === ""
-      ? "Give a reason: the Department Head reads it before deciding."
-      : text.length > CLAIM_REASON_MAX
-        ? `The reason can be at most ${CLAIM_REASON_MAX} characters.`
-        : null;
-
-  const once = useSingleFlight();
-  const submit = () =>
-    once(async () => {
-      if (problem || rightProblem || raise.isPending) return;
-      setError(null);
-      try {
-        const res = await raise.mutateAsync({
-          kind: "birthday",
-          date: row.birthday,
-          reason: text,
-          items: [{ employeeId: row.employeeId }],
-        });
-        toast({
-          title: "Birthday credit claimed",
-          description:
-            res.warnings.length > 0
-              ? res.warnings.join(" ")
-              : `${row.employeeName}: 1 shift, waiting for the Department Head.`,
-        });
-        onClose();
-      } catch (err) {
-        setError(errorMessage(err, "The claim could not be sent. Check the connection and try again."));
-      }
-    });
-
-  return (
-    <form
-      className="space-y-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void submit();
-      }}
-      noValidate
-    >
-      <DialogHeader>
-        <DialogTitle>Claim the birthday credit of {row.employeeName}</DialogTitle>
-        <DialogDescription>
-          <span className="font-mono">{row.employeeCode}</span> worked on their birthday, {dateLong(row.birthday)}: one
-          1-shift credit. The claim goes to their Department Head; once approved it is in the compensation balance.
-        </DialogDescription>
-      </DialogHeader>
-      <Field
-        label="Reason"
-        htmlFor="birthday-claim-reason"
-        problem={problem}
-        hint={`${text.length} / ${CLAIM_REASON_MAX}.`}
-      >
-        <Textarea
-          id="birthday-claim-reason"
-          rows={2}
-          value={reason}
-          maxLength={CLAIM_REASON_MAX + 50}
-          onChange={(e) => {
-            setReason(e.target.value);
-            setError(null);
-          }}
-          data-testid="birthday-claim-reason"
-        />
-      </Field>
-      {error && <ErrorNotice testId="birthday-claim-error">{error}</ErrorNotice>}
-      <DialogFooter className="gap-2">
-        <Button type="button" variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          disabled={!!problem || !!rightProblem || raise.isPending}
-          title={rightProblem ?? undefined}
-          data-testid="birthday-claim-submit"
-        >
-          {raise.isPending && <Loader2 size={14} className="mr-2 animate-spin" />}
-          Send to the Department Head
-        </Button>
-      </DialogFooter>
-    </form>
   );
 }

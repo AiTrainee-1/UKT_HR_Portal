@@ -10,6 +10,7 @@ const ALL_RIGHTS: Hod["rights"] = {
   on_duty: true,
   attendance_correction: true,
   holiday_work: true,
+  birthday_compensation: true,
   resignation: true,
 };
 

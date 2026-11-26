@@ -697,7 +697,8 @@ class HelperRules(TestCase):
              "outpass", "request_leave", "request_salary_enquiry", "request_shift_correction", "request_advance",
              "request_permission", "request_general", "resignation", "interview_result", "resume_decision",
              "advance_general", "advance_term", "payroll_hold", "payroll_add", "payroll_finalize", "payroll_mark_paid",
-             "payroll_release", "payroll_mark_cleared", "compensation_ot", "bonus_status"),
+             "payroll_release", "payroll_mark_cleared", "compensation_ot", "birthday_compensation",
+             "bonus_status"),
         )  # fmt: skip
         self.assertEqual(set(hr_access.ASSISTANT_LOCKED), {"missing_punch", "attendance_correction"})
         for kind in hr_access.APPROVAL_KINDS:

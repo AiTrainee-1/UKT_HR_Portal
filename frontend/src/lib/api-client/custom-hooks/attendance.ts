@@ -8,9 +8,10 @@ import { SyncResult, keepPreviousWhileSearching } from "./shared";
 
 // ── Attendance (enhanced) ─────────────────────────────────────────────────────
 
-/** What shaped an attendance day beyond the shift rules (AttendanceDayRecord.compensation_kind). */
+/** What shaped an attendance day beyond the shift rules (AttendanceDayRecord.compensation_kind). "birthday_comp": a day
+ *  (or half) paid by Birthday Compensation placed on it (2026-11-25). */
 export type AttendanceCompensationKind =
-  "ot_allowance" | "window_late_in" | "window_early_out" | "birthday" | "relaxation";
+  "ot_allowance" | "window_late_in" | "window_early_out" | "birthday" | "birthday_comp" | "relaxation";
 
 /**
  * The compensation marker every attendance JSON that shows a day carries (compensation_marker_json in
@@ -91,6 +92,9 @@ export type AttendanceDailyRecord = DayCompensationMarker & {
   leave?: DayLeaveRequest | null;
   casualLeave?: DayCasualLeave | null;
   onDuty?: DayOnDuty | null;
+  /** TODAY while the shift is still running (2026-11-26, src/lib/day-progress.ts): no shift count, no verdict yet. */
+  inProgress?: boolean;
+  provisionalUntil?: string | null;
 };
 
 /**
@@ -930,6 +934,9 @@ export type AttendanceSheetDayCell = DayCompensationMarker & {
   // Decimal as string, e.g. "1.00" / "0.50" / "0.00" -the actual shift
   // credit for the day, independent of the raw punch-in/punch-out span.
   shiftsEarned?: string | null;
+  /** TODAY while the shift is still running (2026-11-26, src/lib/day-progress.ts): no shift count, no verdict yet. */
+  inProgress?: boolean;
+  provisionalUntil?: string | null;
 };
 
 export type AttendanceSheetEmployeeSummary = {
@@ -1063,6 +1070,9 @@ export type ReportLogDayPunches = {
   };
   detections?: ReportLogDayDetection[];
   status?: string;
+  /** TODAY while the shift is still running (2026-11-26, src/lib/day-progress.ts): the credit is not decided yet. */
+  inProgress?: boolean;
+  provisionalUntil?: string | null;
 };
 
 /** Every punch of one employee's day (the register's day card asks only when a day is opened). */
@@ -1255,6 +1265,9 @@ export type FinalAttendanceDay = DayPermissionFlags & {
   overrideBy?: string | null;
   overrideNote?: string | null;
   computedMode?: string | null;
+  /** TODAY while the shift is still running (2026-11-26, src/lib/day-progress.ts): no shift count, no verdict yet. */
+  inProgress?: boolean;
+  provisionalUntil?: string | null;
 };
 
 export type EmployeeMonthlyAttendance = {

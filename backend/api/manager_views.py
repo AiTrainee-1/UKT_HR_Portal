@@ -666,7 +666,9 @@ def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
     configured (approval_workflow.py): a request only counts while it is this role's turn (or every step before it can
     be skipped), so switching a pipeline from 'HOD then HR' to 'HR then HOD' moves the counts by itself. The per-person
     switches (can_approve_*) still apply on top, exactly as before."""
-    from .models import EmployeePermission, HolidayWorkClaim, LeaveRequest, MissingPunchRequest, OutpassRequest
+    from .models import (
+        BirthdayCompensationUse, EmployeePermission, HolidayWorkClaim, LeaveRequest, MissingPunchRequest, OutpassRequest,
+    )
 
     cfgs = approval.all_configs()
 
@@ -690,6 +692,11 @@ def _hod_pending_counts(m, emp_filter) -> dict[str, int]:
         ),
         "holiday_work": (
             mine("holiday_work", HolidayWorkClaim.objects.filter(emp_filter, status="pending"))
+            if m.can_approve_compensation else 0
+        ),
+        # Birthday Compensation days (2026-11-25): the head's step comes first, then HR's
+        "birthday_compensation": (
+            mine("birthday_compensation", BirthdayCompensationUse.objects.filter(emp_filter, status="pending"))
             if m.can_approve_compensation else 0
         ),
         "on_duty": (
@@ -779,6 +786,8 @@ def manager_me(request: Request) -> Response:
         "pendingOnDutyCount": pending_on_duty,
         "pendingMissingPunchCount": pending_missing_punch,
         "pendingCompensationCount": pending_compensation,
+        # Birthday Compensation days waiting for this head (2026-11-25; inside pendingApprovalsCount)
+        "pendingBirthdayCompensationCount": counts.get("birthday_compensation", 0),
         # Gate outpass requests waiting for this head (inside pendingApprovalsCount; the apps list an Outpass tab).
         "pendingOutpassCount": counts.get("outpass", 0),
         # The approval pipelines HR has configured, so the app can explain each request's path and hide a category whose
@@ -890,6 +899,19 @@ def hod_requests(m: DepartmentManager, status_filter: str = "pending") -> dict:
         holiday_qs = HolidayWorkClaim.objects.none()
     holiday_qs = holiday_qs.order_by("-created_at")
 
+    # Birthday Compensation days (2026-11-25): the Department Head's step comes first, then HR's. A withdrawn one is
+    # never listed (it was never decided).
+    from .birthday_compensation import use_json as birthday_use_json
+    from .models import BirthdayCompensationUse
+    birthday_qs = BirthdayCompensationUse.objects.select_related(
+        "employee__department", "employee__designation", "employee__branch"
+    ).filter(emp_filter).exclude(status=BirthdayCompensationUse.STATUS_WITHDRAWN)
+    if status_filter != "all" and m.can_approve_compensation:
+        birthday_qs = birthday_qs.filter(status=status_filter)
+    elif not m.can_approve_compensation:
+        birthday_qs = BirthdayCompensationUse.objects.none()
+    birthday_qs = birthday_qs.order_by("-created_at")
+
     from .casual_leave_views import _cl_dict
     casual_qs = CasualLeaveRequest.objects.select_related(
         "employee__department", "employee__designation"
@@ -961,6 +983,10 @@ def hod_requests(m: DepartmentManager, status_filter: str = "pending") -> dict:
         ],
         "casualLeaves": [_cl_dict(r, cfgs["casual_leave"]) for r in mine("casual_leave", casual_qs)],
         "holidayWorkClaims": compensation_claims_json(mine("holiday_work", holiday_qs), for_role="hod"),
+        "birthdayCompensationUses": [
+            birthday_use_json(u, for_role="hod", cfg=cfgs["birthday_compensation"])
+            for u in mine("birthday_compensation", birthday_qs)
+        ],
         "onDutySessions": [
             {**_on_duty_session_dict(s, cfg=cfgs["on_duty"]), "journeyId": on_duty_journeys.get(s.pk)}
             for s in on_duty_rows

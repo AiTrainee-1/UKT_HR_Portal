@@ -21,6 +21,7 @@ export type KindKey =
   | "request"
   | "attendance_correction"
   | "holiday_work"
+  | "birthday_compensation"
   | "resignation"
   | "advance";
 
@@ -36,6 +37,7 @@ export const KIND_KEYS = [
   "request",
   "attendance_correction",
   "holiday_work",
+  "birthday_compensation",
   "resignation",
   "advance",
 ] as const satisfies readonly KindKey[];
@@ -184,11 +186,21 @@ const withDeepLink = (kind: HubKind): HubKind => {
   return link && kind.openPath === link.page ? { ...kind, openPath: link.to } : kind;
 };
 
+/** Birthday Compensation (2026-11-25) in the page's own sentence case: the server calls it "Birthday Compensation". */
+const BIRTHDAY_COMP_LABEL = "Birthday compensation";
+const sentenceCaseBirthday = (label: string) => label.replace(/^Birthday Compensation\b/, BIRTHDAY_COMP_LABEL);
+
+const kindLabelled = (kind: HubKind): HubKind =>
+  kind.key === "birthday_compensation" ? { ...kind, label: BIRTHDAY_COMP_LABEL } : kind;
+
+const itemLabelled = (item: HubItem): HubItem =>
+  item.kind === "birthday_compensation" ? { ...item, label: sentenceCaseBirthday(item.label) } : item;
+
 /** The response with every list present, whatever an older or partial backend left out. */
 export function normalizeHub(raw: Partial<HubResponse> | null | undefined): HubResponse {
-  const items = raw?.items ?? [];
+  const items = (raw?.items ?? []).map(itemLabelled);
   return {
-    kinds: (raw?.kinds ?? []).map(withDeepLink),
+    kinds: (raw?.kinds ?? []).map(withDeepLink).map(kindLabelled),
     stats: { ...EMPTY_STATS, ...(raw?.stats ?? {}) },
     items,
     limit: raw?.limit ?? 0,
@@ -197,9 +209,13 @@ export function normalizeHub(raw: Partial<HubResponse> | null | undefined): HubR
     pageSize: raw?.pageSize ?? items.length,
     total: raw?.total ?? items.length,
     pages: raw?.pages ?? 1,
-    focusItem: raw?.focusItem ?? null,
+    focusItem: raw?.focusItem ? itemLabelled(raw.focusItem) : null,
   };
 }
+
+/** The birthday a Birthday Compensation request belongs to ("2026-03-05"), or null for any other request. */
+export const birthdayOf = (item: Pick<HubItem, "kind" | "extra">): string | null =>
+  item.kind === "birthday_compensation" && typeof item.extra.birthday === "string" ? item.extra.birthday : null;
 
 // ─── filters ───────────────────────────────────────────────────────────────────────────────────────────────────────
 

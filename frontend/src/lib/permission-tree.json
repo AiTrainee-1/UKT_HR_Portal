@@ -1088,6 +1088,13 @@
                   "enforce": "server"
                 },
                 {
+                  "key": "requests.list.birthday_compensation",
+                  "label": "Birthday Compensation",
+                  "type": "subtab",
+                  "help": "Birthday Compensation days placed in the birthday month.",
+                  "enforce": "server"
+                },
+                {
                   "key": "requests.list.resignation",
                   "label": "Resignation",
                   "type": "subtab",
@@ -3165,6 +3172,14 @@
       "label": "OT shift compensation",
       "module": "compensation.ot",
       "description": "Assign or reject compensation for extra shifts worked, and announce earlier records.",
+      "group": "compensation",
+      "needsEdit": true
+    },
+    {
+      "key": "birthday_compensation",
+      "label": "Birthday Compensation",
+      "module": "compensation.leave.birthdays",
+      "description": "Give HR's approval to a Birthday Compensation day placed in the birthday month (after the Department Head's).",
       "group": "compensation",
       "needsEdit": true
     },

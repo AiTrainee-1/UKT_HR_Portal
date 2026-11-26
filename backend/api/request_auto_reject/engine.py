@@ -30,6 +30,7 @@ AUTO_KINDS: tuple[str, ...] = (
     "on_duty_punch",
     "attendance_correction",
     "holiday_work",
+    "birthday_compensation",
     "outpass",
     "request",
     "advance",

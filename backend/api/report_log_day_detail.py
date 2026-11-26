@@ -231,6 +231,7 @@ def day_detail(emp, d, settings, prod_rules, resolved) -> dict:
     """{shift, earned, detections} of one employee's day. `resolved` is the production shift day's resolved punches
     ([(seconds, log)]) when the shift-table rules judge it, else None."""
     from .attendance_final import compute_day_record
+    from .day_progress import progress_fields
     from .models import AttendanceDayRecord
 
     rec = AttendanceDayRecord.objects.select_related("employee").filter(employee=emp, date=d).first()
@@ -245,4 +246,6 @@ def day_detail(emp, d, settings, prod_rules, resolved) -> dict:
         "earned": earned_breakdown(rec, settings, explained),
         "detections": detections(rec, explained),
         "status": rec.status,
+        # TODAY while the shift is still running (day_progress.py): "In progress", no shift credit yet
+        **progress_fields(rec),
     }

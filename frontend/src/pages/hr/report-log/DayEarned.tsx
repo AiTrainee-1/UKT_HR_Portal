@@ -2,6 +2,8 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { Clock3, Layers, ScanSearch } from "lucide-react";
 import type { ReportLogDayDetection, ReportLogDayPunches } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { InProgressChip } from "@/components/attendance-compensation";
+import { countedAfterLabel, isInProgress } from "@/lib/day-progress";
 
 const TONE: Record<ReportLogDayDetection["tone"], string> = {
   bad: "border-red-200 bg-red-50 text-red-700",
@@ -34,6 +36,8 @@ export default function DayEarned({ query }: { query: UseQueryResult<ReportLogDa
     );
   }
   const { shift, earned, detections } = data;
+  // today, while the shift is still running: the credit so far is not the day's (owner 2026-11-26)
+  const running = isInProgress(data);
   return (
     <div className="space-y-3 px-3 py-2.5" data-testid="day-earned">
       {/* the shift the day was judged against */}
@@ -91,7 +95,14 @@ export default function DayEarned({ query }: { query: UseQueryResult<ReportLogDa
             data-testid="day-earned-total"
           >
             <span className="font-bold text-gray-700">Shift credit</span>
-            <span className="font-black tabular-nums text-gray-900">{earned.total}</span>
+            {running ? (
+              <span className="flex items-center gap-1.5" title={countedAfterLabel(data.provisionalUntil)}>
+                <InProgressChip provisionalUntil={data.provisionalUntil} size="sm" testId="day-earned-in-progress" />
+                <span className="font-black tabular-nums text-gray-400">—</span>
+              </span>
+            ) : (
+              <span className="font-black tabular-nums text-gray-900">{earned.total}</span>
+            )}
           </div>
           {earned.note && (
             <p className="mt-1 text-[10px] leading-snug text-gray-500" data-testid="day-earned-note">

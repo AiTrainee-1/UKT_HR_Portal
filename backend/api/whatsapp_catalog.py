@@ -100,6 +100,7 @@ APPROVAL_MODULES = {
     "outpass": "Gate Outpass",
     "attendance_correction": "Attendance Correction",
     "holiday_work": "Holiday Work Compensation",
+    "birthday_compensation": "Birthday Compensation",
     "resignation": "Resignation",
     "advance": "Advance",
     "request": "Other Requests",

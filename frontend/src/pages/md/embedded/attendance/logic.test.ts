@@ -80,4 +80,21 @@ describe("attendance insights logic", () => {
       "no punches arrived that day",
     );
   });
+
+  it("explains a day still running as In progress: the first punch and when it is counted, in a neutral tone", () => {
+    const day = {
+      date: "2026-11-26",
+      label: "Present",
+      scheduled: true,
+      late: true,
+      firstPunch: "09:06",
+      lastPunch: "13:02",
+      shiftsEarned: 1,
+      inProgress: true,
+      provisionalUntil: "2026-11-26T18:11:00+05:30",
+    };
+    expect(dayDetail(day)).toBe("In 09:06 · at work · Counted after the shift ends at 18:11");
+    expect(dayTone(day)).toBe("md-analytics-tone-neutral");
+    expect(dayDetail({ ...day, inProgress: false })).toBe("09:06–13:02 · late");
+  });
 });

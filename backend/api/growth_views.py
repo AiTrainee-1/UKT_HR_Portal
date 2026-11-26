@@ -51,6 +51,8 @@ def _emp_by_code_or_id(request) -> Employee | None:
 
 
 def _record_dict(r: AttendanceDayRecord) -> dict:
+    from .day_progress import progress_fields
+
     return {
         "date": str(r.date),
         "day": r.date.strftime("%a"),
@@ -72,6 +74,8 @@ def _record_dict(r: AttendanceDayRecord) -> dict:
         "overrideBy": r.override_by,
         "overrideNote": r.override_note,
         "computedMode": r.computed_mode,
+        # TODAY while the shift is still running (day_progress.py): shown as "In progress", no shift count yet
+        **progress_fields(r),
     }
 
 

@@ -281,6 +281,16 @@ APPROVAL_KINDS: tuple[ApprovalKind, ...] = (
         "compensation",
         needs_edit=True,
     ),
+    # 2026-11-25: HR's step (after the Department Head's) of a Birthday Compensation day. An extra right on top of Edit on
+    # the Birthdays page, like the other compensation decision: every existing role keeps "edit = approve" until it is set.
+    ApprovalKind(
+        "birthday_compensation",
+        "Birthday Compensation",
+        "compensation.leave.birthdays",
+        "Give HR's approval to a Birthday Compensation day placed in the birthday month (after the Department Head's).",
+        "compensation",
+        needs_edit=True,
+    ),
     ApprovalKind(
         "bonus_status",
         "Bonus approval and payment",
@@ -577,6 +587,7 @@ DECISION_ROUTES: tuple[tuple[str, str, str], ...] = (
     (r"employee-requests/\d+/action", "PUT", "request"),
     (r"recruitment/resignations/\d+/action", "PATCH", "resignation"),
     (r"advances/\d+", "PUT", "advance"),
+    (r"compensation/birthday-compensation/uses/\d+/decision", "PATCH", "birthday_compensation"),
 )
 
 

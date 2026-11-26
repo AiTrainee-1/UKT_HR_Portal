@@ -76,6 +76,13 @@ function drawn(doc: jsPDF): string[] {
 }
 
 describe("the day export", () => {
+  it("prints a day still running as in progress, with no shift credit yet", () => {
+    const cells = dayCells({ ...NIGHT, inProgress: true, provisionalUntil: "2026-11-04T18:11:00+05:30" }, 0, DAY);
+    expect(cells[5]).toBe("Present (in progress)");
+    expect(cells[12]).toBe("");
+    expect(dayCells(NIGHT, 0, DAY)[12]).toBe("1.50");
+  });
+
   it("has one line per person with every punch and its source", () => {
     const cells = dayCells(PRESENT, 0, DAY);
     expect(cells).toHaveLength(DAY_HEADERS.length);

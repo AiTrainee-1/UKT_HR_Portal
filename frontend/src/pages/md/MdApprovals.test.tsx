@@ -411,6 +411,57 @@ describe("HOD Approvals", () => {
     expect(empty).toContain("create it in HR → Departments");
   });
 
+  it("lists Birthday compensation in Other, filters by it and decides it with its kind", async () => {
+    const birthday = item({
+      key: "birthday_compensation-9",
+      kind: "birthday_compensation",
+      kindLabel: "Birthday Compensation",
+      group: "other",
+      id: 9,
+      title: "Birthday Compensation",
+      from: "2026-11-20",
+      to: null,
+      detail: "first half (birthday 2026-11-12)",
+      requested: { from: "2026-11-20", to: null, note: "first half", label: "Placed on" },
+      reason: "Family function",
+    });
+    const posted: unknown[] = [];
+    page = await renderMdPage(
+      MdApprovals,
+      data({
+        "/api/md/approvals/hods/5": (params) => ({
+          ...PENDING,
+          status: params.get("status") ?? "pending",
+          items: [...PENDING.items, birthday],
+          counts: { leave: 1, permission: 1, other: 2, total: 4 },
+        }),
+        "/api/md/approvals/hods/5/decide": (_params, init) => {
+          posted.push(JSON.parse(String(init?.body)));
+          return {
+            decision: "approved",
+            actor: "Test MD (MD, for Sandhya Krishnan)",
+            item: { ...birthday, statusLabel: "Waiting for HR", canApprove: false, canReject: false },
+          };
+        },
+      }),
+      { path: "/md/approvals/5" },
+    );
+    const card = '[data-testid="md-approval-birthday_compensation-9"]';
+    expect(page.container.querySelector(card)?.textContent).toContain("Birthday compensation");
+    expect(page.container.querySelector(card)?.getAttribute("aria-label")).toBe(
+      "Birthday compensation request from Surya M",
+    );
+    expect(page.container.querySelector(`${card} [data-testid="md-approval-requested"]`)?.textContent).toContain(
+      "first half",
+    );
+    await page.click('[data-testid="md-approvals-kind-birthday_compensation"]');
+    expect(all(page, '[data-testid="md-approvals-list"] > li')).toHaveLength(1);
+    await page.click(`${card} [data-testid="md-approval-approve"]`);
+    await page.click(`${card} [data-testid="md-approval-send"]`);
+    expect(posted).toEqual([{ kind: "birthday_compensation", id: 9, decision: "approved" }]);
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Approved: Surya M's birthday compensation" }));
+  });
+
   it("moves an old link to a head who is no longer listed onto the first head", async () => {
     page = await renderMdPage(MdApprovals, data({ "/api/md/approvals/hods": { ...HODS, hods: [hod()] } }), {
       path: "/md/approvals/8",

@@ -56,6 +56,14 @@ describe("which card a row belongs to", () => {
     expect(boardStateOf({ status: "absent" })).toBe("absent");
   });
 
+  it("does not count a day still running as a half day: its credit so far is not the day's", () => {
+    const half = { ...NIGHT, shiftsEarned: 0.5 };
+    expect(countBoard([half]).halfDay).toBe(1);
+    expect(countBoard([{ ...half, inProgress: true, provisionalUntil: "2026-11-04T18:11:00+05:30" }]).halfDay).toBe(0);
+    // provisionalUntil alone (its moment passed, the refresh not run yet) is a settled day
+    expect(countBoard([{ ...half, inProgress: false, provisionalUntil: "2026-11-04T18:11:00+05:30" }]).halfDay).toBe(1);
+  });
+
   it("counts add up to the roster, with the extras the cards mention", () => {
     const c = countBoard([...STAFF_DAY, NIGHT]);
     expect(BOARD_ORDER.reduce((n, s) => n + c[s], 0)).toBe(c.total);

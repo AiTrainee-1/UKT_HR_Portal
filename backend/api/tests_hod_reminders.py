@@ -308,6 +308,7 @@ class OverviewTests(_World):
                 "on_duty",
                 "outpass",
                 "holiday_work",
+                "birthday_compensation",
                 "resignation",
             ],
         )
@@ -373,6 +374,7 @@ class OverviewTests(_World):
                     "on_duty": 0,
                     "outpass": 0,
                     "holiday_work": 0,
+                    "birthday_compensation": 0,
                     "resignation": 0,
                 },
             },

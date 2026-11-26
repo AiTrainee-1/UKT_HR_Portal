@@ -107,6 +107,11 @@ PAGES: dict[str, Page] = {
     "documents": Page("documents", "View documents"),
     "id_card": Page("id_card", "View ID card"),
     "compensation": Page("compensation", "View compensation", dated=True),
+    # a Birthday Compensation placement (2026-11-25): the Compensation page, at the birthday card's placement (`id`);
+    # `category` tells the apps it is a placement, not a compensation claim
+    "birthday_compensation": Page(
+        "compensation", "View birthday compensation", dated=True, category="birthday_compensation"
+    ),
     "advance": Page("advance", "View advance"),
     "resignation": Page("resignation", "View resignation"),
     "request": Page("request", "View request"),
@@ -129,6 +134,7 @@ WORKFLOW_PAGE: dict[str, str] = {
     "on_duty_punch": "geo_punch",
     "attendance_correction": "attendance_change",
     "holiday_work": "compensation",
+    "birthday_compensation": "birthday_compensation",
     "resignation": "resignation",
     "advance": "advance",
     "request": "request",
@@ -146,6 +152,7 @@ APPROVAL_CATEGORY: dict[str, str] = {
     "attendance_correction": "attendance",
     "attendance": "attendance",
     "holiday_work": "holiday_work",
+    "birthday_compensation": "birthday_compensation",
     "resignation": "resignation",
 }
 
@@ -190,6 +197,7 @@ TYPE_PAGE: dict[str, str] = {
     "on_duty": "on_duty",
     "attendance": "attendance",
     "compensation": "compensation",
+    "birthday_compensation": "birthday_compensation",
     "resignation": "resignation",
     "advance": "advance",
     "employee_request": "request",

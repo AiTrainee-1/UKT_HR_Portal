@@ -52,6 +52,10 @@ KIND_WINDOW_LATE_IN = "window_late_in"
 KIND_WINDOW_EARLY_OUT = "window_early_out"
 KIND_BIRTHDAY = "birthday"
 KIND_RELAXATION = "relaxation"
+# Birthday Compensation placed on a chosen date (2026-11-25, birthday_compensation.py): an approved use pays that day (or half)
+# like a Casual Leave. Its own marker, so the calendars tell it apart from the birthday's own paid leave ("birthday"); every
+# reader that looks for "birthday" in the marker (reports, MD analytics) still counts it as a paid birthday day.
+KIND_BIRTHDAY_COMP = "birthday_comp"
 
 
 @dataclass
@@ -73,6 +77,9 @@ class CompContext:
     # {(employee_id, OT date): (allowance minutes, extra minutes)} of the APPROVED ot_allowance claims whose OT date can
     # feed an arrival in the range (claim workflow: from claims_from on the allowance needs one). Loaded by build_context.
     allowance_claims: dict = field(default_factory=dict)
+    # {(employee_id, date): BirthdayUseDay} of the APPROVED Birthday Compensation uses dated in the range (2026-11-25): the
+    # day (or half) the engine pays like a Casual Leave. Loaded by build_context (one query); follows the master switch only.
+    birthday_uses: dict = field(default_factory=dict)
 
     @property
     def allowance_on(self) -> bool:
@@ -207,6 +214,10 @@ def build_context(settings, date_from: date_type, date_to: date_type, employee_i
     # an APPROVED allowance claim is a granted commitment: it follows the master switch only, never the allowance switch
     # (turning Type 1 off later stops new allowances, not the ones a Department Head already granted; review 2026-11-19)
     ctx.allowance_claims = _approved_allowance_claims(config, date_from, date_to, employee_ids)
+    # an APPROVED Birthday Compensation use is a granted commitment too (the Department Head and HR approved it): the master
+    # switch only, never the birthday switch
+    if birthday_uses_possible(config, date_to):
+        ctx.birthday_uses = approved_birthday_uses(date_from, date_to, employee_ids)
 
     if lookback_employee is not None and config.allowance_enabled:
         ctx.ot_lookback = _stored_ot_lookback(lookback_employee, date_from)
@@ -235,6 +246,59 @@ def _approved_allowance_claims(config, date_from: date_type, date_to: date_type,
     ):
         out[(emp_id, day)] = (int(minutes or record_minutes or 0), int(extra or 0))
     return out
+
+
+# ── Birthday Compensation placed on a chosen date ───────────────────────────
+
+
+@dataclass(frozen=True)
+class BirthdayUseDay:
+    """The approved Birthday Compensation of one employee on one date: the halves it pays ({"first_half", "second_half"};
+    a full day is both) and the birthdays it comes from (for the day's note)."""
+
+    halves: frozenset
+    birthdays: tuple
+
+
+def birthday_uses_possible(config, date_to: date_type) -> bool:
+    """Can a Birthday Compensation use be dated on or before `date_to` at all? Uses come only from birthdays under the
+    new birthday rule (CompensationConfig.birthday_claims_apply_on) and lie in the birthday's month, so a range that ends
+    before the month of the first such birthday has none: no query (the old-rule ranges cost what they always did)."""
+    if config is None or config.claims_from is None:
+        return True
+    first = min(d for d in (config.claims_from, config.birthday_claims_from) if d is not None)
+    return date_to >= first.replace(day=1)
+
+
+def approved_birthday_uses(date_from: date_type, date_to: date_type, employee_ids=None) -> dict:
+    """{(employee_id, date): BirthdayUseDay} of the approved Birthday Compensation uses dated in [date_from, date_to]
+    (one query; `employee_ids` narrows it)."""
+    from .models import BirthdayCompensationUse
+
+    rows = BirthdayCompensationUse.objects.filter(
+        status=BirthdayCompensationUse.STATUS_APPROVED, use_date__gte=date_from, use_date__lte=date_to
+    )
+    if employee_ids is not None:
+        rows = rows.filter(employee_id__in=list(employee_ids))
+    halves: dict = {}
+    birthdays: dict = {}
+    for emp_id, day, portion, birthday in rows.values_list("employee_id", "use_date", "portion", "birthday"):
+        key = (emp_id, day)
+        covered = halves.setdefault(key, set())
+        if portion == BirthdayCompensationUse.PORTION_FULL:
+            covered.update(("first_half", "second_half"))
+        else:
+            covered.add(portion)
+        if birthday not in birthdays.setdefault(key, []):
+            birthdays[key].append(birthday)
+    return {key: BirthdayUseDay(frozenset(halves[key]), tuple(sorted(birthdays[key]))) for key in halves}
+
+
+def birthday_use_on(emp, d: date_type, ctx: CompContext):
+    """The approved Birthday Compensation (BirthdayUseDay) `emp` placed on `d`, or None (no query: ctx.birthday_uses)."""
+    if not ctx.master or emp.employment_type != "staff":
+        return None
+    return ctx.birthday_uses.get((emp.pk, d))
 
 
 # ── announcements (legacy day exemptions + the new windows) ─────────────────

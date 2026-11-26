@@ -2,6 +2,7 @@ import type ExcelJS from "exceljs";
 import type { jsPDF } from "jspdf";
 import { pdfSafe } from "@/components/payroll/statement/export-statement-pdf";
 import type { AttendanceDailyRecord, MonthlyAttendanceRow } from "@/lib/api-client/custom-hooks";
+import { isInProgress } from "@/lib/day-progress";
 import {
   addMergedTextRow,
   addTitleBlock,
@@ -106,6 +107,8 @@ function lateEarly(r: AttendanceDailyRecord): string {
 function statusText(r: AttendanceDailyRecord): string {
   const card = BOARD_META[boardStateOf(r)].label;
   const own = STATUS_LABEL[r.status];
+  // a day whose shift is still running (today) is not judged yet: it is counted after the shift ends
+  if (isInProgress(r)) return `${card} (in progress)`;
   // the server's own word when it says more ("Manual" = present by hand)
   return own && own !== card && r.status === "manual" ? `${card} (by hand)` : card;
 }
@@ -126,7 +129,7 @@ export function dayCells(r: AttendanceDailyRecord, i: number, date: string, punc
     punches.filter((p) => p.counted !== false).length,
     punches.map((p) => punchText(p, date)).join(punchSep),
     lateEarly(r),
-    typeof r.shiftsEarned === "number" ? r.shiftsEarned.toFixed(2) : "",
+    typeof r.shiftsEarned === "number" && !isInProgress(r) ? r.shiftsEarned.toFixed(2) : "",
   ];
 }
 

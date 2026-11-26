@@ -14,6 +14,8 @@ export * from "./compensation-settings";
 export * from "./compensation-ot-claims";
 // Claims of every kind, the balance (earned / used / waiting / available), the ledger and the Raise month strip (2026-11-19)
 export * from "./compensation-claims";
+// Birthday Compensation on a chosen date (2026-11-25): a worked birthday's 1.00 day placed in the birthday month
+export * from "./birthday-compensation";
 export * from "./documents";
 export * from "./gate";
 // Gate Pass / Visitors / Tea Break rebuild (2026-11-18): one file per slice, the record row the gate pages share

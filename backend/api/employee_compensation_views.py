@@ -80,6 +80,11 @@ listed (`isStaff: false`). The Department Head card is for everybody, production
         paid birthday leave, the `birthday` item)
     use_balance (key hw-<id>): a request to use the balance that is waiting or was not approved (an approved one is the
         `redemption` item of its debit, with `claim` set)
+    birthday_compensation (key bdc-<date>, 2026-11-25): a birthday the employee worked with no credit claim waiting or
+        approved: 1.00 day of Birthday Compensation to place on days of the birthday month (status available | placed |
+        lapsed, `birthdayCompensation` {state, label, total, held, used, available, lapsed, windowFrom, lapsesOn,
+        windowOpen, uses[]}, `canPlace`); it is placed through /api/employee/compensation/birthday (never claimable).
+        birthday_credit stays for a credit claim raised before (waiting / approved).
   todayAllowance / tomorrowAllowance: on and after claims_from only an allowance whose claim the Department Head APPROVED.
   Top level adds canClaim, claimWindowDays (45) and useBalance {allowed, balanceShifts, pendingShifts, availableShifts,
   message}. A notification about a claim opens hw-<claim id>: match it against `claim.id` of an item.
@@ -182,6 +187,9 @@ STATUS_LABELS = {
     "claim_pending": "Claimed: waiting for your Department Head",
     "claim_approved": "Approved",
     "claim_rejected": "Not approved",
+    # Birthday Compensation on a chosen date (2026-11-25)
+    "placed": "Placed",
+    "lapsed": "Lapsed",
 }
 CLAIM_STATUS = {"pending": "claim_pending", "approved": "claim_approved", "rejected": "claim_rejected"}
 
@@ -198,8 +206,9 @@ APPROVAL_ORDER = (
     "resignation",
     "outpass",
     "holiday_work",
+    "birthday_compensation",
 )
-STAFF_ONLY_APPROVALS = ("casual_leave", "holiday_work")
+STAFF_ONLY_APPROVALS = ("casual_leave", "holiday_work", "birthday_compensation")
 
 HOLIDAY_WORK_OFF_REASON = (
     "Holiday / Sunday work compensation is switched off, so neither you nor HR can raise new claims for it. "
@@ -994,14 +1003,53 @@ def _birthday_items(
     return items
 
 
+def _birthday_compensation_item(emp, day: date, today: date) -> dict:
+    """A worked birthday (2026-11-25): 1.00 day of Birthday Compensation to place on days of the birthday month."""
+    from . import birthday_compensation as bday_comp
+
+    summary = bday_comp.summaries([(emp, day)], today)[(emp.pk, day)]
+    block = bday_comp.list_block(day, today, True, False, summary)
+    state = block["state"]
+    month = bday_comp.month_label(day)
+    if state == bday_comp.STATE_AVAILABLE:
+        status, title = "available", f"Birthday Compensation: {bday_comp.days_text(block['available'])} to place"
+        detail = (
+            f"You worked on your birthday, so you have {bday_comp.days_text(block['available'])} of Birthday Compensation "
+            f"to place on a day (or two halves) of {month}, by {bday_comp.short_day(bday_comp.month_bounds(day)[1])}. "
+            "Your Department Head, then HR, approve it."
+        )
+    elif state == bday_comp.STATE_LAPSED:
+        status, title = "lapsed", "Birthday Compensation: lapsed"
+        detail = (
+            f"{month} is over: {bday_comp.days_text(block['lapsed'])} of your Birthday Compensation was not placed."
+        )
+    else:
+        status, title = "placed", "Birthday Compensation: placed"
+        detail = "You worked on your birthday: all of your Birthday Compensation is placed. " + block["label"] + "."
+    return _item(
+        f"bdc-{day.isoformat()}",
+        "birthday_compensation",
+        "birthday",
+        day,
+        title,
+        detail,
+        status,
+        shifts=1.0,
+        birthdayCompensation=block,
+        canPlace=state == bday_comp.STATE_AVAILABLE,
+        **_claim_fields(None),
+    )
+
+
 BIRTHDAY_RULE_TEXT = (
     "Your birthday is a normal working day. If you are absent or on approved leave that day, it is paid birthday leave "
-    "(no leave balance is used). If you come to work, you can claim one shift of compensation to take on another day."
+    "(no leave balance is used). If you come to work, you get one day of Birthday Compensation to take on days you choose "
+    "in your birthday month (a full day or two halves), approved by your Department Head and HR."
 )
 BIRTHDAY_TODAY_TEXT = (
     "Today is your birthday, a normal working day. If you do not come to work today (absent or on approved leave), it "
-    "becomes paid birthday leave once the day is over (no leave balance is used). If you come to work, you can claim "
-    "one shift of compensation to take on another day."
+    "becomes paid birthday leave once the day is over (no leave balance is used). If you come to work, you get one day "
+    "of Birthday Compensation to take on days you choose this month (a full day or two halves)."
 )
 BIRTHDAY_PAID_TEXT = (
     "You were not at work on your birthday (absent or on approved leave), so it is paid birthday leave: a full paid day, "
@@ -1014,24 +1062,17 @@ BIRTHDAY_PAID_BY_HR_TEXT = (
 
 
 def _birthday_claim_item(emp, day: date, today: date, claim, ctx) -> dict:
-    """One birthday under the claim rule (see _birthday_items)."""
+    """One birthday under the claim rule (see _birthday_items). Since 2026-11-25 a worked birthday gives Birthday
+    Compensation to place on chosen dates (_birthday_compensation_item); a credit claim raised before (waiting / approved)
+    keeps its birthday_credit item."""
     key = f"bd-{day.isoformat()}"
-    if claim is not None:
+    if claim is not None and claim.status in HolidayWorkClaim.OPEN_STATUSES:
         status = CLAIM_STATUS.get(claim.status, claim.status)
         if claim.status == HolidayWorkClaim.STATUS_APPROVED:
             detail = "You worked on your birthday. Approved: 1.00 shift was added to your compensation balance."
-        elif claim.status == HolidayWorkClaim.STATUS_PENDING:
-            detail = "You worked on your birthday. Your claim for 1.00 shift is waiting for your Department Head."
         else:
-            detail = "You worked on your birthday. Your Department Head did not approve the claim." + (
-                f" {_stop(claim.review_comment)}" if claim.review_comment else ""
-            )
+            detail = "You worked on your birthday. Your claim for 1.00 shift is waiting for your Department Head."
         fields = _claim_fields(HolidayWorkClaim.KIND_BIRTHDAY, claim=claim, suggested=Decimal("1.00"))
-        if claim.status == HolidayWorkClaim.STATUS_REJECTED:
-            can, why, _s = _claimability(emp, HolidayWorkClaim.KIND_BIRTHDAY, day, ctx)
-            fields = _claim_fields(
-                HolidayWorkClaim.KIND_BIRTHDAY, claimable=can, claim=claim, message=why, suggested=Decimal("1.00")
-            )
         return _item(
             key, "birthday_credit", "birthday", day, "Birthday credit: 1.00 shift", detail, status, shifts=1.0, **fields
         )
@@ -1046,26 +1087,8 @@ def _birthday_claim_item(emp, day: date, today: date, claim, ctx) -> dict:
         logger.exception("birthday_outcome failed for employee %s on %s", emp.pk, day)
     result = outcome.get("base") or outcome.get("outcome")
     if result == effects.BIRTHDAY_CREDIT_CLAIMABLE:
-        can, why, _s = _claimability(emp, HolidayWorkClaim.KIND_BIRTHDAY, day, ctx)
-        detail = (
-            "You worked on your birthday, so you can claim one shift of compensation (1.00) to take on another day. "
-            "Your Department Head approves it."
-        )
-        if why:
-            detail = f"You worked on your birthday. {why}"
-        elif not can:
-            detail = "You worked on your birthday, but it can no longer be claimed."
-        return _item(
-            key,
-            "birthday_credit",
-            "birthday",
-            day,
-            "Birthday credit: 1.00 shift",
-            detail,
-            "claimable" if can else ("detected" if why else "not_applicable"),
-            shifts=1.0,
-            **_claim_fields(HolidayWorkClaim.KIND_BIRTHDAY, claimable=can, message=why, suggested=Decimal("1.00")),
-        )
+        # worked (2026-11-25): Birthday Compensation to place on chosen dates, no credit to claim any more
+        return _birthday_compensation_item(emp, day, today)
     # the new rule: never "paid whatever you do" (the old automatic wording stays on the birthdays before claims_from)
     if result == effects.BIRTHDAY_PAID_LEAVE:
         status, title = "applied", "Birthday leave (paid)"

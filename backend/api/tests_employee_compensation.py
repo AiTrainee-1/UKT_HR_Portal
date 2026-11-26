@@ -1053,6 +1053,7 @@ class HodCardTests(HodBase):
                 "resignation",
                 "outpass",
                 "holiday_work",
+                "birthday_compensation",
             ],
         )
         by_key = {a["key"]: a for a in approvals}
@@ -1164,6 +1165,7 @@ class HodCardTests(HodBase):
         keys = [a["key"] for a in body["approvals"]]
         self.assertNotIn("casual_leave", keys)
         self.assertNotIn("holiday_work", keys)
+        self.assertNotIn("birthday_compensation", keys)
         self.assertIn("leave", keys)
 
 

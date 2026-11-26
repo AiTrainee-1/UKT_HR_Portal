@@ -18,6 +18,7 @@ from .md_portal import hod_approvals as H
 from .models import (
     AttendanceOverrideRequest,
     AuditLog,
+    BirthdayCompensationUse,
     CasualLeaveRequest,
     Department,
     DepartmentManager,
@@ -125,6 +126,15 @@ class Base(TestCase):
         OnDutySession.objects.create(employee=emp, destination="ABC Traders", status="pending_hod", approval_trail=[])
         self.missing_punch(emp)
         OutpassRequest.objects.create(employee=emp, destination="Bank", reason="x", approval_trail=[])
+        # Birthday Compensation (2026-11-25): the head decides first, then HR
+        BirthdayCompensationUse.objects.create(
+            employee=emp,
+            birthday=date(2026, 9, 1),
+            use_date=date(2026, 9, 21),
+            portion="full",
+            days=Decimal("1.00"),
+            approval_trail=[],
+        )
 
 
 class WhoIsListedTests(Base):
@@ -135,7 +145,7 @@ class WhoIsListedTests(Base):
         self.assertEqual([h["id"] for h in body["hods"]], [self.manager.id])
         hod = body["hods"][0]
         self.assertEqual((hod["name"], hod["code"], hod["department"]), ("Suresh Raj", "W9", "MD"))
-        self.assertEqual(hod["pending"], {"leave": 2, "permission": 2, "other": 5, "total": 9})
+        self.assertEqual(hod["pending"], {"leave": 2, "permission": 2, "other": 6, "total": 10})
         self.assertEqual(hod["oversees"]["people"], 1)
         self.assertTrue(all(hod["rights"].values()))
         self.assertEqual([d["name"] for d in body["mdDepartments"]], ["MD"])
@@ -190,7 +200,7 @@ class RequestsTests(Base):
         self.one_of_every_kind()
         body = self.get(f"{URL}/{self.manager.id}").json()
         self.assertEqual(body["status"], "pending")
-        self.assertEqual(body["counts"], {"leave": 2, "permission": 2, "other": 5, "total": 9})
+        self.assertEqual(body["counts"], {"leave": 2, "permission": 2, "other": 6, "total": 10})
         self.assertEqual(sorted(i["kind"] for i in body["items"]), sorted(H.KINDS))
         for i in body["items"]:
             self.assertEqual(i["employee"]["code"], "W1", i["kind"])

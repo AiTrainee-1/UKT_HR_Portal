@@ -525,6 +525,70 @@ describe("the calendar's kinds of day, Sync and the salary split-up", () => {
     expect(text(q("pd-legend-ot_comp"))).toBe("OT Compensation1");
   });
 
+  it("shows today's unfinished day as In progress: the first punch, no verdict, no shift count, counted after the shift", async () => {
+    // a production payroll would show "1 shift" on a full day; a day still running must show none
+    withDays({
+      "2026-10-01": {
+        status: "present",
+        shifts: 1,
+        firstIn: "09:06",
+        lastOut: "13:02",
+        inProgress: true,
+        provisionalUntil: "2026-10-01T18:11:00+05:30",
+      },
+      // provisionalUntil still set, but its moment has passed: only inProgress decides, so this is an ordinary day
+      "2026-10-05": { inProgress: false, provisionalUntil: "2026-10-05T18:11:00+05:30" },
+    });
+    await openStaff();
+    expect(cell("2026-10-01").dataset.kind).toBe("inprogress");
+    expect(text(cell("2026-10-01"))).toContain("In progress");
+    expect(text(cell("2026-10-01"))).toContain("In 09:06 · at work");
+    expect(text(cell("2026-10-01"))).not.toContain("13:02");
+    expect(text(cell("2026-10-01"))).not.toMatch(/\d shifts?/);
+    expect(cell("2026-10-01").getAttribute("aria-label")).toContain("Counted after the shift ends at 18:11");
+    expect(must("pd-in-progress-2026-10-01").getAttribute("title")).toBe("Counted after the shift ends at 18:11");
+    expect(cell("2026-10-05").dataset.kind).not.toBe("inprogress");
+    // the legend lists it apart (not as a Present day) only while such a day is shown
+    expect(text(q("pd-legend-inprogress"))).toBe("In progress1");
+    // the day panel: the chip instead of Present, the first punch only, shifts as a dash
+    click(cell("2026-10-01"));
+    expect(q("pd-day-in-progress")).not.toBeNull();
+    expect(text(q("pd-day-at-work"))).toBe("In 09:06 · at work");
+    const panel = text(q("pd-day-panel"));
+    expect(panel).toContain("Shifts —");
+    expect(panel).not.toContain("Shifts 1");
+    expect(panel).not.toContain("Last out");
+    // the table: the chip, the first punch, no last out, shifts "—"
+    click(q("pd-view-table"));
+    const row = [...must("pd-row-2026-10-01").querySelectorAll("td")].map(text);
+    expect(row[2]).toContain("In progress");
+    expect(row[3]).toBe("In 09:06 · at work");
+    expect(row[4]).toBe("—");
+    expect(row[5]).toBe("—");
+    expect(must("pd-row-shifts-2026-10-01").getAttribute("title")).toBe("Counted after the shift ends at 18:11");
+  });
+
+  it("a production day still running shows no shift count, where a settled full day says 1 shift", async () => {
+    const base = productionDetails();
+    world.production.set(
+      301,
+      productionDetails({
+        days: base.days.map((d) =>
+          d.date === "2026-10-05" ? { ...d, inProgress: true, provisionalUntil: "2026-10-05T18:11:00+05:30" } : d,
+        ),
+      }),
+    );
+    await openProduction();
+    expect(cell("2026-10-05").dataset.kind).toBe("inprogress");
+    expect(text(cell("2026-10-05"))).not.toMatch(/\d shifts?/);
+    expect(text(cell("2026-10-06"))).toMatch(/\d shifts?/);
+  });
+
+  it("lists no In progress legend entry when no day is still running", async () => {
+    await openStaff();
+    expect(q("pd-legend-inprogress")).toBeNull();
+  });
+
   it("does not count an On-Duty day as worked until HR approved it and the punches are there", async () => {
     withDays({
       "2026-10-06": {

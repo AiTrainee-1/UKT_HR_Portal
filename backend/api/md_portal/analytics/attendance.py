@@ -3025,6 +3025,8 @@ def attendance_employee(employee_id: int, period: Period) -> dict:
     )
     if emp is None:
         raise MdParamError(f"There is no employee with id {employee_id}.")
+    from ...day_progress import progress_fields
+
     scope = _OnePerson(employee_id=int(employee_id))
     today = ist_today()
     frame, win = frame_for(scope, period, today)
@@ -3055,6 +3057,7 @@ def attendance_employee(employee_id: int, period: Period) -> dict:
                 "source",
                 "is_informed",
                 "late_reason",
+                "provisional_until",
             )
         }
         for d in _days(lo, hi):
@@ -3091,6 +3094,8 @@ def attendance_employee(employee_id: int, period: Period) -> dict:
                     "manual": rec["source"] == "manual",
                     "informed": rec["is_informed"],
                     "reason": rec["late_reason"],
+                    # TODAY while the shift is still running (day_progress.py): "In progress", never in the totals
+                    **progress_fields(rec),
                 }
             )
     name = f"{emp['first_name'] or ''} {emp['last_name'] or ''}".strip() or emp["employee_code"] or f"#{employee_id}"

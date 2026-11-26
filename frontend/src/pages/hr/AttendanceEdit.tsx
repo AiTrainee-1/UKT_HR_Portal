@@ -28,6 +28,8 @@ import {
   useSubmitAttendanceEdit,
 } from "@/lib/api-client/custom-hooks";
 import { cn } from "@/lib/utils";
+import { InProgressChip } from "@/components/attendance-compensation";
+import { countedAfterLabel, inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import { StatusChip } from "./punch-view/parts";
 import { OptionGroup } from "./payroll-details/DayAttendanceEdit";
 import { LockedBanner, PortionPicker, PunchTimeField } from "./payroll-details/EditDetails";
@@ -235,11 +237,26 @@ export default function AttendanceEdit() {
                 </div>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl bg-slate-50 px-3 py-2 text-xs text-gray-600">
                   <span className="font-semibold text-gray-500">Now</span>
-                  <StatusChip status={data.day.status} source={data.day.source} />
-                  <span>{Number(data.day.shiftsEarned).toFixed(2)} shift</span>
-                  <span className="flex items-center gap-1">
-                    <Clock size={12} /> {data.day.firstPunch ?? "—"} to {data.day.lastPunch ?? "—"}
-                  </span>
+                  {isInProgress(data.day) ? (
+                    // today, while the shift is still running: no verdict and no shift count yet (owner 2026-11-26)
+                    <>
+                      <InProgressChip provisionalUntil={data.day.provisionalUntil} testId="edit-day-in-progress" />
+                      <span className="text-gray-400" title={countedAfterLabel(data.day.provisionalUntil)}>
+                        — shift
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Clock size={12} /> {inProgressPunchText(data.day.firstPunch)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <StatusChip status={data.day.status} source={data.day.source} />
+                      <span>{Number(data.day.shiftsEarned).toFixed(2)} shift</span>
+                      <span className="flex items-center gap-1">
+                        <Clock size={12} /> {data.day.firstPunch ?? "—"} to {data.day.lastPunch ?? "—"}
+                      </span>
+                    </>
+                  )}
                   {data.day.isLate && <span className="font-semibold text-red-600">Late</span>}
                   {data.day.earlyLeave && <span className="font-semibold text-red-600">Early out</span>}
                 </div>

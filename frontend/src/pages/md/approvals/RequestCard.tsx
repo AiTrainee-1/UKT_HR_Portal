@@ -9,6 +9,7 @@ import {
   agoText,
   approvalWarning,
   decisionOf,
+  kindName,
   requestDayText,
   requestedLabel,
   requestedText,
@@ -146,7 +147,7 @@ export default function RequestCard({
               ? ` It now waits for ${res.item.statusLabel.replace(/^Waiting for /, "")}.`
               : "";
           toast({
-            title: `${decision === "approved" ? "Approved" : "Rejected"}: ${who}'s ${item.kindLabel.toLowerCase()}`,
+            title: `${decision === "approved" ? "Approved" : "Rejected"}: ${who}'s ${kindName(item).toLowerCase()}`,
             description: `Recorded as ${res.actor}.${next}`,
           });
         },
@@ -158,12 +159,12 @@ export default function RequestCard({
     <article
       className="rounded-2xl border border-white/80 bg-white/55 p-4 shadow-sm backdrop-blur @container"
       data-testid={`md-approval-${item.key}`}
-      aria-label={`${item.kindLabel} request from ${who}`}
+      aria-label={`${kindName(item)} request from ${who}`}
     >
       <div className="flex flex-col gap-2 @xl:flex-row @xl:items-start @xl:gap-4">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className={GROUP_CHIP[item.group]}>{item.kindLabel}</span>
+            <span className={GROUP_CHIP[item.group]}>{kindName(item)}</span>
             <p className="min-w-0 break-words text-sm font-extrabold text-md-ink">
               {who}
               {item.employee.code && (
@@ -271,7 +272,7 @@ export default function RequestCard({
           data-testid="md-approval-confirm"
         >
           <p className="text-[13px] font-bold text-md-ink">
-            {asking === "approved" ? "Approve" : "Reject"} {who}'s {item.kindLabel.toLowerCase()} for {hod.name}?
+            {asking === "approved" ? "Approve" : "Reject"} {who}'s {kindName(item).toLowerCase()} for {hod.name}?
           </p>
           <p className="mt-0.5 text-xs text-md-ink-soft">
             It is decided at {hod.name}'s step and recorded in your name. The employee is told as usual.

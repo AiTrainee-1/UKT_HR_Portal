@@ -75,6 +75,14 @@ KINDS: dict[str, Kind] = {
             "can_approve_compensation",
             "approve compensation",
         ),
+        Kind(
+            "birthday_compensation",
+            "Birthday Compensation",
+            "other",
+            "birthdayCompensationUses",
+            "can_approve_compensation",
+            "approve compensation",
+        ),
         Kind("resignation", "Resignation", "other", "resignations", "can_approve_resignations", "approve resignation"),
     )
 }
@@ -222,6 +230,11 @@ def _describe(kind: str, row: dict) -> tuple[str, str | None, str | None, str | 
             return title, row.get("workDate"), None, _plural(row.get("shifts") or 0, "shift") + raised
         day = row.get("holidayName") or ("Sunday" if row.get("dayKind") == "sunday" else "Holiday")
         return f"Holiday work · {day}", row.get("workDate"), None, _plural(row.get("shifts") or 0, "shift") + raised
+    if kind == "birthday_compensation":
+        raised = " · raised by HR" if row.get("raisedByRole") == "hr" else ""
+        part = (row.get("portionLabel") or "Full day").lower()
+        detail = f"{part} (birthday {row.get('birthday')}){raised}"
+        return "Birthday Compensation", row.get("useDate"), None, detail
     if kind == "resignation":
         last = row.get("lastWorkingDate")
         return "Resignation", _date_part(row.get("createdAt")), None, f"Last working day {last}" if last else None
@@ -246,6 +259,8 @@ def _requested(kind: str, row: dict, start: str | None, end: str | None, detail:
         note = f"at {row['destination']}" if row.get("destination") else None
     elif kind == "holiday_work":
         label = "Work date"
+    elif kind == "birthday_compensation":
+        label, note = "Placed on", (row.get("portionLabel") or "Full day").lower()
     elif kind == "resignation":
         label, day, to, note = "Last working day", _date_part(row.get("lastWorkingDate")), None, None
     if not day:
@@ -371,6 +386,7 @@ def md_actor(md_user, m: DepartmentManager) -> str:
 def deciders() -> dict[str, Callable]:
     """kind -> fn(m, pk, decision, comment, actor, request) -> DRF Response, each the Department Head's own code."""
     from .. import manager_views as mv
+    from ..birthday_compensation_views import hod_decide_birthday_compensation
     from ..recruitment_views import hod_decide_resignation
 
     def plain(fn):
@@ -387,6 +403,7 @@ def deciders() -> dict[str, Callable]:
         "on_duty": plain(mv.hod_decide_on_duty),
         "attendance_correction": plain(mv.hod_decide_attendance),
         "holiday_work": plain(mv.hod_decide_holiday_work),
+        "birthday_compensation": plain(hod_decide_birthday_compensation),
         "resignation": lambda m, pk, decision, comment, actor, request: hod_decide_resignation(
             m, pk, {"action": "approve" if decision == "approved" else "reject", "comment": comment}, actor
         ),

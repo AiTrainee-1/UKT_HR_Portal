@@ -138,6 +138,46 @@ One engine decides who may approve every kind of request; HR configures it in **
 - **GET /api/attendance/employee/{pk}** — `@require_auth`, with an inline self-scope check: an employee token may only view its own id (`token_emp_id != pk` → 403). Returns one employee's full month (day-by-day) via `compute_month_records`/`month_summary_from_records` — the same day engine used by payroll and the HR portal — including status, isLate, isHalfShift, punches, leave type, hours worked, and a month summary block.
 - **GET /api/attendance/employee-shift-stats** — `@require_auth`; if the caller has no employee token it additionally requires `is_hr(request)` (403 otherwise) and reads `employee_id` from the query string, whereas an employee token always gets its own stats regardless of any passed id. Returns a detailed monthly shift/attendance stats payload (present/absent/leave/half-shift/full-shift day counts, late-morning vs late-return splits, per-day punch logs, and a live permission/late-deduction preview mirroring the payroll formula) for one employee, used by both the mobile "My Shift" page and HR's Manage Shift panel.
 
+## Attendance — In-progress days (day_progress.py, owner 2026-11-26)
+
+While TODAY's staff shift is still running the engine stores the day as provisional (`AttendanceDayRecord.provisional_until` = shift end + grace + 1 minute, `attendance_final._evening_open_until`; a birthday nobody has punched on yet is provisional until midnight): someone with only a morning punch is Present 1.00 *for now*, and `attendance_refresh.refresh_provisional` (every 5 min) judges the day again once that moment has passed (e.g. Half Day 0.50 with no afternoon punch). The engine logic is unchanged; what changed is that no screen, total or payroll treats that temporary verdict as final.
+
+**Field contract (additive; every existing key keeps its value and meaning):**
+
+| Field | Type | Meaning |
+|---|---|---|
+| `inProgress` | boolean | `provisional_until` is set AND still in the future (IST, aware compare: `day_progress.is_in_progress`). Show "In progress" (e.g. "In 09:06 · at work"), no Present / Half Day verdict and no shift count (`—`). |
+| `provisionalUntil` | string \| null | ISO datetime with the IST offset of the moment the shift is OVER = shift end + grace, e.g. `"2026-11-26T18:10:00+05:30"` ("Counted after the shift ends at 18:10"). It is the stored `provisional_until` MINUS the one minute the engine adds (the DB value is unchanged). `null` when the day is not provisional. It can still be set for a few minutes while `inProgress` is already false (shift over, background refresh not yet run): only `inProgress` decides the UI. |
+
+`shiftsEarned` / `shiftsCompleted` / `status` of an in-progress day still carry the engine's provisional values (old clients keep working); new clients must hide them while `inProgress` is true. Once the refresh has run the day comes back with `inProgress: false`, `provisionalUntil: null` and the final verdict, by itself.
+
+**Endpoints and where the two fields are:**
+
+| Endpoint | Used by | Where |
+|---|---|---|
+| `GET /api/attendance/employee/{pk}?month=&year=` | mobile app + Employee Web App calendar / day sheet, HR Employee Detail | every `records[]` item |
+| `GET /api/attendance/employee-shift-stats?month=&year=[&employee_id=]` | mobile + Employee Web App My Shift, HR Manage Shift panel | every `dailyLogs[]` item |
+| `GET /api/attendance/employee-monthly?employeeId=\|code=&month=&year=` | HR Attendance Search (also an employee token: own data) | every `weeks[].days[]` item |
+| `GET /api/attendance/edit-context?employeeId=&date=` | HR Attendance Edit | `day` |
+| `POST /api/attendance/override` (and its reset) | HR Attendance Edit | `record` |
+| `GET /api/attendance/daily?date=[&employmentType=]` | HR Staff / Production Attendance day list (and MD copy) | every row (from the stored day; always present, `false` / `null` on any day but today) |
+| `GET /api/attendance/report-log?month=&year=&employeeId=` (detail) | Report Log employee month | every `days[]` item |
+| `GET /api/attendance/report-log?date=` (daily) and `/production-report-log?date=` | Report Log Daily Leave / Late | every `rows[]` item |
+| `GET /api/attendance/report-log/sheet` and `/production-report-log/sheet` | Report Log register | `employees[].days[]` cells, ONLY on a provisional cell (a missing key = `false` / `null`, keeps the 230 x 31 grid light) |
+| `GET /api/attendance/report-log/day-punches` and `/production-report-log/day-punches` | Report Log day card | top level |
+| `GET /api/attendance/search/range?employeeId=&startDate=&endDate=` | HR Attendance Search ranges | every `days[]` item |
+| `GET /api/payroll/{id}/details`, `GET /api/payroll/production/{id}/details` (incl. `?live=1` Sync) | Payroll Details calendar / day panel / table | every `days[]` item (from the attendance record as it stands now) and `offDays[].attendance`; with `?live=1` an in-progress day also gets `shifts: 0` |
+| `GET /api/md/attendance/employee/{id}` (MD Attendance Insights drill) | MD portal | every `days[]` item |
+
+**Totals leave an in-progress day out until it is final** (`month_summary_from_records` skips it and adds `inProgressDays`; `totalDays` / `workingDays` still count it): the `summary` of `/attendance/employee/{pk}` (and `totalPresent` / `totalAbsent`), of `/attendance/employee-monthly`, of the Report Log summary / sheet rows and of `/attendance/monthly-summary`; `/attendance/employee-shift-stats` (`presentDays`, `halfShiftDays`, `fullShiftDays`, `totalEffectiveShifts`, `totalLateCount`, `lateMorningDays`, `lateReturnDays`, and its late pool: the day is out of `counted_dates`); `MonthlyShiftSummary.total_shifts` (`shift_engine.compute_monthly_shift_summary`, via `day_progress.earned_shifts`); `GET /api/my/analytics` (My Insights: the day is not in `days`, `punctuality`, `earlyOut` or `overtimeMinutes`). MD analytics frames already stop at yesterday. The Report Log sheet's `strength` (headcount at work) still counts the person.
+
+**Payroll never pays an in-progress day** (counted as not yet earned, like a day still to come; nothing already generated is regenerated):
+- Staff payroll (`payroll_views._generate_staff_payroll`, also Missed Payroll staff): the day is `status: "absent"`, `shiftsCompleted: 0`, kept out of the late pool, and its breakdown day carries `inProgress: true` and `note: "In progress when payroll was generated - generate again after the shift ends"` (`firstIn` still shown). Every staff breakdown day now has `inProgress` (bool) and `note` (string | null); Payroll Details shows that `note`.
+- Production payroll (`_generate_production_payroll`, also Missed Payroll production): `shiftsEarned: 0`, not in `daysWorked` / `daysAbsent`, same `inProgress` / `note` keys on every breakdown day.
+- Salary Slip page (`salary_slip_center.engine`, staff and production): the calendar row is `status: "future"` ("Not counted yet"), `shifts: 0`, `inProgress: true`, `note` as above.
+
+Tests: `api/tests_day_in_progress.py`.
+
 ## Attendance — Manual Entry, Biometric Device Webhook & Sync
 
 - **POST /api/biometric/punch** — **No auth decorator** (`@api_view(["POST"])` only, no `@require_auth`/`@require_hr`). This is the AiFace-Mars device push webhook: authenticated instead by comparing the `X-Device-Key` header (or `apiKey` body field) against `settings.BIOMETRIC_API_KEY` inside the function body — not JWT/user auth at all. Resolves the employee strictly by `employee_code` (never falls back to internal db id, to avoid code/id collisions), creates an `AttendanceLog` row, and upserts the day's `Attendance` summary row to `present=True`.
@@ -547,6 +587,130 @@ One claim workflow for every kind (2026-11-19): the employee (mobile app / Emplo
 **What a decision does** (`compensation_claims.decide`, `compensation_effects`): final approval → `credit_or_debit` (credit for holiday_work / ot_shift / birthday with sources `holiday_work` / `ot_shift` / `birthday`, a `redemption` debit with `claim` set for use_balance, nothing for ot_allowance), an approved ot_shift marks its OT record `announced` (relaxation, no claim date) so HR can no longer pay it; after commit an approved ot_allowance re-derives the next working day (when it has come and its month is not locked; a manual day is never recomputed) and an approved use_balance relaxes that day. Notices: the employee's in-app notice and the WhatsApp / push decision (type `compensation`, focus `hw-<id>`) per kind; HR raising a claim sends the employee one push (Phone Notify "Compensation & overtime", dedupe `claim:<id>:raised`).
 
 **Settings → Attendance → Staff: next-morning cut-off** (`GET|PUT /api/payroll-settings`, group `settings.attendance.staff`, company-wide: a branch login gets 403 `company_wide_rule`): `staffNextMorningEnabled` (bool, default true), `staffNextMorningCutoff` (`"HH:MM"`, 00:01..12:00, default `"06:00"`), `staffNextMorningFrom` (date; only moves forward: an earlier date or clearing a set one is a 400 with a sentence; switching the rule on again without a date stamps today). A staff punch on day D+1 before the cut-off (moved earlier by D+1's shift start minus `firstPunchPreShiftBufferHours` on a working day) belongs to day D when D's own punches are odd; days before the from-date keep `lastPunchPostShiftGraceHours`. A change is audited as its own line.
+
+## Compensation — Birthday Compensation on a chosen date (birthday_compensation.py, birthday_compensation_service.py, birthday_compensation_views.py; migration 0186)
+
+Owner brief 2026-11-25. A birthday that is NOT worked (no punch / approved leave) is still paid birthday leave on the day, automatically (unchanged). A birthday that IS worked (present, or a half day: a half day on the birthday counts as worked and nothing is automatic) no longer gives a 1.00 credit to claim: it gives **1.00 day of Birthday Compensation** the employee (mobile app / Employee Web App) or HR places on days of the **birthday month**, as a full day or a first / second half (two halves may go on two different dates). Each placement is a **use** (`BirthdayCompensationUse`), decided by the **Department Head, then HR** (approval workflow `birthday_compensation`, fixed, both steps mandatory). The final approval pays that day (or half) in the attendance like a Casual Leave; payroll reads it as it reads any paid day. Staff only. JSON is camelCase; employee endpoints also read snake_case bodies. Dates `YYYY-MM-DD`.
+
+**Rules (the server enforces all of them; every refusal has a sentence to print and a code to branch on).**
+- **Who / which birthday**: active staff with a date of birth; the birthday under the new birthday rule (`CompensationConfig.birthday_claims_apply_on`: from 1 Nov 2026 in production). A birthday whose 2026-11-19 credit claim is waiting or approved keeps it (state `credit_claim`, nothing to place); a rejected credit claim does not block placing. New birthday credit claims are refused (`POST /api/employee/compensation/claims` / `POST /api/compensation/claims` kind `birthday` → 400 `use_birthday_compensation`).
+- **When**: as soon as the birthday is known to be worked (a punch on it: today's birthday can be placed once the employee has punched in), until the last day of the birthday month. What is not placed by then **lapses** (no carry). 29 Feb is the 28th in a common year.
+- **Holds**: a waiting (`pending`) or `approved` use holds its days (1.00 full, 0.50 half) against the 1.00; a `rejected` or `withdrawn` one frees them.
+- **Eligible dates** (`eligibleDates`, every day of the month with the portions it can take): a working day of the birthday month, never the birthday itself, never a Sunday / declared holiday / off Saturday (the shift's `saturday_off`), never before joining, never in a Payroll Done month, never a day that already holds Casual Leave (pending / approved, or proposed on the Attendance Edit page) or a compensation day off (an open `use_balance` claim). Still to come (`future`; `today` while it has no punch): full / first half / second half. Already passed: `absent` or `on_leave` → full / first / second; `half_shift` → the MISSED half or a full day (worked the morning → `second_half`, `full`; worked the evening → `first_half`, `full`; not known → all three); a day HR set by hand (`manual: true`) → `full` only; `present` → not eligible. A half already placed on the date (pending / approved) is taken (a full day takes both). Portions are also limited to what is left (0.50 left → halves only).
+- **Approval**: the Department Head first (`DepartmentManager.can_approve_compensation`; never the employee's own request: an employee who is a head, or has no head who may approve compensation, cannot place it, 409 `no_hod`), then HR (approval right `birthday_compensation`, `hr_access`: an extra right on top of Edit on `compensation.leave.birthdays`; a role that never set it keeps "edit = approve"). Every approval re-checks: the date's payroll is not finalized, the OT / Compensation master switch is on, the birthday still shows as worked, and the day can still take that portion (e.g. worked meanwhile → refused) → 409 `use_refused` with the sentence. A rejection needs its reason (400 `remark_required`) and always works (even Payroll Done / switch off).
+- **Applied** on HR's approval: a day that has come is worked out again at once (a day HR fixed by hand is released first: the approval is the newer decision); a future day is paid when it is computed. Full day → Present 1.00, no Late / Early-Out marks; a half → that half paid and the other half judged by the punches (worked → Present 1.00, not worked → Half Day 0.50), the covered half's mark lifted (first half: no Morning Late-In; second half: no Evening Early-Out). The day carries `compensationKind: "birthday_comp"` and `compensationNote` "Birthday compensation (birthday 5 Mar): the whole day paid, no leave balance used" (or "the first half paid" / "the second half paid"). One benefit per birthday: a birthday with an approved use is never ALSO paid birthday leave if its punches are corrected away later.
+- **Switches**: placing needs the master switch, Settings → Compensation → Birthday and the `birthday_compensation` workflow on (403 `switched_off`); deciding what is already waiting does not need the Birthday switch or the workflow.
+
+**Errors** `{error, code}`: `invalid` 400 (bad `useDate` / `portion` / ids, a reason over 500 characters), `not_staff` 403, `not_eligible` 400 (inactive, no date of birth, the date is not in the birthday month: "Birthday Compensation can only be placed in the birthday month (March 2026), so Monday 2 Apr 2026 cannot be chosen.", the birthday gives nothing to place: paid birthday leave / a day off / the old rule / not worked out yet), `not_yet` 400 (the birthday is still to come, or today with no punch), `lapsed` 400 (the month is over), `credit_claimed` 409 (an open 2026-11-19 credit claim), `nothing_left` 409 ("Only 0.50 day of Birthday Compensation is left to place: choose a first or second half.", or all of it placed), `date_not_allowed` 400 (the day's own reason, e.g. "Monday 2 Mar 2026: Comp BDC1 was present this day (a full day worked): there is nothing to make up.", "On Friday 6 Mar 2026 only a second half or full day can be placed."), `locked` 409 (Payroll Done), `already_placed` 409 (that half of that date is already placed), `switched_off` 403, `no_hod` 409, `not_found` 404, `not_pending` 400 (withdrawing a decided one), `not_yours` 403 (the employee withdrawing what HR placed, or HR what the employee placed), `withdrawn` 409 (deciding a withdrawn one). Decisions also answer the pipeline's own codes: `not_your_turn` 400 (HR before the head), `approval_not_allowed` 400 (already decided), `remark_required` 400, `approval_not_permitted` 403 (HR without the right), `use_refused` 409.
+
+**The use row** (`use` below; the same for the employee, HR and the head, `canWithdraw` differs):
+```json
+{"id": 1, "kind": "birthday_compensation", "workflow": "birthday_compensation",
+ "employeeId": 1, "employeeCode": "BDC1", "employeeName": "Comp BDC1", "department": "VFX Dept", "departmentId": 1,
+ "designation": null, "branch": "BDC Head Office", "branchId": 2, "employmentType": "staff",
+ "employee": {"id": 1, "employeeCode": "BDC1", "name": "Comp BDC1", "firstName": "Comp", "lastName": "BDC1",
+              "department": "VFX Dept", "designation": null},
+ "birthday": "2026-03-05", "birthdayText": "Thursday 5 Mar 2026",
+ "useDate": "2026-03-03", "useDateText": "Tuesday 3 Mar 2026", "date": "2026-03-03", "weekday": "Tuesday",
+ "portion": "first_half", "portionLabel": "First half", "days": 0.5,
+ "status": "pending", "statusKey": "pending", "statusLabel": "Waiting for the Department Head",
+ "reason": "Family function", "raisedByRole": "employee", "requestedBy": "Comp BDC1",
+ "createdAt": "2026-11-25T12:21:14.504702+00:00",
+ "hodReviewedBy": null, "hodReviewedAt": null, "hodReviewComment": null,
+ "hrReviewedBy": null, "hrReviewedAt": null, "hrReviewComment": null,
+ "reviewedBy": null, "reviewedAt": null, "reviewComment": null, "withdrawnBy": null, "withdrawnAt": null,
+ "canWithdraw": true,
+ "approval": {"workflow": "birthday_compensation", "label": "Birthday Compensation", "enabled": true,
+              "steps": [{"roles": ["hod"], "mandatory": true, "label": "HOD", "index": 0, "state": "pending"},
+                        {"roles": ["hr"], "mandatory": true, "label": "HR", "index": 1, "state": "waiting"}],
+              "currentStep": 0, "waitingFor": ["hod"], "canAct": {"hod": true, "hr": false},
+              "canReject": {"hod": true, "hr": false}, "hrTurn": false, "hrPermitted": true}}
+```
+`status`: `pending | approved | rejected | withdrawn`. `statusKey` tells the two waiting steps apart: `pending` (waiting for the Department Head, statusLabel "Waiting for the Department Head") | `pending_hr` ("Approved by the Department Head, waiting for HR") | `approved` ("Approved: first half paid on 3 Mar") | `rejected` ("Not approved") | `withdrawn` ("Withdrawn"). `reviewedBy / reviewedAt / reviewComment` = the latest decision of the trail; the `hod*` / `hr*` stamps are each step's. `canWithdraw`: employee → pending and raised by the employee; HR → pending and raised by HR; head → never.
+
+**The entitlement** (`entitlement` below; GET of the employee and of HR):
+```json
+{"employeeId": 1, "employeeCode": "BDC1", "employeeName": "Comp BDC1", "department": "VFX Dept", "departmentId": 1,
+ "designation": null, "branch": "BDC Head Office", "branchId": 2, "employmentType": "staff",
+ "birthday": "2026-03-05", "birthdayText": "Thursday 5 Mar 2026", "weekday": "Thursday",
+ "month": {"year": 2026, "month": 3, "label": "March 2026", "from": "2026-03-01", "to": "2026-03-31"},
+ "state": "available", "stateLabel": "To place",
+ "message": "You worked on your birthday (Thursday 5 Mar 2026): 1.00 day of Birthday Compensation to place on a day (or two halves) of March 2026, by 31 Mar. Unused compensation lapses when the month ends.",
+ "worked": true, "dayStatus": "present",
+ "days": {"total": 1.0, "held": 0.0, "used": 0.0, "available": 1.0, "lapsed": 0.0},
+ "windowOpen": true, "lapsesOn": "2026-03-31", "canPlace": true, "placeMessage": null,
+ "portions": [{"key": "full", "label": "Full day", "days": 1.0}, {"key": "first_half", "label": "First half", "days": 0.5},
+              {"key": "second_half", "label": "Second half", "days": 0.5}],
+ "uses": [],
+ "eligibleDates": [
+   {"date": "2026-03-03", "weekday": "Tue", "status": "absent", "label": "Absent", "selectable": true,
+    "portions": ["full", "first_half", "second_half"], "suggested": "full", "reason": null, "worked": null,
+    "firstPunch": null, "lastPunch": null, "manual": false, "halves": {"first": "08:30-13:00", "second": "14:00-17:30"},
+    "placed": []},
+   {"date": "2026-03-05", "weekday": "Thu", "status": "birthday", "label": "Birthday", "selectable": false, "portions": [],
+    "suggested": null, "reason": "The birthday itself cannot be chosen: choose another day of March 2026.", "worked": null,
+    "firstPunch": "08:30", "lastPunch": "17:30", "manual": false, "halves": null, "placed": []},
+   {"date": "2026-03-06", "weekday": "Fri", "status": "half_shift", "label": "Half Day · worked the morning",
+    "selectable": true, "portions": ["second_half", "full"], "suggested": "second_half", "reason": null,
+    "worked": "morning", "firstPunch": "08:30", "lastPunch": "13:00", "manual": false,
+    "halves": {"first": "08:30-13:00", "second": "14:00-17:30"}, "placed": []},
+   {"date": "2026-03-08", "weekday": "Sun", "status": "off_day", "label": "Sunday", "selectable": false, "portions": [],
+    "suggested": null, "reason": "A Sunday is already a day off: choose a working day.", "worked": null,
+    "firstPunch": null, "lastPunch": null, "manual": false, "halves": null, "placed": []},
+   {"date": "2026-03-16", "weekday": "Mon", "status": "future", "label": "Still to come", "selectable": true,
+    "portions": ["full", "first_half", "second_half"], "suggested": "full", "reason": null, "worked": null,
+    "firstPunch": null, "lastPunch": null, "manual": false, "halves": {"first": "08:30-13:00", "second": "14:00-17:30"},
+    "placed": []}],
+ "creditClaim": null, "approvalPath": "Employee or HR → HOD → HR", "workflowEnabled": true,
+ "isStaff": true, "enabled": {"master": true, "birthday": true, "workflow": true, "canPlace": true}, "today": "2026-03-12"}
+```
+- `state`: `available` (something to place, the month open) | `placed` (all of it waiting / approved) | `lapsed` (the month is over: `days.lapsed` was never placed) | `upcoming` (still to come, or today with no punch) | `paid_leave` (not worked: the automatic paid birthday leave) | `credit_claim` (an open 2026-11-19 credit claim, `creditClaim` = `{id, status, shifts, workDate}`) | `off_day` | `old_rule` | `not_eligible` (switched off, no date of birth, not worked out yet ...). `stateLabel` / `message` are the words to print. `worked`: the birthday was worked (a punch on it) - true / false, null while it is still to come; `dayStatus` the birthday's stored attendance status.
+- `days`: `total` 1.00 when worked (0 otherwise), `held` pending, `used` approved, `available` = what can still be placed (0 after the month), `lapsed` = what was never placed (only after the month).
+- `canPlace` false → `placeMessage` says why (switched off, no Department Head who may approve compensation, nothing left, no day can take it any more ...). `eligibleDates` is filled for `available` / `placed` (empty otherwise); a day's `status`: `future | today | absent | on_leave | half_shift | present | holiday | birthday | off_day | not_joined | locked | casual_leave | compensation | none` (none = not worked out yet), `label` the words, `selectable` = `portions` not empty, `suggested` the portion to preselect, `reason` why it cannot be chosen (or why only halves), `worked` (half days), `halves` the clock times of each half on that day's shift, `placed` `[{id, portion, status}]` of the uses already on that date.
+- `uses`: every use of this birthday (any status), oldest date first.
+
+**Employee (employee token; an HR token gets 403; production: `isStaff: false`)**
+- **GET `/api/employee/compensation/birthday?year=YYYY`** → the entitlement of the signed-in employee's birthday of that year (default this year's) + `isStaff`, `enabled {master, birthday, workflow, canPlace}`, `today`. The month's past days are worked out first (never a finalized month). Production: `{isStaff: false, message, state: "not_eligible", uses: [], eligibleDates: [], canPlace: false, enabled}`.
+- **GET `/api/employee/compensation/birthday/uses?status=all|pending|approved|rejected|withdrawn`** → `{items: [use], total, isStaff}`, newest first (every birthday, at most 500).
+- **POST `/api/employee/compensation/birthday/uses`** `{"useDate": "2026-03-03", "portion": "first_half", "reason": "Family function"}` (`reason` optional, ≤ 500; default "Birthday Compensation for my birthday, Thursday 5 Mar 2026.") → **201** the use (`raisedByRole: "employee"`). The birthday is the one whose month `useDate` is in. The Department Head is told (phone + WhatsApp Control's HOD message, deduped per employee + date + portion).
+- **DELETE `/api/employee/compensation/birthday/uses/<id>`** → **200** the use with `status: "withdrawn"` (only a pending one the employee placed; audited).
+
+**HR (`@require_hr`, branch-scoped: another branch's employee / use is 404; key `compensation.leave.birthdays`: View reads, Edit places / withdraws)**
+- **GET `/api/compensation/birthday-compensation?employeeId=<id>&year=YYYY`** → the entitlement of that employee (the "Choose date for employee" dialog), worded for HR, + `isStaff`, `enabled`, `today`. The month is worked out first only for a login with Edit (a view-only read never writes). `employeeId` is required (400), unknown / out of branch 404.
+- **GET `/api/compensation/birthday-compensation/uses?status=all|pending|waiting_hod|waiting_hr|approved|rejected|withdrawn&month=&year=&employeeId=&departmentId=&branchId=&q=&raisedBy=hr|employee&page=&pageSize=`** → `{items: [use], total, page, pageSize (default 50, max 200), summary: {byStatus: {pending, waiting_hod, waiting_hr, approved, rejected, withdrawn}, pendingDays, approvedDays}, enabled}`; newest first; `month` / `year` filter by `useDate`; `q` = name / code / reason words. The summary is of every row the other filters keep (the status tiles ARE the status filter).
+- **POST `/api/compensation/birthday-compensation/uses`** `{"employeeId": 1, "useDate": "2026-03-16", "portion": "second_half", "reason": "At desk"}` → **201** the use (`raisedByRole: "hr"`, `requestedBy` the HR user). Same rules and refusals as the employee's; it still goes to the Department Head, then HR. The employee gets one phone notice ("Birthday Compensation placed for you", Phone Notify Control's Compensation switch).
+- **GET `/api/compensation/birthday-compensation/uses/<id>`** → the use. **DELETE** → **200** the use withdrawn (only a pending one HR placed; the employee's own is rejected instead).
+- **PATCH `/api/compensation/birthday-compensation/uses/<id>/decision`** `{"status": "approved" | "rejected", "comment": "..."}` → **200** the use. HR's step (after the head's: 400 `not_your_turn` before it). Needs Edit on `compensation.leave.birthdays` AND the approval right `birthday_compensation` (an extra right on top of Edit, like the other compensation decision; a role that never set it keeps "edit = approve"): otherwise 403 (`approval_not_permitted` from the view, or the permission middleware's refusal for a View-only login). The final approval pays the day (see Rules). Activity Logs: "Approved Birthday Compensation of <name> (<code>) for <date> (<part>)".
+
+**Department Head (employee token of an active head)**
+- **PATCH `/api/manager/birthday-compensation/<id>/status`** `{"status": "approved" | "rejected", "comment": "..."}` → **200** the use (after an approval `status` is still `pending`, `statusKey: "pending_hr"`, `approval.waitingFor: ["hr"]`). 403 `APPROVE_COMPENSATION_DISABLED` without `can_approve_compensation`, 403 outside the head's scope, 404 unknown, 409 `withdrawn`, 409 `use_refused`, 400 `remark_required`.
+
+**Where it is listed (approval surfaces)**
+- `GET /api/manager/pending-requests` adds `birthdayCompensationUses: [use]` (pending = what the head can decide now; `?status=approved|rejected|all` = history, withdrawn never listed); `totalPending` and `GET /api/manager/me` `pendingApprovalsCount` include it, plus `pendingBirthdayCompensationCount`.
+- Mobile Approvals history: category `birthday_compensation` (aliases `birthdayCompensation`, `birthday`), behind `can_approve_compensation`: `GET /api/manager/requests/summary`, `GET /api/manager/requests?category=birthday_compensation&status=pending|approved|rejected` (approved includes "approved by you, waiting for HR").
+- MD portal HOD approvals (`/api/md/approvals/hods/<id>`, `POST .../decide {kind: "birthday_compensation", id, decision, comment}`): kind `birthday_compensation`, group `other`, `requested.label` "Placed on".
+- HR Requests hub (`GET /api/hr-requests`): kind `birthday_compensation` ("Birthday Compensation", mode `quick`: Approve / Reject call the HR decision endpoint above, `extra.decisionPath`), module `compensation.leave.birthdays`, Requests key `requests.list.birthday_compensation`, the date filter by `useDate`, `requested.label` "Placed on", withdrawn ones never listed; `canApprove` = the approval right. The HoD's tab / reminders list it as category `birthday_compensation`.
+- The 45-day automatic rejection (Settings → Auto-Reject Requests) covers it: HR's stamps "Automatic rejection", phone notice only.
+- `GET /api/approval-summary` / Approval Workflow Control: workflow `birthday_compensation`, path "Employee or HR → HOD → HR", fixed (steps cannot be edited; it can be switched off: new placements stop, waiting ones can still be decided). `GET /api/employee/hod` approvals list it (staff only).
+- Notifications: the head's "waiting for your approval" (type `birthday_compensation`, Approvals → Birthday Compensation), the employee's step notice after the head approves (type `birthday_compensation`, source `approval_progress`), the final approval / rejection on WhatsApp and the phone through the shared "Approval - Approved / Rejected" templates (`whatsapp_approvals`, module `birthday_compensation`, request type "Birthday Compensation"; no new Meta template), View → the employee's Compensation page.
+
+**What else changed**
+- **`GET /api/compensation/birthdays`** (the HR Birthdays list): a worked birthday with no credit claim waiting / approved now has `outcome` `comp_to_place` ("Worked: Birthday Compensation to place") | `comp_placed` ("Birthday Compensation placed") | `comp_lapsed` ("Birthday Compensation lapsed") instead of `credit_claimable` / `credit_rejected` (`credit_pending` / `credit_approved` stay for old claims; `outcomeCounts` / `outcomeLabels` / the `outcome` filter know the new values). Every row adds `birthdayCompensation` and `canPlace`, and `claimable` is always false:
+```json
+"birthdayCompensation": {"state": "placed", "label": "Placed: 3 Mar (first half, approved), 16 Mar (second half, pending)",
+  "total": 1.0, "held": 0.5, "used": 0.5, "available": 0.0, "lapsed": 0.0, "windowFrom": "2026-03-01", "lapsesOn": "2026-03-31",
+  "windowOpen": true,
+  "uses": [{"id": 1, "useDate": "2026-03-03", "portion": "first_half", "portionLabel": "First half", "days": 0.5,
+            "status": "approved", "statusKey": "approved", "statusLabel": "Approved: first half paid on 3 Mar"},
+           {"id": 2, "useDate": "2026-03-16", "portion": "second_half", "portionLabel": "Second half", "days": 0.5,
+            "status": "pending", "statusKey": "pending", "statusLabel": "Waiting for the Department Head"}]},
+"canPlace": false
+```
+  (`state` `available | placed | lapsed | credit_claim | null`; null = the birthday gives nothing to place.)
+- **`GET /api/employee/compensation`**: a worked birthday with no open credit claim is the item `{key: "bdc-<birthday>", kind: "birthday_compensation", group: "birthday", status: "available" | "placed" | "lapsed", title, detail, shifts: 1.0, birthdayCompensation: {...as above}, canPlace, claimable: false, claimKind: null}`; a waiting / approved credit claim keeps its `birthday_credit` item. New status labels `placed` "Placed", `lapsed` "Lapsed".
+- **Compensation report** (`GET /api/compensation/reports?type=birthday`): the `comp_*` outcomes are `approved` (all of it approved), `pending` (something waiting) or `not_applied` (nothing placed yet / lapsed), `assignedBy` "Birthday Compensation".
+- **Attendance day records**: `compensationKind` may be `"birthday_comp"` (with the note above); reports that look for "birthday" in the marker count it as a paid birthday day.
+- **`GET /api/attendance/daily`** (the punch-based daily list): a day Birthday Compensation pays with no punch reads `on_leave` with `compensationKind: "birthday_comp"` and its note (like a paid birthday leave), never Absent.
 
 ## Company Documents: Salary Slip & Document Theming Settings
 
@@ -2420,6 +2584,9 @@ The senders behind the Documents, Visitors and Resume Screening pages keep their
 - `raised_by_role` — TextField, choices `hr` | `employee`, default and `db_default` `hr`
 - Constraints: `uniq_open_comp_claim` (employee, kind, work_date) where status is pending or approved, replacing `uniq_open_holiday_work_claim` (employee, work_date); `uniq_open_comp_claim_per_ot` (overtime_record) where pending or approved and the record is set. A rejected claim can be raised again.
 - Model constants: `KIND_*`, `KIND_CHOICES`, `OT_KINDS`, `CREDIT_KINDS` (holiday_work, ot_shift, birthday), `OPEN_STATUSES`, `RAISED_BY_HR` / `RAISED_BY_EMPLOYEE`.
+
+### BirthdayCompensationUse
+**Table:** `birthday_compensation_uses` (migration 0186, 2026-11-25). One placement of a worked birthday's 1.00 day of Birthday Compensation: `employee` (FK, CASCADE, related_name `birthday_compensation_uses`), `birthday` (the celebrated date it comes from), `use_date` (always in the birthday's month), `portion` (`full | first_half | second_half`), `days` (1.00 | 0.50, check `bday_use_days_full_or_half`), `status` (`pending | approved | rejected | withdrawn`), `reason`, `raised_by_role` (`employee | hr`), `requested_by`, `approval_trail` (JSON, workflow `birthday_compensation`), `hod_reviewed_by / _at / hod_review_comment`, `hr_reviewed_by / _at / hr_review_comment`, `withdrawn_by / withdrawn_at`, `created_at`, `updated_at`. Indexes `bday_use_emp_birthday` (employee, birthday), `bday_use_date_status` (use_date, status). Constraints `uniq_bday_use_first_half` / `uniq_bday_use_second_half`: one open (pending / approved) use of each half of a date per employee (a full day covers both halves, so it conflicts with any other open use of that date; first + second half of one date are allowed). A pending or approved use holds its days against the birthday's 1.00; what is left when the birthday month ends lapses. The attendance engine reads the APPROVED ones (`compensation_engine.CompContext.birthday_uses`).
 
 ### CompensationLedger
 **Table:** `compensation_ledger`. The compensation balance: `employee`, `entry_type` (`credit | debit`), `shifts`, `date`, `source` (`holiday_work | ot_shift | birthday | legacy_credit | redemption`; `birthday` added 2026-11-19, a value only), `claim` (FK to the claim), `overtime_record`, `note`, `created_by`. A credit comes from an approved claim of a credit kind (or a migrated legacy credit); a debit is HR redeeming (claim null) or an approved `use_balance` claim (claim set). Constraints: one credit per claim (`uniq_ledger_credit_per_claim`), one `ot_shift` credit per OT record, and **one debit per claim** (`uniq_ledger_debit_per_claim`, migration 0166: entry_type debit and claim set). Balance = credits + still-available legacy `CompensationLeaveCredit` rows − debits (a debit that only mirrors a legacy credit being used is not subtracted twice).

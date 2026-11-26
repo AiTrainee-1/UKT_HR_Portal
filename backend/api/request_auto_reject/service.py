@@ -15,6 +15,7 @@ hands it: whatsapp_approvals.decision_message, whatsapp_notifications.geo_sessio
     on_duty_punch          geo_attendance_views.resolve_on_duty_punch_hr      (called, without its WhatsApp)
     attendance_correction  attendance_edit_views.attendance_override_decision - (a rejection changes no attendance)
     holiday_work           compensation_claims.decide                         after_claim_decided on commit (no-op for a rejection)
+    birthday_compensation  birthday_compensation_service.decide_use           - (a rejection changes no attendance; frees the 0.50 / 1.00)
     outpass                outpass_request_views.resolve_outpass_request      - (no pass issued)
     request                leave_views.employee_request_action                -
     advance                settlement_views.advance_detail (PUT rejected)     an AdvanceDecision row, as every decision has
@@ -266,6 +267,18 @@ def _reject_holiday_work(obj, ctx: Context) -> None:
     _announce_decision("holiday_work", obj, ctx)
 
 
+def _reject_birthday_compensation(obj, ctx: Context) -> None:
+    """birthday_compensation_service.decide_use's rejection (2026-11-25): HR's stamps (the step a rejection ends), no
+    attendance change; the day it held is free again (only waiting / approved uses hold the birthday's 1.00)."""
+    _append_trail("birthday_compensation", obj, ctx)
+    obj.status = "rejected"
+    obj.hr_reviewed_by = AUTO_BY
+    obj.hr_reviewed_at = ctx.now
+    obj.hr_review_comment = ctx.remark
+    obj.save()
+    _announce_decision("birthday_compensation", obj, ctx)
+
+
 def _reject_outpass(obj, ctx: Context) -> None:
     """resolve_outpass_request's rejection: who decided and the comment; no pass is issued."""
     _append_trail("outpass", obj, ctx)
@@ -317,6 +330,7 @@ REJECTORS = {
     "on_duty_punch": _reject_on_duty_punch,
     "attendance_correction": _reject_attendance_correction,
     "holiday_work": _reject_holiday_work,
+    "birthday_compensation": _reject_birthday_compensation,
     "outpass": _reject_outpass,
     "request": _reject_request,
     "advance": _reject_advance,

@@ -604,9 +604,17 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
     full_shift_count = 0
     effective_present = Decimal("0")  # accumulates 0.5 or 1.0 per present day
 
+    from .day_progress import IN_PROGRESS_PAYROLL_NOTE, is_in_progress
+
+    in_progress_dates: set = set()  # left out of the late pool / My Shift summary below too, until they are final
     for d in working_days_list:
         fr = final_by_date.get(d)
-        if fr is not None:
+        # TODAY while its shift is still running (owner 2026-11-26): not yet earned, like a day still to come - its
+        # Present 1.00 is only provisional until the background refresh judges the evening (day_progress.py)
+        day_in_progress = fr is not None and is_in_progress(fr.provisional_until)
+        if day_in_progress:
+            in_progress_dates.add(d)
+        if fr is not None and not day_in_progress:
             fr_status = fr.status
             if fr_status in ("present", "half_shift"):
                 status = "present"
@@ -644,9 +652,12 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             # A working day beyond what compute_month_records has reached yet
             # (it only computes up to today) -nothing has happened there,
             # so simply absent for now; this in-progress-month preview gets
-            # recalculated once those days actually elapse.
+            # recalculated once those days actually elapse. A day still in
+            # progress is counted the same way (its punches are still shown).
             status = "absent"
             info = {"status": "absent", "is_late": False, "is_early_out": False, "late_reason": None, "first_in": None, "last_out": None, "leave_type": None}
+            if day_in_progress:
+                info["first_in"] = fr.first_punch.strftime("%H:%M") if fr.first_punch else None
             info.update(is_penalty_early_out=False, penalty_deduction=Decimal("0"), early_out_minutes=0)
             forced_shifts = Decimal("0")
             forced_half = False
@@ -699,6 +710,9 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
             # What compensation shaped the day (OT allowance used, announced window, birthday leave, relaxation).
             # Information only: the pay above follows the shifts earned, never this marker.
             **compensation_marker_json(fr),
+            # additive: the day was still running when this payroll was generated, so it was not paid (yet)
+            "inProgress": day_in_progress,
+            "note": IN_PROGRESS_PAYROLL_NOTE if day_in_progress else None,
         })
 
     # 7. Salary calculation
@@ -795,7 +809,7 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
         employee=emp, date__year=year, date__month=month, status="approved",
     ).count()
     pool = late_pool_summary(
-        final_records, approved_permissions, _settings, counted_dates=set(working_days_list),
+        final_records, approved_permissions, _settings, counted_dates=set(working_days_list) - in_progress_dates,
     )
     excess_permissions = pool["excess_permissions"]
     total_late = pool["total"]
@@ -835,7 +849,8 @@ def _generate_staff_payroll(emp: Employee, month: int, year: int, settings=None,
         # compute_month_records call for this employee/month.
         from .shift_engine import compute_monthly_shift_summary
         compute_monthly_shift_summary(
-            emp, year, month, daily_rate, records=final_records, counted_dates=set(working_days_list),
+            emp, year, month, daily_rate, records=final_records,
+            counted_dates=set(working_days_list) - in_progress_dates,
         )
 
     # 9. Advances
@@ -1164,10 +1179,16 @@ def _generate_production_payroll(
     days_worked = 0
     days_absent = 0
 
+    from .day_progress import IN_PROGRESS_PAYROLL_NOTE, is_in_progress
+
     for rec in records:
-        shifts = rec.shifts_earned or Decimal("0")
+        # TODAY while its shift is still running (owner 2026-11-26): not yet earned, nothing paid for it yet
+        day_in_progress = is_in_progress(rec.provisional_until)
+        shifts = Decimal("0") if day_in_progress else (rec.shifts_earned or Decimal("0"))
         total_shifts += shifts
-        if rec.status in ("present", "half_shift"):
+        if day_in_progress:
+            pass
+        elif rec.status in ("present", "half_shift"):
             days_worked += 1
         elif rec.status == "absent":
             days_absent += 1
@@ -1187,6 +1208,9 @@ def _generate_production_payroll(
             # carries, purely informational and never fed into pay either way.
             "isLate": rec.is_late,
             "lateReason": None,
+            # additive: the day was still running when this payroll was generated, so it was not paid (yet)
+            "inProgress": day_in_progress,
+            "note": IN_PROGRESS_PAYROLL_NOTE if day_in_progress else None,
         })
 
     # Production Late Detection (Settings → Payroll → Production) -entirely

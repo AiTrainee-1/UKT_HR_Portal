@@ -43,6 +43,7 @@ from decimal import Decimal
 from django.db.models import Q
 
 from .clock import FACTORY_TZ
+from .day_progress import is_in_progress
 from .mobile_pay import _key as _slip_payroll_key
 from .mobile_pay import payrolls_by_key, period_json
 from .models import (
@@ -165,7 +166,7 @@ def _count_days(emp, out: dict, start: date, today: date) -> _Shifts:
 
     rows = AttendanceDayRecord.objects.filter(employee_id=emp.id, date__gte=start, date__lte=today).values(
         "date", "status", "is_late", "is_half_shift", "is_half_day_leave", "early_leave", "penalty_early_out",
-        "early_out_minutes", "ot_extra_minutes", "first_punch", "arrival_zone",
+        "early_out_minutes", "ot_extra_minutes", "first_punch", "arrival_zone", "provisional_until",
     )
     for r in rows:
         d = r["date"]
@@ -174,6 +175,8 @@ def _count_days(emp, out: dict, start: date, today: date) -> _Shifts:
         status = r["status"]
         if d == today and status == AttendanceDayRecord.STATUS_ABSENT:
             continue  # today is still running: it counts once the employee punches
+        if is_in_progress(r["provisional_until"]):
+            continue  # today while the shift is still running (day_progress.py): it counts once it is final
         key = (d.year, d.month)
         month = out.get(key)
         if month is None:

@@ -3,6 +3,7 @@ import { dateTime, fileStem } from "@/components/payroll/kit/format";
 import { issueLabel } from "@/components/payroll/kit/issue-meta";
 import { payStatusLabel } from "@/components/payroll/kit/pay-status";
 import type { PayrollDetails } from "@/lib/api-client/custom-hooks";
+import { isInProgress } from "@/lib/day-progress";
 import {
   addTitleBlock,
   allBorders,
@@ -254,10 +255,11 @@ export async function exportDetailsWorkbook(details: PayrollDetails, company: st
     rows: details.days.map((d): CellValue[] => [
       d.date,
       d.day,
-      statusLabel(d.status),
+      // a day still running (today) has no verdict and no shift count yet
+      isInProgress(d) ? "In progress" : statusLabel(d.status),
       d.firstIn ?? "",
-      d.lastOut ?? "",
-      d.shifts,
+      isInProgress(d) ? "" : (d.lastOut ?? ""),
+      isInProgress(d) ? null : d.shifts,
       (d.flags ?? []).map((f) => issueLabel(f)).join(", "),
       d.note ?? "",
     ]),

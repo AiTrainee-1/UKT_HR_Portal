@@ -4,9 +4,11 @@ import {
   CompensationChip,
   CompensationLegend,
   CompensationSymbol,
+  InProgressChip,
   compensationMark,
   countMarks,
 } from "@/components/attendance-compensation";
+import { countedAfterLabel, inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import { Button } from "@/components/ui/button";
 import { dateLong, dayMonth, dateShort, weekdayShort } from "@/components/payroll/kit/format";
 import { ISSUE_META, issueLabel } from "@/components/payroll/kit/issue-meta";
@@ -45,8 +47,10 @@ type View = "calendar" | "table";
 
 const timeText = (t: string | null | undefined): string => (t ? t.slice(0, 5) : "—");
 
-/** The punches of a day in a few characters: "09:02–18:07", "in 09:02" (no last out), "out 18:07", or nothing. */
-function punchText(day: Pick<PayrollDay, "firstIn" | "lastOut">): string {
+/** The punches of a day in a few characters: "09:02–18:07", "in 09:02" (no last out), "out 18:07", or nothing. A day still
+ *  running says "In 09:06 · at work": its last punch so far is not yet the day's exit. */
+function punchText(day: Pick<PayrollDay, "firstIn" | "lastOut" | "inProgress">): string {
+  if (isInProgress(day)) return inProgressPunchText(day.firstIn);
   if (day.firstIn && day.lastOut) return `${timeText(day.firstIn)}–${timeText(day.lastOut)}`;
   if (day.firstIn) return `in ${timeText(day.firstIn)}`;
   if (day.lastOut) return `out ${timeText(day.lastOut)}`;
@@ -235,23 +239,26 @@ export function AttendanceCard({
                           const group = KIND_GROUPS.find((g) => g.title === name)!;
                           return (
                             <LegendRow key={name} title={group.title} testId={group.testId}>
-                              {group.kinds.map((k) => (
-                                <ToggleChip
-                                  key={k}
-                                  pressed={kindFilter === k}
-                                  onClick={() => setKindFilter(kindFilter === k ? "all" : k)}
-                                  disabled={counts[k] === 0 && kindFilter !== k}
-                                  title={DAY_KIND_META[k].hint}
-                                  testId={`pd-legend-${k}`}
-                                  className={LEGEND_CHIP}
-                                >
-                                  <span className="flex min-w-0 items-center gap-1.5">
-                                    <span className={cn("h-2 w-2 shrink-0 rounded-full", DAY_KIND_META[k].swatch)} />
-                                    <span className="whitespace-nowrap">{DAY_KIND_META[k].label}</span>
-                                  </span>
-                                  <span className="tabular-nums text-[10px] opacity-60">{counts[k]}</span>
-                                </ToggleChip>
-                              ))}
+                              {/* "In progress" (today, shift still running) is listed only while such a day is shown */}
+                              {group.kinds
+                                .filter((k) => k !== "inprogress" || counts[k] > 0 || kindFilter === k)
+                                .map((k) => (
+                                  <ToggleChip
+                                    key={k}
+                                    pressed={kindFilter === k}
+                                    onClick={() => setKindFilter(kindFilter === k ? "all" : k)}
+                                    disabled={counts[k] === 0 && kindFilter !== k}
+                                    title={DAY_KIND_META[k].hint}
+                                    testId={`pd-legend-${k}`}
+                                    className={LEGEND_CHIP}
+                                  >
+                                    <span className="flex min-w-0 items-center gap-1.5">
+                                      <span className={cn("h-2 w-2 shrink-0 rounded-full", DAY_KIND_META[k].swatch)} />
+                                      <span className="whitespace-nowrap">{DAY_KIND_META[k].label}</span>
+                                    </span>
+                                    <span className="tabular-nums text-[10px] opacity-60">{counts[k]}</span>
+                                  </ToggleChip>
+                                ))}
                               {group.title === "Days off" && noRecord > 0 && (
                                 <span
                                   className={cn(
@@ -437,7 +444,7 @@ const KIND_GROUPS: { title: string; testId: string; kinds: DayKind[] }[] = [
   {
     title: "Worked",
     testId: "pd-status-legend",
-    kinds: ["present", "late", "early", "half", "onduty", "onduty_pending"],
+    kinds: ["inprogress", "present", "late", "early", "half", "onduty", "onduty_pending"],
   },
   { title: "Leave", testId: "pd-leave-legend", kinds: ["casual", "unpaid", "leave", "onleave", "absent"] },
   { title: "Paid extras", testId: "pd-comp-legend", kinds: ["comp", "sunday_comp", "ot_comp"] },
@@ -596,17 +603,21 @@ function CalendarDay({
   const compensation = compensationMark(day);
   const caption = captionOf(day, kind);
   const edit = hrEditOf(day);
+  const running = kind === "inprogress";
   const aria = [
     `${dateLong(cell.date)}: ${caption && kind !== "weekoff" && kind !== "holiday" ? caption : meta.label}`,
+    running ? countedAfterLabel(day.provisionalUntil) : "",
     kind === "holiday" ? (day.holidayName ?? "") : "",
     lateIn && kind !== "late" ? "Late In" : "",
     earlyOut && kind !== "early" ? "Early Out" : "",
     penalty ? `Penalty Early Out, ${(day.penaltyDeduction ?? 0).toFixed(2)} shift deducted` : "",
     // the engine's note ends with a full stop and the parts are joined by one
     compensation ? compensation.title.replace(/\.$/, "") : "",
-    [day.firstIn ? `first in ${timeText(day.firstIn)}` : "", day.lastOut ? `last out ${timeText(day.lastOut)}` : ""]
-      .filter(Boolean)
-      .join(", "),
+    running
+      ? inProgressPunchText(day.firstIn)
+      : [day.firstIn ? `first in ${timeText(day.firstIn)}` : "", day.lastOut ? `last out ${timeText(day.lastOut)}` : ""]
+          .filter(Boolean)
+          .join(", "),
     marks.length > 0 ? marks.map((m) => MARK_META[m].label).join(", ") : "",
     flags.length > 0 ? `flagged: ${flags.map(issueLabel).join(", ")}` : "",
     edit ? `edited by HR (${HR_EDIT_TONE[hrEditTone(edit.status)].word.toLowerCase()})` : "",
@@ -645,13 +656,21 @@ function CalendarDay({
             {meta.short}
           </span>
         </span>
+        {running && (
+          <InProgressChip
+            provisionalUntil={day.provisionalUntil}
+            size="sm"
+            className="mt-1 hidden w-fit sm:inline-flex"
+            testId={`pd-in-progress-${cell.date}`}
+          />
+        )}
         {caption && (
           <span className="mt-1 hidden truncate text-[10px] font-semibold leading-tight sm:block">{caption}</span>
         )}
         {punches && (
           <span className="mt-0.5 hidden text-[10px] leading-tight tabular-nums opacity-80 sm:block">{punches}</span>
         )}
-        {day.shifts !== null && day.shifts !== 0 && (alwaysShifts || day.shifts !== 1) && (
+        {!running && day.shifts !== null && day.shifts !== 0 && (alwaysShifts || day.shifts !== 1) && (
           <span className="hidden text-[10px] font-semibold leading-tight opacity-80 sm:block">
             {trimNumber(day.shifts)} {day.shifts === 1 ? "shift" : "shifts"}
           </span>
@@ -762,6 +781,7 @@ function DayPanel({
 }) {
   const kind = dayKind(day);
   const meta = DAY_KIND_META[kind];
+  const running = kind === "inprogress";
   const marks = marksOf(day).filter((m) => m !== "late" || !day.isLate);
   const facts = dayFacts(day, kind);
   return (
@@ -770,19 +790,37 @@ function DayPanel({
         <div className="min-w-0">
           <p className="text-sm font-black text-slate-900">{dateLong(day.date)}</p>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
-            <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}>
-              {meta.label}
-            </span>
-            <span>
-              First in <strong className="tabular-nums text-slate-800">{timeText(day.firstIn)}</strong>
-            </span>
-            <span>
-              Last out <strong className="tabular-nums text-slate-800">{timeText(day.lastOut)}</strong>
-            </span>
-            {day.shifts !== null && (
-              <span>
-                Shifts <strong className="tabular-nums text-slate-800">{trimNumber(day.shifts)}</strong>
-              </span>
+            {running ? (
+              // the day is still running: no verdict, no shift count, the first punch only (owner 2026-11-26)
+              <>
+                <InProgressChip provisionalUntil={day.provisionalUntil} testId="pd-day-in-progress" />
+                <strong className="tabular-nums text-slate-800" data-testid="pd-day-at-work">
+                  {inProgressPunchText(day.firstIn)}
+                </strong>
+                <span>
+                  Shifts{" "}
+                  <strong className="tabular-nums text-slate-400" title={countedAfterLabel(day.provisionalUntil)}>
+                    —
+                  </strong>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}>
+                  {meta.label}
+                </span>
+                <span>
+                  First in <strong className="tabular-nums text-slate-800">{timeText(day.firstIn)}</strong>
+                </span>
+                <span>
+                  Last out <strong className="tabular-nums text-slate-800">{timeText(day.lastOut)}</strong>
+                </span>
+                {day.shifts !== null && (
+                  <span>
+                    Shifts <strong className="tabular-nums text-slate-800">{trimNumber(day.shifts)}</strong>
+                  </span>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -877,6 +915,7 @@ function DayPanel({
 function DayRow({ day, selected }: { day: PayrollDay; selected: boolean }) {
   const kind = dayKind(day);
   const meta = DAY_KIND_META[kind];
+  const running = kind === "inprogress";
   const flags = day.flags ?? [];
   return (
     <tr className={cn(selected && "bg-slate-50")} data-testid={`pd-row-${day.date}`} data-kind={kind}>
@@ -884,17 +923,29 @@ function DayRow({ day, selected }: { day: PayrollDay; selected: boolean }) {
       <td className="px-3 py-2 text-muted-foreground">{day.day || weekdayShort(day.date)}</td>
       <td className="px-3 py-2">
         <span className="inline-flex items-center gap-1.5">
-          <span
-            className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}
-          >
-            {kind === "other" ? statusLabel(day.status) : meta.label}
-          </span>
+          {running ? (
+            <InProgressChip provisionalUntil={day.provisionalUntil} testId={`pd-row-in-progress-${day.date}`} />
+          ) : (
+            <span
+              className={cn("whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold", meta.cell)}
+            >
+              {kind === "other" ? statusLabel(day.status) : meta.label}
+            </span>
+          )}
           {day.hrEdit && <HrEditBadge edit={day.hrEdit} date={day.date} />}
         </span>
       </td>
-      <td className="px-3 py-2 font-mono text-xs tabular-nums">{timeText(day.firstIn)}</td>
-      <td className="px-3 py-2 font-mono text-xs tabular-nums">{timeText(day.lastOut)}</td>
-      <td className="px-3 py-2 tabular-nums">{day.shifts === null ? "—" : trimNumber(day.shifts)}</td>
+      <td className="px-3 py-2 font-mono text-xs tabular-nums">
+        {running ? inProgressPunchText(day.firstIn) : timeText(day.firstIn)}
+      </td>
+      <td className="px-3 py-2 font-mono text-xs tabular-nums">{running ? "—" : timeText(day.lastOut)}</td>
+      <td
+        className={cn("px-3 py-2 tabular-nums", running && "text-slate-400")}
+        title={running ? countedAfterLabel(day.provisionalUntil) : undefined}
+        data-testid={`pd-row-shifts-${day.date}`}
+      >
+        {running || day.shifts === null ? "—" : trimNumber(day.shifts)}
+      </td>
       <td className="px-3 py-2">
         {flags.length === 0 && !compensationMark(day) ? (
           <span className="text-slate-300">—</span>

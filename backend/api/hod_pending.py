@@ -206,6 +206,12 @@ def _holiday_work(r) -> tuple[str, str]:
     return day_text(r.work_date), f"{day} work · {amount}"
 
 
+def _birthday_compensation(r) -> tuple[str, str]:
+    """A Birthday Compensation day (2026-11-25)."""
+    part = {"full": "full day", "first_half": "first half", "second_half": "second half"}.get(r.portion, r.portion)
+    return day_text(r.use_date), f"Birthday Compensation · {part} (birthday {r.birthday.day} {r.birthday:%b})"
+
+
 def _resignation(r) -> tuple[str, str]:
     when = f"Last day {day_text(r.last_working_date)}" if r.last_working_date else "Last day not given"
     return when, "Resignation"
@@ -220,6 +226,7 @@ _TEXTS = {
     "on_duty": _on_duty,
     "outpass": _outpass,
     "holiday_work": _holiday_work,
+    "birthday_compensation": _birthday_compensation,
     "resignation": _resignation,
 }
 

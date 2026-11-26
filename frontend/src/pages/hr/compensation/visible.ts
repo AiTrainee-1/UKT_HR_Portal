@@ -44,6 +44,20 @@ export function useClaimRight(): { canClaim: boolean; reason: string | null } {
   return { canClaim, reason: canClaim ? null : CLAIM_RIGHT_NEEDED };
 }
 
+/** Leave > Birthdays: its permission key (compensation.leave.birthdays) decides who may place Birthday Compensation for an
+ * employee or withdraw it; the server checks the same key on POST / DELETE /compensation/birthday-compensation/uses. */
+export const BIRTHDAYS_KEY = moduleForPath(subPath("leave", "birthdays")) ?? "compensation";
+
+/** Why "Choose date for employee" is greyed out for a login without that right. */
+export const PLACE_RIGHT_NEEDED = "Needs Edit on Compensation > Leave > Birthdays";
+
+/** May the signed-in login place Birthday Compensation for an employee (and withdraw what HR placed)? */
+export function usePlaceRight(): { canPlace: boolean; reason: string | null } {
+  const { user } = useAuth();
+  const canPlace = permissionLevel(user, BIRTHDAYS_KEY) === "edit";
+  return { canPlace, reason: canPlace ? null : PLACE_RIGHT_NEEDED };
+}
+
 /** The subtabs of a page the login may open, in order. */
 export const openSubs = <T extends string>(canOpen: CanOpen, key: CompensationPageKey, subs: readonly T[]): T[] =>
   subs.filter((s) => canOpen(subPath(key, s)));

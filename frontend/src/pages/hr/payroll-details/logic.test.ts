@@ -204,8 +204,8 @@ describe("the days", () => {
     expect(kind({ status: "week_off" })).toBe("weekoff");
     expect(kind({ status: "PRESENT" })).toBe("present");
     expect(kind({ status: "something new" })).toBe("other");
-    expect(DAY_KINDS).toHaveLength(19);
-    expect(new Set(DAY_KINDS).size).toBe(19);
+    expect(DAY_KINDS).toHaveLength(20);
+    expect(new Set(DAY_KINDS).size).toBe(20);
   });
 
   it("tells Casual Leave, compensations, On-Duty, Sundays and holidays apart", () => {
@@ -233,6 +233,22 @@ describe("the days", () => {
     // worked on a Sunday or a holiday: the real attendance, in the gradient colours of a worked day off
     expect(kind({ status: "present", isSunday: true, workedOffDay: true })).toBe("sunday_worked");
     expect(kind({ status: "present", workedOffDay: true, holidayName: "Deepavali" })).toBe("holiday_worked");
+  });
+
+  it("a day still running is In progress whatever it says so far, and is never counted as Present or Late", () => {
+    const running = { inProgress: true, provisionalUntil: "2026-10-13T18:11:00+05:30" };
+    expect(dayKind(day(running))).toBe("inprogress");
+    expect(dayKind(day({ ...running, flags: ["late_in"], isLate: true }))).toBe("inprogress");
+    expect(dayKind(day({ ...running, status: "absent", shifts: 0 }))).toBe("inprogress");
+    // provisionalUntil alone (its moment passed, the refresh not run yet) decides nothing
+    expect(dayKind(day({ inProgress: false, provisionalUntil: "2026-10-13T18:11:00+05:30" }))).toBe("present");
+    const days = [day({ date: "2026-10-12" }), day(running)];
+    expect(kindCounts(days)).toMatchObject({ present: 1, inprogress: 1, late: 0 });
+    expect(fillKindCounts(days)).toMatchObject({ present: 1, inprogress: 1 });
+    // a category never fills a day still running: its own neutral look shows instead
+    expect(fillMark(day({ ...running, marks: ["permission"] }))).toBeNull();
+    expect(DAY_KIND_META.inprogress.label).toBe("In progress");
+    expect(filterDays(days, { kind: "inprogress", flaggedOnly: false }).map((d) => d.date)).toEqual(["2026-10-13"]);
   });
 
   it("every kind has its own colour", () => {

@@ -55,6 +55,7 @@ export const KIND_LABELS: Record<ApprovalKind, string> = {
   on_duty: "On-Duty",
   attendance_correction: "attendance change",
   holiday_work: "compensation",
+  birthday_compensation: "birthday compensation",
   resignation: "resignation",
 };
 
@@ -220,6 +221,7 @@ export const KIND_ORDER: ApprovalKind[] = [
   "on_duty",
   "attendance_correction",
   "holiday_work",
+  "birthday_compensation",
   "resignation",
 ];
 
@@ -233,8 +235,13 @@ export const KIND_NAMES: Record<ApprovalKind, string> = {
   on_duty: "On-Duty",
   attendance_correction: "Attendance change",
   holiday_work: "Compensation",
+  birthday_compensation: "Birthday compensation",
   resignation: "Resignation",
 };
+
+/** A request's kind in words: the page's own name for a kind it knows (sentence case, as on the pills), else the server's. */
+export const kindName = (item: Pick<ApprovalItem, "kind" | "kindLabel">): string =>
+  KIND_NAMES[item.kind] ?? item.kindLabel;
 
 export const isKindFilter = (value: string | null): value is KindFilter =>
   value === "all" || KIND_ORDER.includes(value as ApprovalKind);

@@ -1,4 +1,5 @@
 import type { AttendanceDailyRecord, ListedPunch } from "@/lib/api-client/custom-hooks";
+import { isInProgress } from "@/lib/day-progress";
 
 // The pure half of the Staff / Production Attendance page: which status card a row belongs to, the counts, the filters, the
 // arrival curve and the punch chips' meaning. No React here, so all of it is unit-tested on its own (logic.test.ts).
@@ -143,7 +144,9 @@ export function countBoard(rows: readonly AttendanceDailyRecord[]): BoardCounts 
     if (r.status === "manual") c.manual += 1;
     if (r.isLate) c.late += 1;
     if (r.isEarlyOut) c.earlyOut += 1;
-    if (typeof r.shiftsEarned === "number" && r.shiftsEarned > 0 && r.shiftsEarned < 1) c.halfDay += 1;
+    // a day still running (today) is not a half day yet, whatever its credit says so far
+    if (typeof r.shiftsEarned === "number" && r.shiftsEarned > 0 && r.shiftsEarned < 1 && !isInProgress(r))
+      c.halfDay += 1;
     if (r.punches?.some((p) => p.verification === "pending")) c.heldPunches += 1;
   }
   return c;

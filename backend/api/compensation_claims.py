@@ -26,6 +26,8 @@ The rules a claim must pass (each refusal is a ClaimError with a plain sentence 
                         credit_claimable); ot_* and birthday only from CompensationConfig.claims_from on (before it they
                         were automatic / HR's); use_balance: a working day the balance (minus what is already asked for)
                         covers, that compensation_effects.check_claim_effects does not refuse
+  * use_birthday_compensation (400)  a NEW birthday credit claim (2026-11-25): a worked birthday gives Birthday
+                        Compensation placed on chosen dates instead (birthday_compensation.py); open credit claims stay
   * already_claimed (409) one open claim per employee, kind and date, and per OT record
   * no_hod (409)        the employee must have a Department Head (not themselves) who may approve compensation
   * invalid (400)       shifts outside 0.25 / 0.50 / 0.75 / 1.00, a missing reason where one is needed
@@ -563,16 +565,28 @@ def _check(employee: Employee, kind: str, target, ctx: Context) -> dict:
     existing = _open_claim(employee, kind, day, ctx=ctx)
     if existing is not None:
         raise _already(existing, ctx)
-    effects = _effects()
-    outcome = effects.birthday_outcome(employee, day, refresh=ctx.refresh) or {}
-    # "base" is the attendance part alone (the outcome itself may already say credit_rejected for an earlier claim, which
-    # can be raised again)
-    if (outcome.get("base") or outcome.get("outcome")) != effects.BIRTHDAY_CREDIT_CLAIMABLE:
-        raise ClaimError(
-            "not_eligible",
-            outcome.get("message") or "This birthday gives no credit to claim (it was not worked, or was a day off).",
+    # 2026-11-25: a worked birthday no longer gives a credit to claim. It gives 1.00 day of Birthday Compensation placed
+    # on chosen dates of the birthday month (birthday_compensation.py); a credit claim already waiting or approved is kept
+    # (it is still decided, and approved, as before: _approval_problem).
+    raise ClaimError(BIRTHDAY_REPLACED_CODE, birthday_credit_replaced_text(ctx.for_employee))
+
+
+BIRTHDAY_REPLACED_CODE = "use_birthday_compensation"
+
+
+def birthday_credit_replaced_text(for_employee: bool) -> str:
+    """Why a NEW birthday credit claim is refused (2026-11-25), pointing to choosing a date instead."""
+    if for_employee:
+        return (
+            "Birthday credit claims are no longer raised: a birthday you worked now gives 1.00 day of Birthday "
+            "Compensation that you place on a day (or two halves) of your birthday month. Choose the date under "
+            "Birthday Compensation."
         )
-    return _result(True, shifts=ONE)
+    return (
+        "Birthday credit claims are no longer raised: a birthday worked now gives 1.00 day of Birthday Compensation "
+        "placed on a day (or two halves) of the birthday month. Choose the date for the employee under Compensation "
+        "Leave > Birthdays (Birthday Compensation)."
+    )
 
 
 def eligibility(employee: Employee, kind: str, target, *, ctx: Context | None = None, check_hod: bool = False) -> dict:

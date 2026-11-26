@@ -17,8 +17,9 @@ import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { halfDayWorked, lateDetectionFlags } from "@/lib/late-detection";
 import { DayFlagBadges } from "@/components/DayFlagBadges";
 import {
-  CompensationChip, CompensationLegend, countMarks, isPunchlessRelaxation,
+  CompensationChip, CompensationLegend, InProgressChip, countMarks, isPunchlessRelaxation,
 } from "@/components/attendance-compensation";
+import { countedAfterLabel, inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import { PunchLegend, PunchTimeline } from "./attendance/PunchTimeline";
 import {
   Search, User, RotateCcw, PenLine, X, ShieldCheck, Hourglass, ShieldX, History,
@@ -142,7 +143,7 @@ export default function AttendanceSearchSection({
     }
   };
 
-  const earlyOut = data ? data.weeks.reduce((n, w) => n + w.days.filter(d => d.earlyLeave).length, 0) : 0;
+  const earlyOut = data ? data.weeks.reduce((n, w) => n + w.days.filter(d => d.earlyLeave && !isInProgress(d)).length, 0) : 0;
 
   return (
     <section
@@ -381,6 +382,8 @@ export default function AttendanceSearchSection({
                         const topUpOnly = isPunchlessRelaxation(day);
                         const worked = day.isHalfShift && !topUpOnly ? halfDayWorked(day.firstPunch, halfDayCutoffs.firstHalfEnd, day.arrivalZone) : null;
                         const punches = punchesByDate.get(day.date);
+                        // today, while the shift is still running: no verdict and no shift count yet (owner 2026-11-26)
+                        const running = isInProgress(day);
                         return (
                         <tr
                           key={day.date}
@@ -398,9 +401,13 @@ export default function AttendanceSearchSection({
                           </td>
                           <td data-col="status" className="px-3 py-2">
                             <div className="flex items-center gap-1 flex-wrap">
-                              <Badge className={`text-[10px] border ${STATUS_BADGE[day.status]}`}>
-                                {STATUS_LABEL[day.status]}
-                              </Badge>
+                              {running ? (
+                                <InProgressChip provisionalUntil={day.provisionalUntil} size="sm" testId={`search-in-progress-${day.date}`} />
+                              ) : (
+                                <Badge className={`text-[10px] border ${STATUS_BADGE[day.status]}`}>
+                                  {STATUS_LABEL[day.status]}
+                                </Badge>
+                              )}
                               {day.isCompensationDay && (
                                 <Badge className="text-[10px] border bg-purple-50 text-purple-700 border-purple-200">
                                   Comp Day
@@ -410,7 +417,9 @@ export default function AttendanceSearchSection({
                             </div>
                           </td>
                           <td data-col="inout" className="px-3 py-2 tabular-nums text-xs text-gray-700 whitespace-nowrap">
-                            {day.firstPunch || day.lastPunch ? `${day.firstPunch ?? "—"} → ${day.lastPunch ?? "—"}` : "—"}
+                            {running
+                              ? inProgressPunchText(day.firstPunch)
+                              : day.firstPunch || day.lastPunch ? `${day.firstPunch ?? "—"} → ${day.lastPunch ?? "—"}` : "—"}
                           </td>
                           <td data-col="punches" className="px-3 py-2 min-w-[11rem]">
                             {punchesLoading ? (
@@ -425,7 +434,13 @@ export default function AttendanceSearchSection({
                               />
                             )}
                           </td>
-                          <td data-col="shifts" className="px-3 py-2 text-xs font-bold text-gray-800">{day.shiftsEarned}</td>
+                          <td
+                            data-col="shifts"
+                            className={`px-3 py-2 text-xs font-bold ${running ? "text-gray-400" : "text-gray-800"}`}
+                            title={running ? countedAfterLabel(day.provisionalUntil) : undefined}
+                          >
+                            {running ? "—" : day.shiftsEarned}
+                          </td>
                           <td data-col="flags" className="px-3 py-2 text-xs">
                             {flags.length > 0 ? (
                               <div className="flex items-center gap-1 flex-wrap">

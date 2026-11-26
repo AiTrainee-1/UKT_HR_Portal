@@ -243,6 +243,23 @@ class ClaimsBase(TestCase):
         self.assertEqual(response.status_code, status, response.content)
         return HolidayWorkClaim.objects.get(pk=response.json()["id"])
 
+    def old_birthday(self, emp=None, status="pending", raised_by="employee") -> HolidayWorkClaim:
+        """A birthday credit claim as raised before 2026-11-25: a NEW one is refused (a worked birthday gives Birthday
+        Compensation placed on a date instead, tests_birthday_compensation), but the ones already raised are still listed,
+        decided and credited exactly as before."""
+        emp = emp or self.asha
+        return HolidayWorkClaim.objects.create(
+            employee=emp,
+            kind=HolidayWorkClaim.KIND_BIRTHDAY,
+            work_date=BIRTHDAY,
+            shifts=Decimal("1.00"),
+            reason="Worked on my birthday.",
+            status=status,
+            raised_by_role=raised_by,
+            requested_by="Cl_Admin" if raised_by == "hr" else f"{emp.first_name} {emp.last_name}",
+            approval_trail=[],
+        )
+
 
 # ═════════════════════════════ the employee raises every kind ═════════════════════════════
 
@@ -305,9 +322,14 @@ class EmployeeRaisesTests(ClaimsBase):
         )
         self.assertEqual((claim.shifts, claim.overtime_record_id), (Decimal("0.75"), self.shift_rec.id))
 
-    def test_birthday_without_shifts_is_one_shift(self):
-        claim = self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat(), "shifts": 0.25}))
-        self.assertEqual((claim.kind, claim.shifts), ("birthday", Decimal("1.00")))
+    def test_a_new_birthday_credit_claim_is_refused_pointing_to_birthday_compensation(self):
+        # 2026-11-25: a worked birthday gives Birthday Compensation placed on a chosen date, not a credit to claim
+        r = self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat(), "shifts": 0.25})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "use_birthday_compensation"), r.content)
+        self.assertIn("Birthday Compensation", r.json()["error"])
+        r = self.hr_claim({"kind": "birthday", "date": BIRTHDAY.isoformat(), "items": [{"employeeId": self.asha.id}]})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "use_birthday_compensation"), r.content)
+        self.assertFalse(HolidayWorkClaim.objects.filter(kind="birthday").exists())
 
     def test_use_balance(self):
         self.credit(self.asha)
@@ -318,7 +340,7 @@ class EmployeeRaisesTests(ClaimsBase):
 
     def test_own_claims_list_newest_first_with_filters(self):
         self.made(self.emp_claim({"kind": "holiday_work", "date": SUNDAY.isoformat(), "reason": "x"}))
-        self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        self.old_birthday()  # raised before 2026-11-25
         body = self.client.get("/api/employee/compensation/claims", **self.asha_t).json()
         self.assertEqual([i["kind"] for i in body["items"]], ["birthday", "holiday_work"])
         for key in (
@@ -372,7 +394,6 @@ class HrRaisesTests(ClaimsBase):
                 "reason": "",
                 "items": [{"employeeId": self.asha.id, "overtimeRecordId": self.shift_rec.id, "shifts": 0.5}],
             },
-            {"kind": "birthday", "date": BIRTHDAY.isoformat(), "reason": "", "items": [{"employeeId": self.asha.id}]},
         ]
         for body in cases:
             r = self.hr_claim(body)
@@ -385,9 +406,12 @@ class HrRaisesTests(ClaimsBase):
             {"employeeId": self.asha.id, "date": USE_DAY.isoformat(), "shifts": 0.25, "reason": "Asked at the desk"}
         )
         self.assertEqual((r.status_code, r.json()["kind"], r.json()["raisedByRole"]), (201, "use_balance", "hr"))
-        self.assertEqual(HolidayWorkClaim.objects.filter(employee=self.asha).count(), 5)
+        self.assertEqual(HolidayWorkClaim.objects.filter(employee=self.asha).count(), 4)
         # the employee is told HR raised them (Phone Notify Control's compensation switch)
-        self.assertEqual(Notification.objects.filter(employee=self.asha, source="ot_compensation").count(), 5)
+        self.assertEqual(Notification.objects.filter(employee=self.asha, source="ot_compensation").count(), 4)
+        # a birthday credit is no longer raised (2026-11-25: Birthday Compensation is placed on a date instead)
+        r = self.hr_claim({"kind": "birthday", "date": BIRTHDAY.isoformat(), "items": [{"employeeId": self.asha.id}]})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "use_birthday_compensation"))
 
     def test_all_or_nothing_lists_who_was_refused(self):
         r = self.hr_claim(
@@ -474,10 +498,10 @@ class RefusalTests(ClaimsBase):
         self.assertIn("no punches or attendance", r.json()["error"])
 
     def test_a_birthday_the_attendance_does_not_make_claimable(self):
+        # since 2026-11-25 no birthday credit is raised at all, whatever the attendance says (Birthday Compensation)
         self.birthday.return_value = {"outcome": effects.BIRTHDAY_PAID_LEAVE, "message": "Paid birthday leave."}
         r = self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()})
-        self.assertEqual(self.code(r), (400, "not_eligible"))
-        self.assertEqual(r.json()["error"], "Paid birthday leave.")
+        self.assertEqual(self.code(r), (400, "use_birthday_compensation"))
         r = self.emp_claim({"kind": "birthday", "date": "2026-10-08"})
         self.assertIn("not your birthday", r.json()["error"])
 
@@ -661,7 +685,7 @@ class DecisionTests(ClaimsBase):
         self.assertEqual((page["todayAllowance"]["date"], page["todayAllowance"]["minutes"]), ("2026-10-14", 30))
 
     def test_birthday_approval_credits(self):
-        claim = self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        claim = self.old_birthday()
         self.assertEqual(self.decide(claim.id).status_code, 200)
         entry = CompensationLedger.objects.get(claim=claim)
         self.assertEqual((entry.entry_type, entry.source, entry.shifts), ("credit", "birthday", Decimal("1.00")))
@@ -692,14 +716,15 @@ class DecisionTests(ClaimsBase):
         self.assertTrue(credit.pk)
 
     def test_rejection_writes_nothing(self):
-        claim = self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        claim = self.old_birthday()
         r = self.decide(claim.id, "rejected", "Was on site visit")
         self.assertEqual((r.status_code, r.json()["status"], r.json()["credited"]), (200, "rejected", False))
         self.assertEqual(r.json()["effect"], "Not approved: nothing was added to CL1's balance.")
         self.assertFalse(CompensationLedger.objects.exists())
         self.after.assert_called_once()
-        # a rejected claim can be raised again
-        self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        # a rejected birthday credit is not raised again (2026-11-25): its Birthday Compensation is placed on a date
+        r = self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "use_birthday_compensation"))
 
     def test_the_effects_check_refuses_an_approval(self):
         claim = self.made(self.emp_claim({"kind": "holiday_work", "date": SUNDAY.isoformat(), "reason": "x"}))
@@ -761,7 +786,7 @@ class BalanceTests(ClaimsBase):
         self.assertEqual((summary["employees"], summary["earned"], summary["used"]), (1, 1.0, 0.5))
 
     def test_the_ledger_lists_credits_and_debits_with_their_claim(self):
-        claim = self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        claim = self.old_birthday()
         self.decide(claim.id)
         CompensationLedger.objects.create(
             employee=self.asha,
@@ -792,9 +817,8 @@ class BalanceTests(ClaimsBase):
 class ListAndAccessTests(ClaimsBase):
     def test_withdraw(self):
         own = self.made(self.emp_claim({"kind": "holiday_work", "date": SUNDAY.isoformat(), "reason": "x"}))
-        hr = self.hr_claim({"kind": "birthday", "date": BIRTHDAY.isoformat(), "items": [{"employeeId": self.asha.id}]})
-        hr_id = hr.json()["claims"][0]["id"]
-        self.assertFalse(hr.json()["claims"][0]["canWithdraw"] is False)  # HR may withdraw what it raised
+        hr_id = self.old_birthday(raised_by="hr").id  # a credit claim HR raised before 2026-11-25
+        self.assertTrue(self.get(f"/api/compensation/claims/{hr_id}").json()["canWithdraw"])  # HR may withdraw it
         r = self.client.delete(f"/api/employee/compensation/claims/{hr_id}", **self.asha_t)
         self.assertEqual((r.status_code, r.json()["code"]), (403, "not_yours"))
         self.assertEqual(
@@ -809,7 +833,7 @@ class ListAndAccessTests(ClaimsBase):
 
     def test_hr_list_filters_paging_and_summary(self):
         self.made(self.emp_claim({"kind": "holiday_work", "date": SUNDAY.isoformat(), "reason": "Dispatch"}))
-        self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        self.old_birthday()
         self.hr_claim(
             {
                 "kind": "ot_shift",
@@ -871,7 +895,7 @@ class ListAndAccessTests(ClaimsBase):
 
     def test_the_old_holiday_work_list_shows_only_holiday_work(self):
         self.made(self.emp_claim({"kind": "holiday_work", "date": SUNDAY.isoformat(), "reason": "x"}))
-        self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        self.old_birthday()
         body = self.get("/api/compensation/holiday-work").json()
         self.assertEqual([r["kind"] for r in body["results"]], ["holiday_work"])
 
@@ -952,7 +976,7 @@ class HodAndAppTests(ClaimsBase):
                     {"kind": "ot_shift", "date": OT_SHIFT_DAY.isoformat(), "overtimeRecordId": self.shift_rec.id}
                 )
             ),
-            self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()})),
+            self.old_birthday(),
             self.made(self.emp_use({"date": USE_DAY.isoformat(), "shifts": 0.25, "reason": "x"})),
         ]
         return made
@@ -1027,9 +1051,11 @@ class HodAndAppTests(ClaimsBase):
         )
         shift = by_key[f"ot-{self.shift_rec.id}"]
         self.assertEqual((shift["status"], shift["suggestedShifts"], shift["claimable"]), ("claimable", 0.75, True))
-        birthday = by_key[f"bd-{BIRTHDAY.isoformat()}"]
+        # a worked birthday with no credit claim: Birthday Compensation to place on a date (2026-11-25), not claimable
+        birthday = by_key[f"bdc-{BIRTHDAY.isoformat()}"]
         self.assertEqual(
-            (birthday["kind"], birthday["status"], birthday["claimable"]), ("birthday_credit", "claimable", True)
+            (birthday["kind"], birthday["status"], birthday["claimable"], birthday["canPlace"]),
+            ("birthday_compensation", "available", False, True),
         )
 
     def test_a_worked_sunday_with_no_claim_is_claimable_on_the_page(self):
@@ -1123,7 +1149,7 @@ class ReviewFixClaimTests(ClaimsBase):
         self.assertIn("no punches or attendance", r.json()["error"])
 
     def test_a_birthday_no_longer_worked_is_refused_and_the_check_may_refresh(self):
-        claim = self.made(self.emp_claim({"kind": "birthday", "date": BIRTHDAY.isoformat()}))
+        claim = self.old_birthday()
         self.birthday.return_value = {"outcome": "paid_leave", "base": "paid_leave", "message": "Not worked."}
         r = self.decide(claim.id)
         self.assertEqual((r.status_code, r.json()["code"]), (409, "claim_refused"))

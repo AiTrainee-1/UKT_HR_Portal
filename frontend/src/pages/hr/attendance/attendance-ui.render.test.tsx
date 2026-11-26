@@ -234,6 +234,30 @@ describe("the day list", () => {
     expect(onOpen).toHaveBeenCalledTimes(2); // the name's click is not counted twice by its row
   });
 
+  it("a day still running shows In progress with the first punch, and no shift count", () => {
+    const running = {
+      ...NIGHT,
+      employeeId: 299,
+      employeeCode: "299",
+      firstPunch: "09:06",
+      shiftsEarned: 1,
+      inProgress: true,
+      provisionalUntil: "2026-11-04T18:11:00+05:30",
+    };
+    const el = render(createElement(DayList, { ...props("all"), view: "production" as const, rows: [running, NIGHT] }));
+    const row = el.querySelector('[data-employee-code="201"]')!;
+    expect(el.querySelector('[data-employee-code="299"] [data-testid="row-in-progress"]')).not.toBeNull();
+    const chips = el.querySelectorAll('[data-testid="row-in-progress"]');
+    expect(chips.length).toBeGreaterThan(0);
+    // only the running day (the list draws a row for the phone and one for the desk)
+    expect(el.querySelectorAll('[data-employee-code="201"] [data-testid="row-in-progress"]')).toHaveLength(0);
+    expect(chips[0].getAttribute("title")).toBe("Counted after the shift ends at 18:11");
+    expect(byTestId(el, "row-at-work").textContent).toBe("In 09:06 · at work");
+    // the settled night shift still shows its credit; the running day shows none
+    expect(row.textContent).toContain("1.50 shifts");
+    expect(el.textContent).not.toContain("1.00 shifts");
+  });
+
   it("says so when nobody matches, and the export is off", () => {
     const el = render(createElement(DayList, { ...props("cl"), rows: [PRESENT, PENDING_LEAVE] }));
     expect(el.textContent).toContain("Nobody matches");

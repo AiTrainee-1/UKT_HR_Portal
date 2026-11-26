@@ -8,6 +8,7 @@ import {
   DoorOpen,
   ExternalLink,
   Fingerprint,
+  Gift,
   Inbox,
   BellRing,
   Landmark,
@@ -24,6 +25,8 @@ import { WaitingChip, ApprovalTrailLine } from "@/components/ApprovalTrail";
 import { explainsWaiting } from "@/lib/approval-workflow";
 import { cn } from "@/lib/utils";
 import {
+  birthdayOf,
+  dayText,
   decisionsHere,
   reasonLabel,
   requestDayText,
@@ -53,6 +56,7 @@ export const KIND_VISUAL: Record<KindKey, { icon: IconType; tile: string }> = {
   request: { icon: Inbox, tile: "bg-indigo-50 text-indigo-600" },
   attendance_correction: { icon: ClipboardCheck, tile: "bg-orange-50 text-orange-600" },
   holiday_work: { icon: Landmark, tile: "bg-pink-50 text-pink-600" },
+  birthday_compensation: { icon: Gift, tile: "bg-fuchsia-50 text-fuchsia-600" },
   resignation: { icon: LogOut, tile: "bg-rose-50 text-rose-600" },
   advance: { icon: Wallet, tile: "bg-sky-50 text-sky-600" },
 };
@@ -164,6 +168,11 @@ export function RequestCell({ item }: { item: HubItem }) {
           </p>
         ) : (
           <p className="line-clamp-2 text-xs text-gray-600">{item.summary}</p>
+        )}
+        {birthdayOf(item) && (
+          <p className="text-xs text-gray-500" data-testid={`birthday-of-${item.key}`}>
+            <span className="font-semibold">Birthday:</span> {dayText(birthdayOf(item))}
+          </p>
         )}
         {/* the summary adds what the date line does not say (a destination, an amount); a date repeated is left out */}
         {requested && item.summary && !item.summary.includes(item.requested?.from ?? "") && (

@@ -405,6 +405,7 @@ WORKFLOW_CATEGORY = {
     "missing_punch": "attendance",
     "attendance_correction": "attendance",
     "holiday_work": "compensation",
+    "birthday_compensation": "compensation",
     "advance": "payroll",
     "resignation": "employee",
     "request": "employee",

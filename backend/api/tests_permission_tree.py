@@ -235,7 +235,8 @@ class TreeShape(SimpleTestCase):
         # 55 keys before; every page, tab, sub-tab and feature now (permission-inventory.md has the full list)
         self.assertEqual(len(old.old_all_module_keys()), 55)
         self.assertGreater(len(all_module_keys()), 300)
-        self.assertEqual(len(hr_access.APPROVAL_KINDS), 27)
+        # 28: Birthday Compensation (HR's step after the Department Head's), 2026-11-25
+        self.assertEqual(len(hr_access.APPROVAL_KINDS), 28)
 
 
 # ───────────────────────────── nothing missed ─────────────────────────────

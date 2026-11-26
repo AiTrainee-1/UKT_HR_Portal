@@ -3,7 +3,8 @@ import { ChevronRight, FileSpreadsheet, FileText, Search, Users, X } from "lucid
 import type { AttendanceDailyRecord } from "@/lib/api-client/custom-hooks";
 import { Avatar } from "@/components/payroll/kit/parts";
 import { ExportMenu } from "@/components/payroll/kit/ExportMenu";
-import { CompensationChip } from "@/components/attendance-compensation";
+import { CompensationChip, InProgressChip } from "@/components/attendance-compensation";
+import { inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import { DataPagination } from "@/components/ui/DataPagination";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -47,8 +48,18 @@ export function StateBadge({ state, className }: { state: BoardState; className?
 /** What else is true of the row's day: marked by hand, the leave / On-Duty facts, a compensation, late / early, shifts. */
 function RowFacts({ row }: { row: AttendanceDailyRecord }) {
   const facts = leaveFacts(row);
+  // today, while the shift is still running: no shift count and no verdict yet (owner 2026-11-26)
+  const running = isInProgress(row);
   return (
     <div className="mt-1 flex flex-wrap items-center gap-1">
+      {running && (
+        <>
+          <InProgressChip provisionalUntil={row.provisionalUntil} size="sm" testId="row-in-progress" />
+          <span className="text-[11px] font-medium tabular-nums text-slate-600" data-testid="row-at-work">
+            {inProgressPunchText(row.firstPunch)}
+          </span>
+        </>
+      )}
       {row.status === "manual" && (
         <span className="rounded-md border border-purple-200 bg-purple-50 px-1.5 py-0.5 text-[11px] font-semibold text-purple-800">
           Marked by hand
@@ -77,7 +88,7 @@ function RowFacts({ row }: { row: AttendanceDailyRecord }) {
           Early out
         </span>
       )}
-      {typeof row.shiftsEarned === "number" && (
+      {typeof row.shiftsEarned === "number" && !running && (
         <span
           className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-700"
           title={[row.ruleGroup, row.ruleNote].filter(Boolean).join(": ") || undefined}

@@ -241,6 +241,40 @@ describe("the register's day card", () => {
     expect(order).toEqual(["day-earned", "day-punches"]);
   });
 
+  it("shows a day still running as In progress: the first punch, no verdict, the credit not decided yet", async () => {
+    const until = "2026-10-26T18:16:00+05:30";
+    const running = { inProgress: true, provisionalUntil: until };
+    h.fetch.mockImplementation((url: string) =>
+      Promise.resolve(
+        url.includes("day-punches")
+          ? { ...PUNCHES, ...running }
+          : {
+              ...SHEET,
+              employees: SHEET.employees.map((e) => ({
+                ...e,
+                days: e.days.map((d) => (d.date === DAY ? { ...d, ...running } : d)),
+              })),
+            },
+      ),
+    );
+    mount();
+    await settle();
+    const cell = q(`day-cell-7-${DAY}`)!;
+    expect(text(cell)).toContain("…");
+    expect(text(cell)).not.toContain("P");
+    expect(cell.getAttribute("aria-label")).toContain("In progress (Counted after the shift ends at 18:16)");
+    act(() => cell.click());
+    await settle();
+    expect(text(q("day-card"))).toContain("In progress");
+    expect(text(q("day-card"))).not.toContain("Present");
+    expect(text(q("day-card-in-progress"))).toBe("In 08:30 · at work · Counted after the shift ends at 18:16");
+    expect(text(q("day-card-head"))).not.toContain("Duration");
+    const total = q("day-earned-total")!;
+    expect(q("day-earned-in-progress")).not.toBeNull();
+    expect(text(total)).toContain("—");
+    expect(text(total)).not.toContain("0.75");
+  });
+
   it("asks the production address on the Production Report Log", async () => {
     mount("production");
     await settle();

@@ -239,6 +239,22 @@ def _holiday_work(r) -> Summary:
     )
 
 
+@register("birthday_compensation")
+def _birthday_compensation(u) -> Summary:
+    """A Birthday Compensation day (2026-11-25): goes out on the same Approved / Rejected templates as every workflow."""
+    part = {"full": "Full day", "first_half": "First half", "second_half": "Second half"}.get(u.portion, u.portion)
+    return Summary(
+        u.employee,
+        "Birthday Compensation",
+        u.id,
+        date=_date(u.use_date),
+        details=_join(f"{part} of Birthday Compensation (birthday {_date(u.birthday)})", u.reason),
+        reason=u.reason or "",
+        requested_on=_stamp(u.created_at),
+        next_step="The day is paid in your attendance; no leave balance is used.",
+    )
+
+
 @register("resignation")
 def _resignation(r) -> Summary:
     last = f"Last working day: {_date(r.last_working_date)}" if r.last_working_date else ""

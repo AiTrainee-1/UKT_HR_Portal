@@ -741,6 +741,7 @@ _REQUEST_KINDS = (
     ),
     ("attendance_correction", "Attendance correction", "Attendance edit requests in the list."),
     ("holiday_work", "Holiday / Sunday work", "Holiday / Sunday work claims in the list."),
+    ("birthday_compensation", "Birthday Compensation", "Birthday Compensation days placed in the birthday month."),
     ("resignation", "Resignation", "Resignations in the list."),
     ("advance", "Advance", "Advance requests in the list."),
 )
@@ -1201,7 +1202,10 @@ COMPENSATION = N(
                 routes=[_comp("compensation-leave/birthdays/how")],
             ),
             routes=[_comp("compensation-leave/birthdays")],
-            api=["compensation/birthdays"],
+            # compensation/birthday-compensation: Birthday Compensation on a chosen date (2026-11-25) - one employee's
+            # days and dates, the placed days, HR placing one for an employee (Edit) and HR's decision (the approval
+            # right "birthday_compensation", hr_access.py)
+            api=["compensation/birthdays", "compensation/birthday-compensation"],
         ),
         routes=[_comp("compensation-leave")],
     ),

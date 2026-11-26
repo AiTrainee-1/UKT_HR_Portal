@@ -136,6 +136,28 @@ const DAYS = [
 ];
 
 describe("Employee Attendance Search marks a day that used a compensation", () => {
+  it("shows today's unfinished day as In progress: the first punch only and no shift count", async () => {
+    const el = await open([
+      day("2026-10-05"),
+      day("2026-10-09", {
+        isLate: true,
+        lastPunch: "13:02",
+        inProgress: true,
+        provisionalUntil: "2026-10-09T18:16:00+05:30",
+      }),
+    ]);
+    const tr = rowOf(el, "2026-10-09");
+    expect(tr.querySelector('[data-testid="search-in-progress-2026-10-09"]')).not.toBeNull();
+    expect(cell(tr, "status").textContent).not.toContain("Present");
+    expect(cell(tr, "inout").textContent).toBe("In 09:00 · at work");
+    expect(cell(tr, "shifts").textContent).toBe("—");
+    expect(cell(tr, "shifts").getAttribute("title")).toBe("Counted after the shift ends at 18:16");
+    // a settled day is unchanged
+    const done = rowOf(el, "2026-10-05");
+    expect(cell(done, "shifts").textContent).toBe("1.00");
+    expect(cell(done, "status").textContent).toContain("Present");
+  });
+
   it("puts the chip and its note beside the day's status", async () => {
     const el = await open(DAYS);
     const status = cell(rowOf(el, "2026-10-05"), "status");

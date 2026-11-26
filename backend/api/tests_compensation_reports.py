@@ -757,7 +757,7 @@ class BirthdayClaimRuleTests(ReportBase):
         self.assertEqual((rows["RPC1"]["shifts"], rows["RPC1"]["usedOn"]), (1.0, "2026-10-12"))
         self.assertIn("not worked", rows["RPC1"]["detail"])
         self.assertEqual((rows["RPC3"]["shifts"], rows["RPC3"]["assignedBy"]), (1.0, "Claim"))
-        self.assertIn("can still be claimed", rows["RPC2"]["detail"])
+        self.assertIn("Birthday Compensation", rows["RPC2"]["detail"])  # placed on a date since 2026-11-25
         self.assertEqual(
             section["summary"],
             {

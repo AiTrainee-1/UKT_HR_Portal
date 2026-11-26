@@ -268,22 +268,39 @@ export const signedShifts = (row: { type: LedgerRow["type"]; shifts: number }): 
 
 // ── Birthdays ─────────────────────────────────────────────────────────────────
 
+// A worked birthday gives 1.00 day of Birthday Compensation to place in the birthday month (2026-11-25): to place, placed
+// (waiting / approved) or lapsed. The credit outcomes stay for the birthday credit claims raised before that day.
 export const OUTCOME_META: Record<BirthdayOutcome, { label: string; tone: KitTone }> = {
   paid_leave: { label: "Paid birthday leave", tone: "teal" },
-  credit_claimable: { label: "Credit to claim", tone: "amber" },
-  credit_pending: { label: "Claimed: waiting for HOD", tone: "indigo" },
-  credit_approved: { label: "Credit approved", tone: "teal" },
-  credit_rejected: { label: "Claim rejected", tone: "rose" },
+  comp_to_place: { label: "Worked: birthday compensation to place", tone: "amber" },
+  comp_placed: { label: "Birthday compensation placed", tone: "indigo" },
+  comp_lapsed: { label: "Birthday compensation lapsed", tone: "rose" },
+  credit_claimable: { label: "Worked: birthday credit (earlier rule)", tone: "slate" },
+  credit_pending: { label: "Birthday credit claim: waiting for HOD", tone: "indigo" },
+  credit_approved: { label: "Birthday credit approved", tone: "teal" },
+  credit_rejected: { label: "Birthday credit claim rejected", tone: "rose" },
   upcoming: { label: "Upcoming", tone: "slate" },
   off_day: { label: "Off day: no benefit", tone: "slate" },
   not_eligible: { label: "Not eligible", tone: "slate" },
   old_rule: { label: "Paid leave (old rule)", tone: "slate" },
 };
 
-export const OUTCOME_OPTIONS = (Object.keys(OUTCOME_META) as BirthdayOutcome[]).map((value) => ({
-  value,
-  label: OUTCOME_META[value].label,
-}));
+/** The outcome filter: what a birthday can give now, then the older credit claims (still listed and decided). A worked
+ * birthday is never "a credit to claim" any more, so those two values are not offered. */
+const OUTCOME_FILTER_ORDER: BirthdayOutcome[] = [
+  "paid_leave",
+  "comp_to_place",
+  "comp_placed",
+  "comp_lapsed",
+  "credit_pending",
+  "credit_approved",
+  "upcoming",
+  "off_day",
+  "not_eligible",
+  "old_rule",
+];
+
+export const OUTCOME_OPTIONS = OUTCOME_FILTER_ORDER.map((value) => ({ value, label: OUTCOME_META[value].label }));
 
 /** The outcome of a birthday row (an older backend sends none: a benefit then is the old automatic leave). */
 export function outcomeOf(row: Pick<BirthdayRow, "outcome" | "benefits">): BirthdayOutcome {
@@ -291,12 +308,15 @@ export function outcomeOf(row: Pick<BirthdayRow, "outcome" | "benefits">): Birth
   return row.benefits ? "old_rule" : "not_eligible";
 }
 
-/** Can HR claim the birthday credit for the employee now? The server's `claimable` (a rejected credit may be claimed again);
- * without it, a credit still to claim. */
-export function canClaimBirthday(row: Pick<BirthdayRow, "outcome" | "benefits" | "claimable">): boolean {
-  if (typeof row.claimable === "boolean") return row.claimable;
-  return outcomeOf(row) === "credit_claimable";
+/** The words of a row's outcome: ours for a value this page knows (the tiles and the filter say the same), else the
+ * server's label. */
+export function outcomeText(row: Pick<BirthdayRow, "outcome" | "outcomeLabel" | "benefits">): string {
+  if (row.outcome && row.outcome in OUTCOME_META) return OUTCOME_META[row.outcome].label;
+  return row.outcomeLabel || OUTCOME_META[outcomeOf(row)].label;
 }
+
+/** Can HR place Birthday Compensation for the employee now ("Choose date for employee")? Only on the server's word. */
+export const canPlaceBirthday = (row: Pick<BirthdayRow, "canPlace">): boolean => row.canPlace === true;
 
 // ── Announcements ─────────────────────────────────────────────────────────────
 

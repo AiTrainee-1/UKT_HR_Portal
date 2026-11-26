@@ -1694,7 +1694,8 @@ def normalized_days(bd: dict | None, issues: list[dict]) -> list[dict]:
                 "lastOut": last,
                 "shifts": money(shifts) if shifts is not None else None,
                 "flags": flags.get(day, []),
-                "note": d.get("lateReason") or None,
+                # a staff day still in progress when the payroll was generated carries its own note (day_progress.py)
+                "note": d.get("lateReason") or d.get("note") or None,
                 # What compensation shaped the day; only payrolls generated since the Compensation overhaul carry it
                 "compensationKind": d.get("compensationKind") or None,
                 "compensationMinutes": minutes if isinstance(minutes, int) and not isinstance(minutes, bool) else 0,

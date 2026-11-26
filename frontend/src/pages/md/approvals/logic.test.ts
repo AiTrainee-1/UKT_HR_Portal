@@ -6,6 +6,8 @@ import {
   decisionOf,
   filterItems,
   inMonth,
+  isKindFilter,
+  kindName,
   kindOptions,
   overviewOf,
   requestDayText,
@@ -159,6 +161,29 @@ describe("HOD approvals helpers", () => {
     expect(filterItems(list, { kind: "all", month: null, q: "surya 30020" })).toHaveLength(2);
     expect(kindOptions(list).map((o) => o.label)).toEqual(["All (2)", "Leave (1)", "Permission (1)"]);
     expect(kindOptions([], "resignation").map((o) => o.label)).toEqual(["All (0)", "Resignation (0)"]);
+  });
+
+  it("knows Birthday compensation: a pill, a filter in the address, its name, and the head's switch", () => {
+    const birthday = item({
+      key: "birthday_compensation-9",
+      kind: "birthday_compensation",
+      kindLabel: "Birthday Compensation",
+      group: "other",
+    });
+    expect(kindOptions([item(), birthday]).map((o) => o.label)).toEqual([
+      "All (2)",
+      "Leave (1)",
+      "Birthday compensation (1)",
+    ]);
+    expect(isKindFilter("birthday_compensation")).toBe(true);
+    expect(kindName(birthday)).toBe("Birthday compensation");
+    expect(filterByGroup([item(), birthday], "other")).toEqual([birthday]);
+    expect(overviewOf([birthday], null).byKind).toEqual([
+      { kind: "birthday_compensation", label: "Birthday compensation", count: 1 },
+    ]);
+    expect(rightsOff(hod({ rights: { ...hod().rights, birthday_compensation: false } }))).toEqual([
+      "birthday compensation",
+    ]);
   });
 
   it("sums up a head's month", () => {

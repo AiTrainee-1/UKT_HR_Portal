@@ -2,6 +2,8 @@
 // Director's copies of those pages). Data and wording: ./kinds.ts; the chip, the compact symbol and the legend:
 // ./CompensationMarker.tsx.
 export { CompensationChip, CompensationLegend, CompensationSymbol } from "./CompensationMarker";
+// A day whose shift is still running (owner 2026-11-26): see src/lib/day-progress.ts.
+export { InProgressChip } from "./InProgressChip";
 export {
   COMPENSATION_KINDS,
   KIND_META,

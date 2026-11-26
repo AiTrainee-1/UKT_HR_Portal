@@ -142,19 +142,21 @@ def _half_cl_dates_for_month(emp, year: int, month: int) -> dict:
     return out
 
 
-def _apply_half_casual_leave(computed: dict, portions, halves_attended: tuple) -> None:
+def _apply_half_casual_leave(computed: dict, portions, halves_attended: tuple) -> bool:
     """Approved half-day Casual Leave on a working day (owner 2026-10-31): the CL half is paid (0.50) and the OTHER half
     counts by the punches exactly as it does for a Half-Day Leave: worked -> another 0.50, so a Full Day; not worked ->
     nothing more, so a Half Day (0.50). Working the CL half itself earns nothing extra (the day is never paid twice), and
     a day the punches already made a Full Day stays one. The covered half's flag is lifted (first half: no Morning
     Late-In; second half: no Evening Early-Out). Both halves on the same date make a paid Full Day, like a full CL.
     A holiday / weekly off is left alone (it is already paid as one). `halves_attended` = (morning, evening) by the
-    punches, as _half_day_status judged them."""
+    punches, as _half_day_status judged them. The same rule pays an approved Birthday Compensation half / full day
+    (2026-11-25: compute_day_record hands in the union of both). Returns False when the day was left alone (a holiday /
+    weekly off), True when the paid half (or day) was applied."""
     from .models import CasualLeaveRequest
 
     status = computed.get("status")
     if status not in ("present", "half_shift", "absent", "on_leave"):
-        return
+        return False
     first = CasualLeaveRequest.PORTION_FIRST_HALF in portions
     second = CasualLeaveRequest.PORTION_SECOND_HALF in portions
     if first and second:
@@ -162,7 +164,7 @@ def _apply_half_casual_leave(computed: dict, portions, halves_attended: tuple) -
             status=AttendanceDayRecord.STATUS_PRESENT, shifts_earned=Decimal("1.00"), is_half_shift=False,
             is_late=False, early_leave=False, late_reason=None,
         )
-        return
+        return True
     if first:
         computed["is_late"] = False
         computed["late_reason"] = _reason_without(computed.get("late_reason"), "Morning Late-In")
@@ -170,13 +172,28 @@ def _apply_half_casual_leave(computed: dict, portions, halves_attended: tuple) -
         computed["early_leave"] = False
         computed["late_reason"] = _reason_without(computed.get("late_reason"), "Evening Early-Out")
     if status == AttendanceDayRecord.STATUS_PRESENT:
-        return
+        return True
     morning, evening = halves_attended
     other_half_worked = evening if first else morning
     if other_half_worked:
         computed.update(status=AttendanceDayRecord.STATUS_PRESENT, shifts_earned=Decimal("1.00"), is_half_shift=False)
     else:
         computed.update(status=AttendanceDayRecord.STATUS_HALF, shifts_earned=Decimal("0.50"), is_half_shift=True)
+    return True
+
+
+def _birthday_comp_note(halves, birthdays) -> str:
+    """The day's marker note for an approved Birthday Compensation: "Birthday compensation (birthday 12 Nov): the whole
+    day paid, no leave balance used"."""
+    covered = set(halves)
+    if {"first_half", "second_half"} <= covered:
+        what = "the whole day"
+    elif "first_half" in covered:
+        what = "the first half"
+    else:
+        what = "the second half"
+    when = ", ".join(f"{b.day} {b.strftime('%b')}" for b in birthdays)
+    return f"Birthday compensation (birthday {when}): {what} paid, no leave balance used"
 
 
 @lru_cache(maxsize=512)
@@ -230,15 +247,20 @@ def _sunday(d: date_type) -> bool:
 
 
 def _approved_birthday_credit(employee_id: int, d: date_type) -> bool:
-    """Has this birthday already given an APPROVED birthday credit (a claim of kind birthday)? Asked only for a new-rule
-    birthday with no punch (a handful of rows a year), so one small query then."""
-    from .models import HolidayWorkClaim
+    """Has this birthday already given an APPROVED benefit: a birthday credit (a claim of kind birthday), or (2026-11-25)
+    an approved Birthday Compensation use placed from it (birthday_compensation.py)? Asked only for a new-rule birthday
+    with no punch (a handful of rows a year), so one or two small queries then."""
+    from .models import BirthdayCompensationUse, HolidayWorkClaim
 
-    return HolidayWorkClaim.objects.filter(
+    if HolidayWorkClaim.objects.filter(
         employee_id=employee_id,
         kind=HolidayWorkClaim.KIND_BIRTHDAY,
         work_date=d,
         status=HolidayWorkClaim.STATUS_APPROVED,
+    ).exists():
+        return True
+    return BirthdayCompensationUse.objects.filter(
+        employee_id=employee_id, birthday=d, status=BirthdayCompensationUse.STATUS_APPROVED
     ).exists()
 
 
@@ -1493,6 +1515,16 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             emp, d, settings=settings, prefetched={d: anns_today}, kinds=("day",),
         )
 
+    # Birthday Compensation placed on this date (2026-11-25, birthday_compensation.py: approved by the Department Head and
+    # HR; CompContext.birthday_uses, no query). Its half (or both halves) is paid exactly like a half-day Casual Leave and
+    # is not expected at work, so it joins the Casual Leave halves everywhere below (`paid_halves`).
+    bday_use = None if is_production else comp.birthday_use_on(emp, d, comp_ctx)
+    bday_halves = set(bday_use.halves) if bday_use is not None else set()
+    paid_halves = cl_portions | bday_halves
+    if bday_halves:
+        cl_slot = LeaveRequest.HALF_DAY_MORNING if "first_half" in paid_halves else LeaveRequest.HALF_DAY_AFTERNOON
+        leave_slot = half_day_slot or cl_slot
+
     ot_shift = None  # the REAL shift, for the day's OT measurement (set below when a staff day has punches)
     # The effective on-time limit of the day's morning arrival (seconds since midnight), exactly what the arrival timeline
     # below judged the first punch against: the shift's start + grace, moved by a company-announced late-in or a Type 1
@@ -1667,7 +1699,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             if (
                 status == AttendanceDayRecord.STATUS_HALF
                 and not half_day_slot
-                and not cl_portions
+                and not paid_halves
                 and _still_at_work(d, day_secs, effective_shift, settings, second_half_override, limits)
             ):
                 # TODAY, while the shift is still running (owner 2026-11-13): someone who came in for the morning and has
@@ -1678,7 +1710,7 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half
-            if cl_portions:
+            if paid_halves:
                 halves_attended = _halves_attended(
                     day_secs, settings, second_half_start_override=second_half_override,
                     first_half_limit_s=limits.first_half_until if limits else None,
@@ -1859,8 +1891,10 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
         ))
         birthday_leave = True
 
-    if cl_portions and not (birthday or birthday_leave):
-        _apply_half_casual_leave(computed, cl_portions, halves_attended)
+    if paid_halves and not (birthday or birthday_leave):
+        paid = _apply_half_casual_leave(computed, paid_halves, halves_attended)
+        if paid and bday_halves:
+            marks.append((comp.KIND_BIRTHDAY_COMP, 0, _birthday_comp_note(bday_halves, bday_use.birthdays)))
 
     if not is_production:
         # OT measurement (a plain fact, whatever the switches say): minutes the last punch is past the REAL shift end.
@@ -1881,8 +1915,8 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                 marks.append((comp.KIND_RELAXATION, 0, f"Compensation relaxation: {added:.2f} shift added from {sources}"))
         if marks:
             order = [
-                comp.KIND_BIRTHDAY, comp.KIND_RELAXATION, comp.KIND_WINDOW_LATE_IN, comp.KIND_WINDOW_EARLY_OUT,
-                comp.KIND_OT_ALLOWANCE,
+                comp.KIND_BIRTHDAY, comp.KIND_BIRTHDAY_COMP, comp.KIND_RELAXATION, comp.KIND_WINDOW_LATE_IN,
+                comp.KIND_WINDOW_EARLY_OUT, comp.KIND_OT_ALLOWANCE,
             ]
             marks.sort(key=lambda m: order.index(m[0]))
             fields["compensation_kind"] = marks[0][0]
@@ -2238,7 +2272,13 @@ def compute_range_records(emp, date_from: date_type, date_to: date_type, setting
 
 
 def month_summary_from_records(records) -> dict:
-    """Aggregate totals used by the weekly search table and payroll."""
+    """Aggregate totals used by the weekly search table and payroll. A day still in progress (TODAY while its shift is
+    running, day_progress.is_in_progress) is left out of every count until it is final; totalDays / workingDays still
+    count it, and inProgressDays says how many there were."""
+    from .day_progress import is_in_progress
+
+    all_records = list(records)
+    records = [r for r in all_records if not is_in_progress(getattr(r, "provisional_until", None))]
     present = sum(1 for r in records if r.status == "present")
     half = sum(1 for r in records if r.status == "half_shift" or r.is_half_shift)
     absent = sum(1 for r in records if r.status == "absent")
@@ -2246,9 +2286,9 @@ def month_summary_from_records(records) -> dict:
     holidays = sum(1 for r in records if r.status == "holiday")
     late = sum(1 for r in records if r.is_late)
     shifts = sum((r.shifts_earned or Decimal("0")) for r in records)
-    working_days = len(records) - holidays
+    working_days = len(all_records) - holidays
     return {
-        "totalDays": len(records),
+        "totalDays": len(all_records),
         "workingDays": working_days,
         "present": present,
         "halfShift": half,
@@ -2259,4 +2299,5 @@ def month_summary_from_records(records) -> dict:
         "totalShifts": str(shifts),
         # Effective attendance = full presents + 0.5 × halves
         "effectiveDays": str(Decimal(present) + Decimal(half) * Decimal("0.5")),
+        "inProgressDays": len(all_records) - len(records),
     }

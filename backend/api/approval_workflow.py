@@ -250,6 +250,33 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         on_off_effect="New compensation claims cannot be raised while it is off; claims already waiting can still be decided.",
     ),
     WorkflowDef(
+        key="birthday_compensation",
+        label="Birthday Compensation",
+        group="Leave & attendance",
+        purpose=(
+            "A staff member who worked on their birthday places the 1.00 day of Birthday Compensation it gives on days of "
+            "the birthday month they choose (a full day, or a first / second half), in the mobile app or the Employee Web "
+            "App, or HR places it for them. The Department Head approves it first, then HR; only then is the day (or "
+            "half) paid in the attendance, like a Casual Leave. What is not placed by the end of the month lapses."
+        ),
+        requested_by="Employee or HR",
+        default_steps=(_step(HOD), _step(HR)),
+        allowed_roles=(HOD, HR),
+        editable=False,
+        hod_flag="can_approve_compensation",
+        fixed_note=(
+            "Every Birthday Compensation day needs the Department Head first and then HR. This pipeline cannot be edited."
+        ),
+        note=(
+            "The Department Head uses the 'can approve compensation' switch. An employee with no Department Head (or who "
+            "is the head) cannot place it until one is assigned."
+        ),
+        on_off_effect=(
+            "New Birthday Compensation dates cannot be chosen while it is off; requests already waiting can still be "
+            "decided."
+        ),
+    ),
+    WorkflowDef(
         key="outpass",
         label="Gate Outpass",
         group="Requests",
@@ -599,6 +626,7 @@ ADAPTERS: dict[str, Adapter] = {
     "outpass": Adapter("OutpassRequest", extra_filter={"source": "manual"}, **_PLAIN),
     "attendance_correction": Adapter("AttendanceOverrideRequest", **_PLAIN),
     "holiday_work": Adapter("HolidayWorkClaim", **_PLAIN),
+    "birthday_compensation": Adapter("BirthdayCompensationUse", **_PLAIN),
     "missing_punch": Adapter(
         "MissingPunchRequest", ("pending_hod", "pending_hr"), _project_hod_hr, _legacy_hod_hr_stamps
     ),

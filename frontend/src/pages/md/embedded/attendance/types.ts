@@ -76,6 +76,9 @@ export type EmployeeDay = {
   manual?: boolean;
   informed?: boolean | null;
   reason?: string | null;
+  /** TODAY while the shift is still running (2026-11-26, src/lib/day-progress.ts): no verdict, no shift count yet. */
+  inProgress?: boolean;
+  provisionalUntil?: string | null;
 };
 
 export type EmployeeDaysResponse = MdEnvelope & {

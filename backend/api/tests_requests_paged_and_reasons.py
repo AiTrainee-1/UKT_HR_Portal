@@ -25,15 +25,15 @@ class PagedListTests(HubFixture):
         made = self.one_of_each()
         self.one_of_each(self.ravi)
         first = self.body(page=1, pageSize=5)
-        self.assertEqual((first["page"], first["pageSize"], first["total"], first["pages"]), (1, 5, 24, 5))
+        self.assertEqual((first["page"], first["pageSize"], first["total"], first["pages"]), (1, 5, 26, 6))
         self.assertEqual(len(first["items"]), 5)
-        seen = [i["key"] for p in range(1, 6) for i in self.body(page=p, pageSize=5)["items"]]
-        self.assertEqual(len(seen), 24)
-        self.assertEqual(len(set(seen)), 24, "no request on two pages")
+        seen = [i["key"] for p in range(1, 7) for i in self.body(page=p, pageSize=5)["items"]]
+        self.assertEqual(len(seen), 26)
+        self.assertEqual(len(set(seen)), 26, "no request on two pages")
         self.assertIn(f"leave-{made['leave'].id}", seen)
         # a page past the end is the last one; a paged list is never "truncated"
         last = self.body(page=99, pageSize=5)
-        self.assertEqual((last["page"], len(last["items"])), (5, 4))
+        self.assertEqual((last["page"], len(last["items"])), (6, 1))
         self.assertFalse(any(k["truncated"] for k in last["kinds"]))
 
     def test_newest_first_by_default_and_the_other_orders(self):
@@ -93,7 +93,7 @@ class PagedListTests(HubFixture):
     def test_an_export_takes_every_matching_request_in_one_call(self):
         self.one_of_each()
         body = self.body(page=1, pageSize=5000, export=1)
-        self.assertEqual((len(body["items"]), body["pageSize"]), (12, 5000))
+        self.assertEqual((len(body["items"]), body["pageSize"]), (13, 5000))
         # without export a page is at most 100 rows
         self.assertEqual(self.body(page=1, pageSize=5000)["pageSize"], 100)
 
@@ -104,7 +104,7 @@ class PagedListTests(HubFixture):
         self.assertEqual(self.get(status="waiting_hr").status_code, 400)  # only the paged list knows it
         self.one_of_each()
         old = self.body()
-        self.assertEqual(len(old["items"]), 12)
+        self.assertEqual(len(old["items"]), 13)
         self.assertNotIn("total", old)
 
 

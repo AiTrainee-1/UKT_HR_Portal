@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { describeMdError, useMdQuery, type MdQueryParams } from "@/lib/api-client/custom-hooks/md";
 import { dayShort, num, pct } from "@/lib/md/format";
+import { countedAfterLabel, inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import DetailSheet, { DetailList, DetailRow } from "../shared/DetailSheet";
 import { employeeAddress, useOpenInPage } from "../shared/jump";
 import { boardLabel, PAGE_OF, PEOPLE_TITLE, personLine, type AttendanceKind } from "./logic";
@@ -18,6 +19,7 @@ const daysText = (n: number) => `${num(n)} ${n === 1 ? "day" : "days"}`;
 
 /** The tone a day reads in: crimson absent, ochre a deduction or late, sage worked, plain the rest. */
 export function dayTone(day: EmployeeDay): string {
+  if (isInProgress(day)) return "md-analytics-tone-neutral";
   if (day.label === "Absent" || day.label === "No record") return "md-analytics-tone-bad";
   if (day.quarterOff || day.penaltyEarlyOut || day.late) return "md-analytics-tone-watch";
   if (day.label === "Present" || day.label === "Half day") return "md-analytics-tone-good";
@@ -26,6 +28,8 @@ export function dayTone(day: EmployeeDay): string {
 
 /** "09:40–18:02 · late 40 min · 0.25 off (after the Late window) · Biometric". */
 export function dayDetail(day: EmployeeDay): string {
+  // today, while the shift is still running: only the first punch counts so far (owner 2026-11-26)
+  if (isInProgress(day)) return `${inProgressPunchText(day.firstPunch)} · ${countedAfterLabel(day.provisionalUntil)}`;
   const span = day.firstPunch
     ? `${day.firstPunch}${day.lastPunch && day.lastPunch !== day.firstPunch ? `–${day.lastPunch}` : ""}`
     : null;
@@ -187,9 +191,9 @@ function EmployeeSheet({
               <DetailRow
                 key={day.date}
                 testId={`md-att-drill-day-${day.date}`}
-                primary={`${dayShort(day.date)} · ${day.label}`}
+                primary={`${dayShort(day.date)} · ${isInProgress(day) ? "In progress" : day.label}`}
                 secondary={dayDetail(day) || undefined}
-                value={day.shiftsEarned != null ? num(day.shiftsEarned, 2) : undefined}
+                value={isInProgress(day) ? "—" : day.shiftsEarned != null ? num(day.shiftsEarned, 2) : undefined}
                 tone={dayTone(day)}
               />
             ))}

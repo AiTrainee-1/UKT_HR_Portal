@@ -102,6 +102,24 @@ const type = (el: Element | null, value: string) =>
   });
 
 describe("the Attendance Edit page", () => {
+  it("shows today's unfinished day as In progress, with no shift count and no verdict", () => {
+    const el = show({
+      day: { ...base.day, lastPunch: "13:02:00", inProgress: true, provisionalUntil: "2026-11-02T18:11:00+05:30" },
+    });
+    const card = q(el, "edit-day-card")!;
+    expect(q(card, "edit-day-in-progress")).not.toBeNull();
+    expect(text(card)).toContain("In 09:00 · at work");
+    expect(text(card)).toContain("— shift");
+    expect(text(card)).not.toContain("1.00 shift");
+    expect(text(card)).not.toContain("13:02");
+  });
+
+  it("shows a settled day as before", () => {
+    const card = q(show(), "edit-day-card")!;
+    expect(q(card, "edit-day-in-progress")).toBeNull();
+    expect(text(card)).toContain("1.00 shift");
+  });
+
   it("shows the attendance types as before and every newer option under them", () => {
     const el = show();
     expect(q(el, "edit-type-half_day")).not.toBeNull();

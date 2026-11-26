@@ -174,7 +174,20 @@ def new_rule_birthdays(candidates) -> set[tuple[int, date]]:
             work_date__in={d for _e, d in new_rule},
         ).values_list("employee_id", "work_date")
     )
-    return new_rule - worked - credited
+    unworked = new_rule - worked - credited
+    if unworked:
+        # ... and a birthday that already gave an approved Birthday Compensation use (2026-11-25) is not free either: the
+        # same guard as attendance_final._approved_birthday_credit (one query, only when an unworked birthday is left)
+        from .models import BirthdayCompensationUse
+
+        unworked -= set(
+            BirthdayCompensationUse.objects.filter(
+                status=BirthdayCompensationUse.STATUS_APPROVED,
+                employee_id__in={emp_id for emp_id, _d in unworked},
+                birthday__in={d for _e, d in unworked},
+            ).values_list("employee_id", "birthday")
+        )
+    return unworked
 
 
 def is_hr_edit_cl(cl) -> bool:

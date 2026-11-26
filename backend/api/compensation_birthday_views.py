@@ -29,6 +29,16 @@ birthday leave: the outcome says paid_leave, or (old rule) the engine marked the
 did not set it by hand for less than a full day; before that (a day not computed yet) it is false, never guessed. `outcome` / `outcomeLabel` / `message` / `claim` / `claimable` say what the birthday gives
 (compensation_effects.birthday_outcomes): paid_leave, credit_claimable, credit_pending, credit_approved, credit_rejected,
 upcoming, off_day, not_eligible or old_rule.
+
+Birthday Compensation on a chosen date (2026-11-25, birthday_compensation.py): a worked birthday now gives 1.00 day to place
+on dates of the birthday month (Department Head, then HR), not a credit to claim. For a worked birthday with no credit claim
+waiting / approved, `outcome` is therefore comp_to_place (some of it still to place, the month not over), comp_placed (all
+of it placed: waiting or approved) or comp_lapsed (the month is over and some was never placed) instead of
+credit_claimable / credit_rejected; credit_pending / credit_approved stay for the credit claims raised before. Every row
+also carries `birthdayCompensation` {state, label, total, held, used, available, lapsed, windowFrom, lapsesOn, windowOpen,
+uses: [{id, useDate, portion, portionLabel, days, status, statusKey, statusLabel}]} (state null when the birthday gives
+nothing to place) and `canPlace` (something can still be placed: the dialog then reads
+GET /api/compensation/birthday-compensation?employeeId=&year=). `claimable` is always false now (no new credit claims).
 """
 
 from __future__ import annotations
@@ -41,6 +51,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
+from . import birthday_compensation as bday_comp
 from . import compensation_effects as effects
 from .auth import require_hr
 from .branch_scope import scope_to_branch
@@ -71,6 +82,10 @@ OUTCOME_LABELS = {
     effects.BIRTHDAY_OFF_DAY: "Day off: nothing to give",
     effects.BIRTHDAY_NOT_ELIGIBLE: "Not eligible",
     effects.BIRTHDAY_OLD_RULE: "Paid automatically (old rule)",
+    # Birthday Compensation on a chosen date (2026-11-25)
+    bday_comp.OUTCOME_TO_PLACE: "Worked: Birthday Compensation to place",
+    bday_comp.OUTCOME_PLACED: "Birthday Compensation placed",
+    bday_comp.OUTCOME_LAPSED: "Birthday Compensation lapsed",
 }
 CLAIM_STATUS_LABELS = {"pending": "Pending", "approved": "Approved", "rejected": "Rejected"}
 
@@ -150,9 +165,13 @@ def birthday_rows(
     cfg = CompensationConfig.get()
     master = master_enabled()
     holidays = holiday_names(start, end)
+    today = today or ist_today()
     dated = [(emp, day) for emp in people for day in birthdays_between(emp.date_of_birth, start, end)]
     # before the day records are read: a birthday that has come and was never computed is computed here
-    outcomes = effects.birthday_outcomes(dated, today=today or ist_today(), refresh=refresh)
+    outcomes = effects.birthday_outcomes(dated, today=today, refresh=refresh)
+    # the Birthday Compensation placed from each birthday under the new birthday rule (one query; none when every
+    # birthday listed follows the old automatic rule)
+    placements = bday_comp.summaries([(e, d) for e, d in dated if cfg.birthday_claims_apply_on(d)], today)
     records = {
         (r.employee_id, r.date): r
         for r in AttendanceDayRecord.objects.filter(
@@ -178,6 +197,29 @@ def birthday_rows(
         record = records.get((emp.id, day))
         outcome = outcomes.get((emp.id, day)) or {}
         value = outcome.get("outcome") or effects.BIRTHDAY_NOT_ELIGIBLE
+        message = outcome.get("message")
+        claim = outcome.get("claim") or {}
+        credit_open = claim.get("status") in ("pending", "approved")
+        worked = (outcome.get("base") or value) == effects.BIRTHDAY_CREDIT_CLAIMABLE
+        placement = bday_comp.list_block(
+            day, today, worked, credit_open, placements.get((emp.id, day)) or bday_comp.empty_summary()
+        )
+        if not credit_open and placement["state"] in bday_comp.OUTCOME_OF_STATE:
+            # a worked birthday gives Birthday Compensation to place now, not a credit to claim (2026-11-25)
+            value = bday_comp.OUTCOME_OF_STATE[placement["state"]]
+            message = {
+                bday_comp.OUTCOME_TO_PLACE: (
+                    f"Worked on the birthday: {placement['label']} (Birthday Compensation, a full day or two halves of "
+                    "the birthday month)."
+                ),
+                bday_comp.OUTCOME_PLACED: (
+                    "Worked on the birthday: all of its 1.00 day of Birthday Compensation is placed "
+                    f"({placement['label'].removeprefix('Placed: ')})."
+                ),
+                bday_comp.OUTCOME_LAPSED: (
+                    f"Worked on the birthday: {placement['label']} (it was not placed before the birthday month ended)."
+                ),
+            }[value]
         rows.append(
             {
                 **employee_json(emp),
@@ -197,10 +239,13 @@ def birthday_rows(
                 # what the birthday gives (claim rules from CompensationConfig.claims_from on)
                 "outcome": value,
                 "outcomeLabel": OUTCOME_LABELS.get(value, value),
-                "message": outcome.get("message"),
+                "message": message,
                 "outcomeShifts": _num(outcome.get("shifts")),
                 "claim": _claim_json(outcome.get("claim")),
-                "claimable": bool(outcome.get("claimable")),
+                # no new birthday credit claims since 2026-11-25 (Birthday Compensation is placed on a date instead)
+                "claimable": False,
+                "birthdayCompensation": placement,
+                "canPlace": placement["state"] == bday_comp.STATE_AVAILABLE and master and cfg.birthday_enabled,
             }
         )
     rows.sort(key=lambda r: (r["birthday"], r["employeeName"], r["employeeCode"]))

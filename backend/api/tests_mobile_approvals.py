@@ -26,6 +26,7 @@ from .jwt_utils import sign_token
 from .models import (
     ApprovalWorkflowConfig,
     AttendanceOverrideRequest,
+    BirthdayCompensationUse,
     Branch,
     CasualLeaveRequest,
     Department,
@@ -223,6 +224,14 @@ class ScopeTests(_World):
             )
             OutpassRequest.objects.create(employee=emp, destination="Bank", reason="x", approval_trail=[])
             OnDutySession.objects.create(employee=emp, destination="ABC", status="pending_hod", approval_trail=[])
+            BirthdayCompensationUse.objects.create(
+                employee=emp,
+                birthday=date(2026, 10, 2),
+                use_date=date(2026, 10, 21),
+                portion="full",
+                days=Decimal("1.00"),
+                approval_trail=[],
+            )
 
         listed = self.get("/api/manager/pending-requests").json()
         expected = {
@@ -235,6 +244,7 @@ class ScopeTests(_World):
             "missing_punch": listed["missingPunchRequests"],
             "outpass": listed["outpassRequests"],
             "on_duty": listed["onDutySessions"],
+            "birthday_compensation": listed["birthdayCompensationUses"],
         }
         summary = self.summary()
         self.assertEqual(set(summary), set(expected))

@@ -93,7 +93,7 @@ class RequestsHubDateTests(HubFixture):
 
     def test_a_request_is_listed_by_the_days_it_is_for(self):
         # leave 12-14 Oct, permission 12 Oct, casual leave 13 Oct, missing punch 9 Oct, On-Duty punch 9 Oct,
-        # attendance correction 8 Oct, compensation claim 4 Oct
+        # attendance correction 8 Oct, compensation claim 4 Oct, Birthday Compensation placed on 7 Oct
         self.assertEqual(self.kinds(**{"from": "2026-10-12", "to": "2026-10-12"}), ["leave", "permission"])
         # a leave counts on any of its days
         self.assertEqual(self.kinds(**{"from": "2026-10-14", "to": "2026-10-20"}), ["leave"])
@@ -108,6 +108,7 @@ class RequestsHubDateTests(HubFixture):
                     "on_duty_punch",
                     "attendance_correction",
                     "holiday_work",
+                    "birthday_compensation",
                 ]
             ),
         )
@@ -143,8 +144,8 @@ class RequestsHubDateTests(HubFixture):
         self.assertEqual(stats["waiting"], 1)
         self.assertEqual(stats["approvedThisMonth"], 1)  # the requests for the days that ended approved / rejected
         self.assertEqual(stats["rejectedThisMonth"], 1)
-        # the other ten waiting requests are for other days: counted apart, the earliest is the 4 Oct claim
-        self.assertEqual((stats["allWaiting"], stats["outsideWaiting"]), (11, 10))
+        # the other eleven waiting requests are for other days: counted apart, the earliest is the 4 Oct claim
+        self.assertEqual((stats["allWaiting"], stats["outsideWaiting"]), (12, 11))
         self.assertEqual(stats["outsideEarliest"], "2026-10-04")
         self.assertEqual(stats["oldestWaiting"]["kind"], "leave")
         waiting = {k["key"]: k["waiting"] for k in body["kinds"]}
@@ -154,11 +155,11 @@ class RequestsHubDateTests(HubFixture):
 
     def test_without_the_days_everything_is_as_before(self):
         body = self.body(page=1, pageSize=50)
-        self.assertEqual(body["total"], 12)
+        self.assertEqual(body["total"], 13)
         for key in ("range", "allWaiting", "outsideWaiting", "outsideEarliest"):
             self.assertNotIn(key, body["stats"])
-        self.assertEqual(body["stats"]["waiting"], 12)
-        self.assertEqual(sum(k["waiting"] for k in body["kinds"]), 12)
+        self.assertEqual(body["stats"]["waiting"], 13)
+        self.assertEqual(sum(k["waiting"] for k in body["kinds"]), 13)
 
     def test_a_linked_request_still_comes_back_from_another_day(self):
         key = f"leave-{self.made['leave'].id}"

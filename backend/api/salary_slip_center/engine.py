@@ -34,6 +34,7 @@ from django.db.models import Q
 
 from ..clock import ist_today
 from ..compensation_shared import parse_join_date
+from ..day_progress import IN_PROGRESS_PAYROLL_NOTE, is_in_progress
 from ..document_pdf import num_to_words
 from ..models import (
     AdvanceRepayment,
@@ -369,6 +370,9 @@ def _calculate_staff(emp: Employee, period: Period, options: dict) -> dict:
             row.update(status="sunday" if d.weekday() == 6 else "weekly_off")
         elif d > counted:
             row.update(status="future")
+        elif is_in_progress(record):
+            # TODAY while the shift is still running (day_progress.py): not yet earned, like a day still to come
+            row.update(status="future", note=IN_PROGRESS_PAYROLL_NOTE, inProgress=True)
         elif record is None or (record.status == "absent" and joined is not None and d < joined):
             # attendance decides the pay, the joining date only names an empty day before it (as payroll does)
             row.update(status="not_joined" if joined is not None and d < joined else "absent")
@@ -603,6 +607,10 @@ def _calculate_production(emp: Employee, period: Period, options: dict) -> dict:
         record = by_date.get(d)
         if d > period.counted_to:
             row["status"] = "future"
+        elif is_in_progress(record):
+            # TODAY while the shift is still running (day_progress.py): not yet earned, like a day still to come
+            row.update(status="future", note=IN_PROGRESS_PAYROLL_NOTE, inProgress=True)
+            row["firstIn"] = record.first_punch.strftime("%H:%M") if record.first_punch else None
         elif record is None:
             row["status"] = "not_joined" if joined is not None and d < joined else "absent"
         else:

@@ -31,6 +31,7 @@ from django.utils import timezone
 
 from .attendance_final import compute_range_records
 from .clock import FACTORY_TZ, ist_today
+from .day_progress import progress_fields
 from .hr_edit_marks import hr_edit_map, latest_requests, on_duty_of
 from .payroll_day_marks import MARK_KEYS
 from .models import (
@@ -207,12 +208,15 @@ def _holidays(start: date, end: date) -> dict[date, tuple[str, str | None]]:
 def _view_of_record(rec) -> dict:
     """The attendance facts of one record (a stored AttendanceDayRecord or one the engine just computed)."""
     status = _status_of(rec.status)
-    shifts = float(rec.shifts_earned or 0)
+    progress = progress_fields(rec)
+    # TODAY while the shift is still running: not yet earned (as payroll counts it), shown as "In progress"
+    shifts = 0.0 if progress["inProgress"] else float(rec.shifts_earned or 0)
     return {
         "status": status,
         "firstIn": _clock(rec.first_punch),
         "lastOut": _clock(rec.last_punch),
         "shifts": shifts if status == "present" else 0.0,
+        **progress,
         "isLate": bool(rec.is_late),
         "isEarlyOut": bool(rec.early_leave),
         # Penalty Early Out (additive): the shift it took off is already out of `shifts`
@@ -280,6 +284,8 @@ def calendar_extras(
             "casualLeave": d in casual,
             "compensationType": _compensation_type(kind, note, d, claim_dates, ot_dates),
             "onDuty": on_duty.get(d),
+            # TODAY while the shift is still running (day_progress.py), from the attendance record as it stands now
+            **progress_fields(rec),
         }
 
     for day in days:
@@ -370,6 +376,8 @@ def calendar_extras(
                 or ("sunday_compensation" if d in claim_dates else None),
                 "onDuty": on_duty.get(d),
                 "workedOffDay": True,
+                "inProgress": view["inProgress"],
+                "provisionalUntil": view["provisionalUntil"],
             }
         elif d in on_duty:
             entry["onDuty"] = on_duty[d]

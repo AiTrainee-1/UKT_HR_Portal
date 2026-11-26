@@ -49,6 +49,7 @@ describe("the catalogue", () => {
       "payroll_release",
       "payroll_mark_cleared",
       "compensation_ot",
+      "birthday_compensation",
       "bonus_status",
     ]);
     // nothing hides behind a generic label: every kind has a heading of its own page

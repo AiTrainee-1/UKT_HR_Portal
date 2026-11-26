@@ -33,6 +33,10 @@ const DAYS: Record<string, CompensationFields> = {
   window_late_in: { compensationKind: "window_late_in", compensationNote: "Late-in of 10:30 announced." },
   window_early_out: { compensationKind: "window_early_out", compensationNote: "Early-out of 15:00 announced." },
   birthday: { compensationKind: "birthday", compensationNote: "Birthday: paid leave." },
+  birthday_comp: {
+    compensationKind: "birthday_comp",
+    compensationNote: "Birthday compensation (birthday 5 Mar): the first half paid, no leave balance used",
+  },
   relaxation: { compensationKind: "relaxation", compensationNote: "0.5 shift relaxation applied." },
 };
 
@@ -41,6 +45,7 @@ const WORDS: Record<string, string> = {
   window_late_in: "Announced late-in",
   window_early_out: "Announced early-out",
   birthday: "Birthday leave",
+  birthday_comp: "Birthday compensation",
   relaxation: "Relaxation (compensation day)",
 };
 
@@ -49,6 +54,7 @@ const SHORT: Record<string, string> = {
   window_late_in: "LI",
   window_early_out: "EO",
   birthday: "BD",
+  birthday_comp: "BC",
   relaxation: "RX",
 };
 
@@ -75,7 +81,7 @@ describe("CompensationChip", () => {
       host!.remove();
       return cls.split(" ").find((c) => c.startsWith("bg-"));
     });
-    expect(new Set(classes).size).toBe(5);
+    expect(new Set(classes).size).toBe(Object.keys(DAYS).length);
   });
 
   it("shows the note in plain sight with withNote (a detail view)", () => {
@@ -151,7 +157,7 @@ describe("CompensationSymbol", () => {
 });
 
 describe("CompensationLegend", () => {
-  it("lists all five kinds, each with its symbol and words, when none is named", () => {
+  it("lists all six kinds, each with its symbol and words, when none is named", () => {
     const el = mount(createElement(CompensationLegend));
     const legend = el.querySelector('[data-testid="compensation-legend"]')!;
     expect(legend.getAttribute("role")).toBe("group");

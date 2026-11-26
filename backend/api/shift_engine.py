@@ -886,7 +886,10 @@ def compute_monthly_shift_summary(emp, year: int, month: int, daily_rate: Decima
         settings = copy.copy(settings)
         settings.permission_pricing_enabled = False
 
-    total_shifts = sum((r.shifts_earned or Decimal("0")) for r in records) or Decimal("0")
+    # a day still in progress (TODAY while its shift is running, day_progress.py) earns nothing until it is final
+    from .day_progress import earned_shifts
+
+    total_shifts = sum((earned_shifts(r) for r in records), Decimal("0")) or Decimal("0")
 
     # ONE shared formula for the whole system (payroll, this summary, the employee shift-stats
     # screen): morning late-ins + evening early-outs + approved permissions beyond the monthly

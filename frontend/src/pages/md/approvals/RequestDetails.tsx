@@ -3,6 +3,7 @@ import { EmptyBlock } from "@/components/md/kit/states";
 import { cn } from "@/lib/utils";
 import {
   agoText,
+  kindName,
   reasonMissingText,
   requestDayText,
   requestedLabel,
@@ -73,7 +74,7 @@ export default function RequestDetails({
     <DetailsSheet
       open={open}
       onClose={onClose}
-      title={item ? `${item.kindLabel} · ${who}` : "Request"}
+      title={item ? `${kindName(item)} · ${who}` : "Request"}
       subtitle={item ? `Sent to ${hod.name} · ${item.statusLabel}` : undefined}
       testId="md-approval-details-sheet"
     >

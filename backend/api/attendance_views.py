@@ -18,6 +18,7 @@ from . import production_shift_rules as psr
 from .arrival_rules import ZONE_LATE, limits_for as arrival_limits_for, zone_of as arrival_zone_of
 from .attendance_final import compensation_marker_json, penalty_early_out_json, permission_flags_json
 from .clock import ist_today
+from .day_progress import progress_fields
 from .unit_labels import unit_label
 from .models import (
     Attendance, AttendanceDayRecord, AttendanceLog, Employee, EmployeePermission, EmployeeShiftAssignment,
@@ -787,7 +788,9 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
         relaxed = bool(comp.relaxation_entries(emp, d, ctx))
         rule = comp.birthday_rule(emp, d, ctx)
         new_birthday_leave = rule == comp.BIRTHDAY_RULE_NEW and not logs_by_emp.get(emp.id)
-        if not (relaxed or rule == comp.BIRTHDAY_RULE_OLD or new_birthday_leave):
+        # Birthday Compensation placed on this day (2026-11-25): paid like a Casual Leave, whatever the punches say
+        birthday_comp = comp.birthday_use_on(emp, d, ctx) is not None
+        if not (relaxed or rule == comp.BIRTHDAY_RULE_OLD or new_birthday_leave or birthday_comp):
             continue
         if half_slots is None:
             half_slots = _half_day_leave_slots(d)
@@ -800,7 +803,9 @@ def _daily_compensation_records(ps, d: date_type, employees, logs_by_emp, leave_
             half_day_leave_dates={d: half_slots[emp.id]} if emp.id in half_slots else None,
             prefetch=prefetch,
         )
-        if rec.compensation_kind and (relaxed or rule == comp.BIRTHDAY_RULE_OLD or rec.compensation_kind == "birthday"):
+        if rec.compensation_kind and (
+            relaxed or rule == comp.BIRTHDAY_RULE_OLD or rec.compensation_kind in ("birthday", comp.KIND_BIRTHDAY_COMP)
+        ):
             records[emp.id] = rec
     return records
 
@@ -864,6 +869,17 @@ def attendance_daily(request: Request) -> Response:
     # keys below never change `status` or any other existing key.
     held = _held_verifications(None, d, d)
     leave_by_emp, cl_by_emp, od_by_emp = _day_leave_facts(d, [e.id for e in employees])
+    # TODAY while a shift is still running (day_progress.py): the stored day is provisional, shown as "In progress".
+    # One query, and only on today (no other day can be provisional any more).
+    provisional_by_emp = (
+        dict(
+            AttendanceDayRecord.objects.filter(
+                date=d, employee_id__in=[e.id for e in employees], provisional_until__isnull=False,
+            ).values_list("employee_id", "provisional_until")
+        )
+        if d >= ist_today()
+        else {}
+    )
 
     results = []
     for emp in employees:
@@ -929,6 +945,7 @@ def attendance_daily(request: Request) -> Response:
             **_shift_day_fields(shift_day, emp_logs, d),
             "punches": _display_punches(d, emp_logs, raw_logs, held.get((emp.id, d), ())),
             **_leave_state_fields(leave_by_emp.get(emp.id), cl_by_emp.get(emp.id), od_by_emp.get(emp.id)),
+            **progress_fields({"provisional_until": provisional_by_emp.get(emp.id)}),
         })
 
     return Response(results)
@@ -1157,6 +1174,8 @@ def attendance_employee_history(request: Request, pk: int) -> Response:
             "sourceLabel":  (rec.primary_source if rec and rec.primary_source else None) or (source_label(punches[0]["source"]) if punches else None),
             "notes":        manual.notes if manual else None,
             "hrEdit":       hr_edits.get(cur_date),
+            # TODAY while the shift is still running: "In progress", left out of the summary until it is final
+            **progress_fields(rec),
         })
 
     summary = month_summary_from_records(list(day_records.values()))
@@ -1854,6 +1873,7 @@ def _full_day_row(emp, rec, shift, dsl, cl, perm, leave=None) -> dict:
             if leave else None
         ),
         "source": rec.source,
+        **progress_fields(rec),
     }
 
 
@@ -2120,6 +2140,7 @@ def _attendance_report_log_daily(
             "isCompensationDay": bool(rec.is_compensation_day),
             "isHalfDayLeave": bool(rec.is_half_day_leave),
             "isInformed": rec.is_informed,
+            **progress_fields(rec),
         })
 
     return Response({"date": str(d), "rows": rows, "count": len(rows)})
@@ -2479,6 +2500,8 @@ def _attendance_report_log_sheet(request: Request, employment_type: str) -> Resp
                 # The compensation keys only on a day that has a marker (a missing key reads as null): three null keys on
                 # every cell of a 230 x 31 grid are +0.5 MB of nothing.
                 **(compensation_marker_json(r) if r.compensation_kind else {}),
+                # likewise inProgress / provisionalUntil only on a provisional day (missing = false / null)
+                **(progress_fields(r) if r.provisional_until else {}),
             })
             if r.status in ("present", "half_shift"):
                 strength_by_date[d.isoformat()] += 1
@@ -2861,6 +2884,7 @@ def attendance_search_range(request: Request) -> Response:
                 }
                 if perm else None
             ),
+            **progress_fields(rec),
         })
 
     shift = _get_shift_for_date(emp, date_to)
@@ -3202,6 +3226,8 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             "isCompensationDay": bool(rec.is_compensation_day) if rec else False,
             "isHalfDayLeave": bool(rec.is_half_day_leave) if rec else False,
             **day_kind_json(emp, cur, holidays_by_date, casual_dates),
+            # TODAY while the shift is still running: "In progress", left out of every total below until it is final
+            **progress_fields(rec),
         })
 
     summary = month_summary_from_records(list(day_records.values()))
@@ -3215,8 +3241,9 @@ def employee_shift_monthly_stats(request: Request) -> Response:
     leave_days = summary["onLeave"]
     total_late = summary["late"]
     total_effective_shifts = summary["totalShifts"]
-    late_morning_days = sum(1 for d in daily if d["lateMorning"])
-    late_return_days = sum(1 for d in daily if d["lateReturn"])
+    late_morning_days = sum(1 for d in daily if d["lateMorning"] and not d["inProgress"])
+    late_return_days = sum(1 for d in daily if d["lateReturn"] and not d["inProgress"])
+    in_progress_dates = {date_type.fromisoformat(d["date"]) for d in daily if d["inProgress"]}
 
     # ── Live permission/late-deduction preview -same formula payroll uses
     #    (payroll_views.py), computed fresh from the day loop above rather
@@ -3262,7 +3289,7 @@ def employee_shift_monthly_stats(request: Request) -> Response:
             list(day_records.values()),
             approved_permissions,
             ps_late,
-            counted_dates=set(working_days_list),
+            counted_dates=set(working_days_list) - in_progress_dates,
         )
         late_in_count, early_out_count = pool["late_in"], pool["early_out"]
         permissions_used = pool["free_used"]

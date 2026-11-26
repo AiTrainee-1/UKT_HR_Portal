@@ -129,6 +129,7 @@ export const WORKFLOWS: { key: string; label: string }[] = [
   { key: "outpass", label: "Gate Outpass" },
   { key: "attendance_correction", label: "Attendance Correction" },
   { key: "holiday_work", label: "Holiday Work Compensation" },
+  { key: "birthday_compensation", label: "Birthday Compensation" },
   { key: "resignation", label: "Resignation" },
   { key: "advance", label: "Advance" },
   { key: "request", label: "Other Requests" },

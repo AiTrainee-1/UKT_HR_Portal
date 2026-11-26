@@ -842,6 +842,21 @@ def _birthday(ctx: Ctx):
             set_status(row, "not_applied")
             row["assignedBy"] = "Claim"
             row["detail"] = "Worked on the birthday: a normal working day; one shift can still be claimed as a credit."
+        elif outcome in ("comp_to_place", "comp_placed", "comp_lapsed"):
+            # Birthday Compensation on a chosen date (2026-11-25): the worked birthday's 1.00 day is placed on days of
+            # the birthday month (Department Head, then HR); the row says how far that has got
+            placed = b.get("birthdayCompensation") or {}
+            row["assignedBy"] = "Birthday Compensation"
+            row["shifts"] = placed.get("used") or None
+            # all of it approved = approved; something waiting for a decision = pending; nothing placed yet, or the
+            # month over with some never placed = not applied (as an unclaimed credit was)
+            if outcome == "comp_placed" and not placed.get("held"):
+                set_status(row, "approved")
+            elif outcome != "comp_lapsed" and placed.get("held"):
+                set_status(row, "pending")
+            else:
+                set_status(row, "not_applied")
+            row["detail"] = b.get("message") or ""
         elif day >= ctx.today:
             set_status(row, "pending")
             row["detail"] = (

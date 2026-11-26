@@ -79,6 +79,8 @@ KIND_SOURCE = {
     # the claim workflow (2026-11-19): detected by the system, claimed and approved by the Department Head
     "birthday_credit": "automatic",
     "use_balance": "hr",
+    # a worked birthday's day placed on a chosen date (2026-11-25): earned by the birthday, placed by the employee / HR
+    "birthday_compensation": "automatic",
 }
 
 

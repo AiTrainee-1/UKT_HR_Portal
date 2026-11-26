@@ -280,7 +280,18 @@ class BirthdayEvidenceTests(EngineClaimsBase):
         super().setUp()
         self.worked(THU, time(17, 30))
         compute_range_records(self.emp, THU, THU, PayrollSettings.get())
-        self.claim = self.made(self.raise_({"kind": "birthday", "date": THU.isoformat()}))
+        # a birthday credit claim raised before 2026-11-25 (a new one is refused: Birthday Compensation is placed on a
+        # date instead); the ones already raised are still decided exactly as before
+        self.claim = HolidayWorkClaim.objects.create(
+            employee=self.emp,
+            kind=HolidayWorkClaim.KIND_BIRTHDAY,
+            work_date=THU,
+            shifts=Decimal("1.00"),
+            reason="Worked on my birthday.",
+            status=HolidayWorkClaim.STATUS_PENDING,
+            raised_by_role=HolidayWorkClaim.RAISED_BY_EMPLOYEE,
+            approval_trail=[],
+        )
 
     def test_punches_deleted_without_the_day_worked_out_again_is_refused(self):
         """correctness #5: a stored 'present' day with no punch any more is stale and worked out again."""

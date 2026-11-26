@@ -10,6 +10,7 @@ export type ApprovalKind =
   | "on_duty"
   | "attendance_correction"
   | "holiday_work"
+  | "birthday_compensation"
   | "resignation";
 
 export type ApprovalGroup = "leave" | "permission" | "other";

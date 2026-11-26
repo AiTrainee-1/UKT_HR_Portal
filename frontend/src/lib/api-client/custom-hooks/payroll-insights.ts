@@ -274,6 +274,10 @@ export type PayrollDay = DayCompensationMarker & {
   /** The day's latest HR attendance edit and where its approval stands (the "!" on the calendar). Omitted when HR never
    *  edited the day. */
   hrEdit?: HrEdit | null;
+  /** TODAY while its shift is still running (2026-11-26): shown "In progress", no shift count, left out of totals. */
+  inProgress?: boolean;
+  /** When the day is counted (shift end + grace + 1 min, ISO with offset); null when the day is settled. */
+  provisionalUntil?: string | null;
 };
 
 // ── HR attendance edits (2026-11-02) ──────────────────────────────────────────

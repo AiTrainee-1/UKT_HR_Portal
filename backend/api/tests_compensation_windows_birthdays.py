@@ -1039,11 +1039,13 @@ class BirthdayClaimRuleTests(LeaveBase):
         ravi = self.rows()["WB2"]
         self.assertEqual(
             (ravi["outcome"], ravi["applied"], ravi["attendanceStatus"], ravi["firstPunch"], ravi["claimable"]),
-            ("credit_claimable", False, "present", "09:40", True),
+            ("comp_to_place", False, "present", "09:40", False),
         )
         self.assertNotEqual(ravi["compensationKind"], "birthday")
         self.assertEqual(ravi["outcomeShifts"], 1.0)
-        self.assertIn("claim", ravi["message"])
+        # 2026-11-25: Birthday Compensation to place on a day of the birthday month, not a credit to claim
+        self.assertIn("Birthday Compensation", ravi["message"])
+        self.assertEqual((ravi["birthdayCompensation"]["available"], ravi["canPlace"]), (1.0, True))
         record = AttendanceDayRecord.objects.get(employee=self.ravi, date=date(2026, 10, 12))
         self.assertTrue(record.is_late)  # no birthday exemption from late detection any more
 
@@ -1051,7 +1053,7 @@ class BirthdayClaimRuleTests(LeaveBase):
         self.punch(self.ravi, date(2026, 10, 12), time(9, 0), time(12, 0))
         ravi = self.rows()["WB2"]
         self.assertEqual(
-            (ravi["outcome"], ravi["attendanceStatus"], ravi["applied"]), ("credit_claimable", "half_shift", False)
+            (ravi["outcome"], ravi["attendanceStatus"], ravi["applied"]), ("comp_to_place", "half_shift", False)
         )
 
     def test_approved_leave_on_the_birthday_is_paid_birthday_leave(self):
@@ -1081,7 +1083,8 @@ class BirthdayClaimRuleTests(LeaveBase):
         claim.status = "rejected"
         claim.save()
         ravi = self.rows()["WB2"]
-        self.assertEqual((ravi["outcome"], ravi["claimable"]), ("credit_rejected", True))  # may be claimed again
+        # a rejected credit is not claimed again (2026-11-25): its Birthday Compensation is placed on a date instead
+        self.assertEqual((ravi["outcome"], ravi["claimable"]), ("comp_to_place", False))
 
     def test_today_upcoming_and_off_days(self):
         rows = self.rows()
@@ -1093,7 +1096,7 @@ class BirthdayClaimRuleTests(LeaveBase):
         from .attendance_final import compute_range_records
 
         compute_range_records(self.asha, TODAY, TODAY)  # what the attendance refresh pass does after a new punch
-        self.assertEqual(self.rows()["WB1"]["outcome"], "credit_claimable")  # punched in: a normal working day
+        self.assertEqual(self.rows()["WB1"]["outcome"], "comp_to_place")  # punched in: a normal working day
         self.assertFalse(
             AttendanceDayRecord.objects.filter(employee=self.boss).exists()
         )  # a future day is never computed
@@ -1104,18 +1107,18 @@ class BirthdayClaimRuleTests(LeaveBase):
         self.punch(self.asha, TODAY, time(9, 40), time(18, 0))
         rows = self.rows()
         self.assertEqual(rows["WB2"]["outcome"], "old_rule")  # before the claims date: the old automatic rule
-        self.assertEqual(rows["WB1"]["outcome"], "credit_claimable")  # the claims date itself follows the new rule
+        self.assertEqual(rows["WB1"]["outcome"], "comp_to_place")  # the claims date itself follows the new rule
 
     def test_the_outcome_and_search_filters(self):
         self.punch(self.ravi, date(2026, 10, 12), time(9, 0), time(18, 0))
         body = self.listing()
         self.assertEqual(
             {k: v for k, v in body["outcomeCounts"].items() if v},
-            {"paid_leave": 1, "credit_claimable": 1, "off_day": 1, "upcoming": 1},
+            {"paid_leave": 1, "comp_to_place": 1, "off_day": 1, "upcoming": 1},
         )
         self.assertEqual(body["enabled"]["claimsFrom"], "2026-10-01")
-        self.assertEqual(body["outcomeLabels"]["credit_claimable"], "Worked: credit to claim")
-        only = self.listing(outcome="credit_claimable")
+        self.assertEqual(body["outcomeLabels"]["comp_to_place"], "Worked: Birthday Compensation to place")
+        only = self.listing(outcome="comp_to_place")
         self.assertEqual([r["employeeCode"] for r in only["results"]], ["WB2"])
         self.assertEqual(only["count"], 1)
         self.assertEqual(only["outcomeCounts"]["paid_leave"], 1)  # the tiles still count the whole period

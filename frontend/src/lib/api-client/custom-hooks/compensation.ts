@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { customFetch } from "../custom-fetch";
 import type { ApprovalProgress } from "../../approval-workflow";
 import type { SplitKey } from "../../salary-split";
+import type { BirthdayCompBlock } from "./birthday-compensation";
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Compensation -read-only CTC breakdown (Compensation.tsx)
@@ -669,18 +670,24 @@ export const useWithdrawHolidayWork = () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Compensation Leave C: birthdays. From the claims date a birthday is a normal working day: absent or on approved leave =
-//  an automatic paid birthday leave; present = one 1-shift credit to claim (the HOD approves it into the balance)
+//  an automatic paid birthday leave; worked (present or half a day) = 1.00 day of Birthday Compensation to place on days of
+//  the birthday month (2026-11-25, ./birthday-compensation.ts). Older birthday credit claims stay readable.
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type ReportPeriod = "today" | "week" | "month";
 
 /**
- * What a birthday gave: paid_leave (absent / on leave), credit_claimable (worked: a credit nobody claimed yet),
- * credit_pending / credit_approved / credit_rejected (its claim), upcoming (not come yet), off_day (Sunday, holiday, off
- * Saturday: nothing), not_eligible (not staff, joined later ...), old_rule (before the claims date: the old automatic leave).
+ * What a birthday gave: paid_leave (absent / on leave), comp_to_place (worked: Birthday Compensation still to place, the
+ * month not over), comp_placed (all of it placed: waiting or approved), comp_lapsed (the month ended with some never
+ * placed), credit_pending / credit_approved (a birthday credit claim raised before 2026-11-25), upcoming (not come yet),
+ * off_day (Sunday, holiday, off Saturday: nothing), not_eligible (not staff, joined later ...), old_rule (before the claims
+ * date: the old automatic leave). credit_claimable / credit_rejected are what an older server sends for a worked birthday.
  */
 export type BirthdayOutcome =
   | "paid_leave"
+  | "comp_to_place"
+  | "comp_placed"
+  | "comp_lapsed"
   | "credit_claimable"
   | "credit_pending"
   | "credit_approved"
@@ -694,10 +701,16 @@ export type BirthdayRow = {
   /** Optional: an older backend sends none (the page then reads `benefits`). */
   outcome?: BirthdayOutcome | null;
   outcomeLabel?: string | null;
-  /** The birthday credit's claim, once one was raised. */
+  /** The server's sentence about what the birthday gave. */
+  message?: string | null;
+  /** The birthday credit's claim, once one was raised (claims raised before 2026-11-25). */
   claim?: { id: number; status: string; shifts?: number | null; kind?: string } | null;
-  /** Can a credit be claimed now (worked, no pending / approved claim; a rejected one may be claimed again)? Optional. */
+  /** Always false since 2026-11-25 (no new birthday credit claims). */
   claimable?: boolean;
+  /** What the worked birthday gives now: the 1.00 day of Birthday Compensation and where it was placed. Optional. */
+  birthdayCompensation?: BirthdayCompBlock | null;
+  /** Can Birthday Compensation be placed now ("Choose date for employee")? Optional (an older server sends none). */
+  canPlace?: boolean;
   employeeId: number;
   employeeCode: string;
   employeeName: string;

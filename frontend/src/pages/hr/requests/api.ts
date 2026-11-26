@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
+import { birthdayCompDecisionPath, invalidateCompensation } from "@/lib/api-client/custom-hooks";
 import { exportParams, normalizeHub, type HubItem, type HubResponse, type KindKey } from "./logic";
 
 export const HUB_KEY = "/api/hr-requests";
@@ -55,6 +56,9 @@ export function decisionCall({ item, status, comment }: Decision): Call | null {
     case "attendance_correction":
       // HR's second approval: the endpoint refuses it until the Department Head has approved
       return { url: `/api/attendance/override-requests/${item.id}`, method: "PATCH", body: { status, comment: note } };
+    case "birthday_compensation":
+      // HR's step after the Department Head's (400 not_your_turn before it); the final approval pays the day
+      return { url: birthdayCompDecisionPath(item.id), method: "PATCH", body: { status, comment: note } };
     default:
       return null;
   }
@@ -84,8 +88,11 @@ export function useDecide() {
       queryClient.invalidateQueries({ queryKey: [HUB_KEY] });
       const other = OTHER_KEYS[item.kind];
       if (other) queryClient.invalidateQueries({ queryKey: [other] });
-      // an approved attendance change rewrites the day: every attendance view must read it again
-      if (item.kind === "attendance_correction") {
+      // Birthday Compensation lives in Compensation (the Birthdays list and the employee's placements)
+      if (item.kind === "birthday_compensation") void invalidateCompensation(queryClient);
+      // an approved attendance change (or Birthday Compensation, which pays the day) rewrites the day: every attendance
+      // view must read it again
+      if (item.kind === "attendance_correction" || item.kind === "birthday_compensation") {
         queryClient.invalidateQueries({
           predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
         });

@@ -7,7 +7,8 @@ import {
 } from "@/lib/api-client/custom-hooks";
 import { claim } from "../fixtures";
 import {
-  canClaimBirthday,
+  OUTCOME_OPTIONS,
+  canPlaceBirthday,
   claimAmountText,
   claimDateDetail,
   claimEffectText,
@@ -20,6 +21,7 @@ import {
   ledgerSourceText,
   offDayText,
   outcomeOf,
+  outcomeText,
   overtimeText,
   previousSunday,
   raisedByText,
@@ -183,11 +185,27 @@ describe("birthdays and announcements", () => {
     expect(outcomeOf({ benefits: false })).toBe("not_eligible");
   });
 
-  it("offers Claim for employee on what the server calls claimable (a rejected credit may be claimed again)", () => {
-    expect(canClaimBirthday({ outcome: "credit_rejected", benefits: true, claimable: true })).toBe(true);
-    expect(canClaimBirthday({ outcome: "credit_claimable", benefits: true, claimable: false })).toBe(false);
-    expect(canClaimBirthday({ outcome: "credit_claimable", benefits: true })).toBe(true); // older backend
-    expect(canClaimBirthday({ outcome: "credit_rejected", benefits: true })).toBe(false);
+  it("offers Choose date for employee only on the server's canPlace (no more credits to claim)", () => {
+    expect(canPlaceBirthday({ canPlace: true })).toBe(true);
+    expect(canPlaceBirthday({ canPlace: false })).toBe(false);
+    expect(canPlaceBirthday({})).toBe(false); // an older backend sends none
+  });
+
+  it("names the Birthday Compensation outcomes in sentence case, and the filter offers them, not a credit to claim", () => {
+    expect(
+      outcomeText({ outcome: "comp_to_place", outcomeLabel: "Worked: Birthday Compensation to place", benefits: true }),
+    ).toBe("Worked: birthday compensation to place");
+    expect(outcomeText({ outcome: "comp_placed", benefits: true })).toBe("Birthday compensation placed");
+    expect(outcomeText({ outcome: "comp_lapsed", benefits: true })).toBe("Birthday compensation lapsed");
+    // a value this build does not know keeps the server's words
+    expect(outcomeText({ outcome: "brand_new" as never, outcomeLabel: "Something new", benefits: true })).toBe(
+      "Something new",
+    );
+    const values = OUTCOME_OPTIONS.map((o) => o.value);
+    expect(values).toEqual(expect.arrayContaining(["comp_to_place", "comp_placed", "comp_lapsed", "credit_pending"]));
+    expect(values).not.toContain("credit_claimable");
+    expect(values).not.toContain("credit_rejected");
+    expect(OUTCOME_OPTIONS.map((o) => o.label).join(" ")).not.toContain("credit to claim");
   });
 
   it("says when an announcement is", () => {

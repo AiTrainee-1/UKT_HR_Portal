@@ -27,6 +27,8 @@ describe("the compensation marker of a day", () => {
     expect(compensationMark({ compensationKind: "window_late_in" })?.label).toBe("Announced late-in");
     expect(compensationMark({ compensationKind: "window_early_out" })?.label).toBe("Announced early-out");
     expect(compensationMark({ compensationKind: "birthday" })?.label).toBe("Birthday leave");
+    expect(compensationMark({ compensationKind: "birthday_comp" })?.label).toBe("Birthday compensation");
+    expect(compensationMark({ compensationKind: "birthday_comp" })?.short).toBe("BC");
     expect(compensationMark({ compensationKind: "relaxation" })?.label).toBe("Relaxation (compensation day)");
   });
 

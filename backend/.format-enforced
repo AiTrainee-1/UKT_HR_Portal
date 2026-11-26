@@ -662,3 +662,10 @@ api/request_auto_reject/views.py
 api/request_auto_reject/urls.py
 api/request_auto_reject/scheduler.py
 api/tests_request_auto_reject.py
+api/models/birthday_compensation.py
+api/birthday_compensation.py
+api/birthday_compensation_service.py
+api/birthday_compensation_views.py
+api/tests_birthday_compensation.py
+api/day_progress.py
+api/tests_day_in_progress.py

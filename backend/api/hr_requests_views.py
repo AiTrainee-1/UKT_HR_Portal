@@ -103,6 +103,8 @@ class Kind:
 
 # The Compensation claims list (the Sunday / holiday work section's Claims tab lists every claim kind).
 COMPENSATION_CLAIMS_PATH = "/hr/compensation/compensation-leave/holiday-work/claims"
+# The Birthdays section of Compensation Leave (Birthday Compensation is chosen and listed there).
+BIRTHDAYS_PATH = "/hr/compensation/compensation-leave/birthdays"
 
 KINDS: tuple[Kind, ...] = (
     Kind(
@@ -226,6 +228,21 @@ KINDS: tuple[Kind, ...] = (
         "Compensation",
         ("pending",),
         day_field="work_date",
+    ),
+    # Birthday Compensation days (2026-11-25): the Department Head decides first, then HR here (Approve / Reject call
+    # PATCH /api/compensation/birthday-compensation/uses/<id>/decision); listed by the day it is placed on. A withdrawn one
+    # is never listed (nobody decided it).
+    Kind(
+        "birthday_compensation",
+        "Birthday Compensation",
+        "compensation.leave.birthdays",
+        "BirthdayCompensationUse",
+        "quick",
+        BIRTHDAYS_PATH,
+        "Compensation",
+        ("pending",),
+        extra_filter={"withdrawn_at__isnull": True},
+        day_field="use_date",
     ),
     Kind(
         "resignation",
@@ -608,6 +625,46 @@ def _holiday_work(r):
     }
 
 
+def _birthday_compensation(r):
+    """A Birthday Compensation day placed in the birthday month (2026-11-25)."""
+    part = {"full": "Full day", "first_half": "First half", "second_half": "Second half"}.get(r.portion, r.portion)
+    raised = "Employee" if r.raised_by_role == "employee" else "HR"
+    details = [
+        ("Placed on", str(r.use_date)),
+        ("Day part", part),
+        ("Days", f"{float(r.days):.2f}"),
+        ("Birthday", str(r.birthday)),
+        (
+            "Raised by",
+            f"{r.requested_by or 'The employee'} (employee)" if raised == "Employee" else r.requested_by or "HR",
+        ),
+    ]
+    hr_done = bool(r.hr_reviewed_by)
+    return {
+        "label": f"Birthday Compensation · {part.lower()}",
+        "summary": f"{r.use_date} · {part.lower()} (birthday {r.birthday})",
+        "reason": r.reason or None,
+        "requested": _requested(r.use_date, note=part.lower(), label="Placed on"),
+        "date": str(r.use_date),
+        "details": details,
+        "decision": (
+            r.hr_reviewed_by or r.hod_reviewed_by,
+            "hr" if hr_done else ("hod" if r.hod_reviewed_by else None),
+            r.hr_reviewed_at or r.hod_reviewed_at,
+            r.hr_review_comment if hr_done else r.hod_review_comment,
+        ),
+        "extra": {
+            "birthday": str(r.birthday),
+            "portion": r.portion,
+            "days": float(r.days),
+            "raisedByRole": r.raised_by_role,
+            "decisionPath": f"/api/compensation/birthday-compensation/uses/{r.id}/decision",
+            # the Birthdays list's own URL state (bperiod / bdate / bq): the birthday's month, this employee
+            "openPath": f"{BIRTHDAYS_PATH}/list?bperiod=month&bdate={r.birthday}&bq={r.employee.employee_code}",
+        },
+    }
+
+
 def _resignation(r):
     details = [("Last working day", _iso(r.last_working_date) or "Not given")]
     if r.dept_head_id and r.dept_head:
@@ -662,6 +719,7 @@ BUILDERS: dict[str, Callable] = {
     "request": _request,
     "attendance_correction": _correction,
     "holiday_work": _holiday_work,
+    "birthday_compensation": _birthday_compensation,
     "resignation": _resignation,
     "advance": _advance,
 }

@@ -12,6 +12,7 @@ import {
   type RuleItem,
 } from "@/lib/api-client/custom-hooks";
 import { inr2, parseIso, plural } from "@/components/payroll/kit/format";
+import { isInProgress } from "@/lib/day-progress";
 
 // The pure logic behind the payroll details page: what the sections are, how the calendar is laid out, which rules
 // changed, and the small formatting rules. Nothing here touches React or the network, so every rule can be tested on
@@ -158,6 +159,7 @@ export function impactParts(impact: PayrollIssue["impact"] | undefined): string[
 // ── The days: calendar and table ──────────────────────────────────────────────
 
 export type DayKind =
+  | "inprogress"
   | "present"
   | "late"
   | "early"
@@ -180,6 +182,7 @@ export type DayKind =
 
 /** The order of the legend: what was worked, then what was not, then the paid extras, then the days off. */
 export const DAY_KINDS: DayKind[] = [
+  "inprogress",
   "present",
   "late",
   "early",
@@ -223,6 +226,15 @@ type KindLook = {
  * orange-to-green.
  */
 export const DAY_KIND_META: Record<DayKind, KindLook> = {
+  // TODAY while the shift is still running (owner 2026-11-26): no verdict and no shift count yet; neutral, like a day to come
+  inprogress: {
+    label: "In progress",
+    short: "…",
+    hint: "Today, while the shift is still running: the day is counted after the shift ends.",
+    cell: "border-dashed border-slate-300 bg-slate-50 text-slate-700",
+    swatch: "bg-slate-400",
+    bar: "border-l-slate-400",
+  },
   present: {
     label: "Present",
     short: "P",
@@ -396,6 +408,7 @@ type KindInput = Pick<PayrollDay, "status" | "flags"> &
       | "compensationType"
       | "onDuty"
       | "workedOffDay"
+      | "inProgress"
     >
   > & { shifts?: number | null };
 
@@ -406,6 +419,8 @@ type KindInput = Pick<PayrollDay, "status" | "flags"> &
  * Staff payroll records a half day as a present day with 0.5 shifts and a half-day issue, so those count too.
  */
 export function dayKind(day: KindInput): DayKind {
+  // a day still running has no verdict yet: whatever the stored status says now, it is shown (and counted) as in progress
+  if (isInProgress(day)) return "inprogress";
   const status = (day.status ?? "").toLowerCase();
   const flags = day.flags ?? [];
   const od = day.onDuty?.state;
@@ -542,7 +557,9 @@ export const MARK_FILL_ORDER: DayMark[] = [
 const STATUS_FILLS: DayKind[] = DAY_KINDS.filter((k) => k !== "present" && k !== "late");
 
 /** The category that fills the cell of a day, or null when the cell shows the day's status (a plain day, or a status that wins). */
-export function fillMark(day: Pick<PayrollDay, "status" | "flags" | "marks" | "shifts">): DayMark | null {
+export function fillMark(
+  day: Pick<PayrollDay, "status" | "flags" | "marks" | "shifts"> & Partial<Pick<PayrollDay, "inProgress">>,
+): DayMark | null {
   if (STATUS_FILLS.includes(dayKind(day))) return null;
   const marks = marksOf(day);
   return MARK_FILL_ORDER.find((m) => marks.includes(m)) ?? null;

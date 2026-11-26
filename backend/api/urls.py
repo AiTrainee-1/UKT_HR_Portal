@@ -221,6 +221,12 @@ from .compensation_settings_views import compensation_config, compensation_setti
 from .production_shift_rules_views import production_shift_rules, production_shift_rules_preview
 # Compensation overhaul (claims, announced windows, birthdays, reports, employee apps): see the block of routes below.
 from .compensation_birthday_views import compensation_birthdays
+# Birthday Compensation on a chosen date (2026-11-25, birthday_compensation_views.py): see its block of routes below.
+from .birthday_compensation_views import (
+    employee_birthday_compensation, employee_birthday_compensation_use_detail, employee_birthday_compensation_uses,
+    hr_birthday_compensation, hr_birthday_compensation_decision, hr_birthday_compensation_use_detail,
+    hr_birthday_compensation_uses, manager_update_birthday_compensation_status,
+)
 from .compensation_reports_views import compensation_reports
 from .compensation_windows_views import compensation_window_detail, compensation_windows
 from .employee_compensation_views import employee_compensation, employee_hod
@@ -735,6 +741,17 @@ urlpatterns = [
     # ── end of the Compensation claims block ──
     path("compensation/holiday-work/<int:pk>", holiday_work_claim_detail),
     path("compensation/birthdays", compensation_birthdays),
+    # ── Birthday Compensation on a chosen date (2026-11-25; HR key compensation.leave.birthdays, HR's decision needs the
+    #    approval right birthday_compensation). Literal paths before <int:pk>. ──
+    path("compensation/birthday-compensation", hr_birthday_compensation),
+    path("compensation/birthday-compensation/uses", hr_birthday_compensation_uses),
+    path("compensation/birthday-compensation/uses/<int:pk>", hr_birthday_compensation_use_detail),
+    path("compensation/birthday-compensation/uses/<int:pk>/decision", hr_birthday_compensation_decision),
+    # employee tokens (the mobile app / Employee Web App; allowlisted as employee/*)
+    path("employee/compensation/birthday", employee_birthday_compensation),
+    path("employee/compensation/birthday/uses", employee_birthday_compensation_uses),
+    path("employee/compensation/birthday/uses/<int:pk>", employee_birthday_compensation_use_detail),
+    # ── end of the Birthday Compensation block ──
     path("compensation/windows", compensation_windows),
     path("compensation/windows/<int:pk>", compensation_window_detail),
     path("compensation/reports", compensation_reports),
@@ -939,6 +956,8 @@ urlpatterns = [
     path("manager/outpass-requests/<int:pk>/status", manager_update_outpass_status),
     # Compensation overhaul: the HOD decides a Holiday / Sunday work claim, and the employee apps' compensation / HOD pages
     path("manager/holiday-work/<int:pk>/status", manager_update_holiday_work_status),
+    # Birthday Compensation (2026-11-25): the HOD's step, before HR's
+    path("manager/birthday-compensation/<int:pk>/status", manager_update_birthday_compensation_status),
     path("employee/compensation", employee_compensation),
     path("employee/hod", employee_hod),
 

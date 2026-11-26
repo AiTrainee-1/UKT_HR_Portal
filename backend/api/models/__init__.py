@@ -25,6 +25,7 @@ Modules (each only imports from ones listed before it):
   salary_slip_center HR -> Payroll -> Salary Slip: standalone salary slips (no payroll) and the page's own Hold switch.
   missed_payroll HR -> Payroll -> Missed Payroll: payroll for employees the regular payroll missed (Done writes Payroll).
   investigation Employees -> Investigation: continuous absence lists, Keep active / inactive decisions, Auto Trigger.
+  birthday_compensation Birthday Compensation: the dates a worked birthday's 1.00 day is placed on (HOD then HR).
 """
 
 from .core import (
@@ -229,3 +230,4 @@ from .request_auto_reject import AutoRejectedRequest, RequestAutoRejectSettings
 from .payroll_excess import PayrollExcessEntry, PayrollExcessHistory
 from .factory import FactoryLabel
 from .enquiries import Enquiry
+from .birthday_compensation import BirthdayCompensationUse

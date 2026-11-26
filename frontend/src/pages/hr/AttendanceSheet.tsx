@@ -22,6 +22,7 @@ import {
   type AttendanceSheetDayCell, type AttendanceSheetDayStatus, type AttendanceSheetEmployeeRow,
 } from "@/lib/api-client/custom-hooks";
 import { normalizeHalf } from "@/lib/late-detection";
+import { countedAfterLabel, inProgressPunchText, isInProgress } from "@/lib/day-progress";
 import { useKindText, useReportLogKind } from "./report-log/kind";
 import DayEarned from "./report-log/DayEarned";
 import DayPunches from "./report-log/DayPunches";
@@ -32,7 +33,7 @@ import {
 import {
   ChevronLeft, ChevronRight, ClipboardList, Building2, Search,
   FileSpreadsheet, FileImage, Loader2,
-  CheckCircle2, Sunrise, Sunset, XCircle, Plane, PartyPopper, type LucideIcon,
+  CheckCircle2, Sunrise, Sunset, XCircle, Plane, PartyPopper, Hourglass, type LucideIcon,
 } from "lucide-react";
 
 // ── Date helpers ─────────────────────────────────────────────────────────
@@ -107,11 +108,15 @@ const STATUS_META: Record<StatusKey, CellMeta> = {
 const HALF_MORNING_META: CellMeta = { code: "½M", label: "Half Shift (Morning)", bg: "bg-amber-100", text: "text-amber-800", hex: "FFEB9C", accent: "D97706", Icon: Sunrise };
 const HALF_EVENING_META: CellMeta = { code: "½E", label: "Half Shift (Evening)", bg: "bg-orange-100", text: "text-orange-800", hex: "FED7AA", accent: "EA580C", Icon: Sunset };
 
+/** TODAY while the shift is still running (owner 2026-11-26): no verdict yet, counted after the shift ends. */
+const IN_PROGRESS_META: CellMeta = { code: "…", label: "In progress", bg: "bg-slate-50", text: "text-slate-600", hex: "F1F5F9", accent: "64748B", Icon: Hourglass };
+
 /** Which status "look" a cell should render as -half_shift splits into a
  *  morning/evening variant (different code + shade) once halfDayPeriod
  *  is known (the endpoint spells the evening half "afternoon"); every other
  *  status is a plain lookup. */
 function cellDisplay(cell: AttendanceSheetDayCell): CellMeta | null {
+  if (isInProgress(cell)) return IN_PROGRESS_META;
   if (!cell.status) return null;
   if (cell.status === "half_shift") {
     // A day made up by a relaxation has no punches, so the endpoint's "afternoon" is only its default, not a half that
@@ -754,6 +759,13 @@ function CellDetails({
       </div>
       <div className="px-3 py-1.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500" data-testid="day-card-head">
         <span className="font-semibold text-gray-800">{fmtLong(cell.date)}</span>
+        {isInProgress(cell) ? (
+          <span className="tabular-nums" data-testid="day-card-in-progress">
+            <b className="font-semibold text-gray-800">{inProgressPunchText(cell.firstPunch)}</b> ·{" "}
+            {countedAfterLabel(cell.provisionalUntil)}
+          </span>
+        ) : (
+        <>
         <span className="tabular-nums">
           In <b className="font-semibold text-gray-800">{cell.firstPunch ?? "—"}</b> · Out{" "}
           <b className="font-semibold text-gray-800">{cell.lastPunch ?? "—"}</b>
@@ -761,6 +773,8 @@ function CellDetails({
         <span className="tabular-nums">
           Duration <b className="font-semibold text-gray-800">{duration ?? "—"}</b>
         </span>
+        </>
+        )}
       </div>
       {compensationMark(cell) && (
         <div className="px-3 pb-2">
@@ -829,7 +843,7 @@ function DayCell({
       <DayCardBody cell={cell} meta={meta} employeeId={employeeId} />
     </AttPopoverContent>
   );
-  const label = `${employeeName}, ${fmtLong(cell.date)}: ${meta.label}. Show the day's punches`;
+  const label = `${employeeName}, ${fmtLong(cell.date)}: ${meta.label}${isInProgress(cell) ? ` (${countedAfterLabel(cell.provisionalUntil)})` : ""}. Show the day's punches`;
 
   if (isWide) {
     const duration = punchDuration(cell.firstPunch, cell.lastPunch);
@@ -854,12 +868,20 @@ function DayCell({
             )}
           </span>
         </div>
-        {(cell.firstPunch || cell.lastPunch) && (
-          <p className="text-[10px] font-mono opacity-80 mt-0.5">
-            IN {cell.firstPunch ?? "—"} · OUT {cell.lastPunch ?? "—"}
+        {isInProgress(cell) ? (
+          <p className="text-[10px] font-mono opacity-80 mt-0.5" title={countedAfterLabel(cell.provisionalUntil)}>
+            {inProgressPunchText(cell.firstPunch)}
           </p>
+        ) : (
+          <>
+            {(cell.firstPunch || cell.lastPunch) && (
+              <p className="text-[10px] font-mono opacity-80 mt-0.5">
+                IN {cell.firstPunch ?? "—"} · OUT {cell.lastPunch ?? "—"}
+              </p>
+            )}
+            {duration && <p className="text-[10px] opacity-70">Duration: {duration}</p>}
+          </>
         )}
-        {duration && <p className="text-[10px] opacity-70">Duration: {duration}</p>}
         <CompensationChip day={cell} size="sm" className="mt-1" />
             </button>
           </PopoverPrimitive.Trigger>

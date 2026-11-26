@@ -6,9 +6,9 @@ The Department Head's request history for the mobile Approvals tab (2026-10-31).
     GET /api/manager/requests?category=<key>&status=pending|approved|rejected&search=&page=&page_size=
         {category, status, search, counts: {pending, approved, rejected}, items, page, pageSize, total, hasMore}
 
-Category keys: leave, permission, casual_leave, attendance, missing_punch, on_duty, outpass, holiday_work, resignation
-(the camel spellings the app uses - casualLeave, missingPunch, onDuty, holidayWork, attendanceCorrection - are accepted
-too). On-Duty (added 2026-10-31) counts as finally approved once it is `active` or `completed`, and its rows carry the
+Category keys: leave, permission, casual_leave, attendance, missing_punch, on_duty, outpass, holiday_work,
+birthday_compensation (2026-11-25), resignation (the camel spellings the app uses - casualLeave, missingPunch, onDuty,
+holidayWork, attendanceCorrection, birthdayCompensation - are accepted too). On-Duty (added 2026-10-31) counts as finally approved once it is `active` or `completed`, and its rows carry the
 day and the punches recorded under it.
 
 Scope - a head never sees more here than GET /manager/pending-requests?status=all already shows them:
@@ -50,6 +50,7 @@ from .clock import FACTORY_TZ
 from .hod_scope import managed_employee_ids
 from .models import (
     AttendanceOverrideRequest,
+    BirthdayCompensationUse,
     CasualLeaveRequest,
     DepartmentManager,
     EmployeePermission,
@@ -134,6 +135,13 @@ def _rows_holiday_work(rows, cfg):
     from .compensation_claims import claims_json
 
     return claims_json(list(rows), for_role="hod")
+
+
+def _rows_birthday_compensation(rows, cfg):
+    """A Birthday Compensation day (2026-11-25): the row /manager/pending-requests sends in birthdayCompensationUses."""
+    from .birthday_compensation import use_json
+
+    return [use_json(u, for_role="hod", cfg=cfg) for u in rows]
 
 
 def _rows_on_duty(rows, cfg):
@@ -282,6 +290,18 @@ CATEGORIES: tuple[Category, ...] = (
         prefetch=("ledger_entries",),
         legacy_names=("reviewed_by",),
         aliases=("holidaywork", "compensation"),
+    ),
+    Category(
+        "birthday_compensation",
+        "birthday_compensation",
+        "Birthday Compensation",
+        BirthdayCompensationUse,
+        ("pending",),
+        # the same switch as every compensation claim; the Department Head decides first, HR second
+        "can_approve_compensation",
+        _rows_birthday_compensation,
+        legacy_names=("hr_reviewed_by", "hod_reviewed_by"),
+        aliases=("birthdaycompensation", "birthday"),
     ),
     Category(
         "resignation",

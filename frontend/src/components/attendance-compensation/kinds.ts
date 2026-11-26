@@ -1,9 +1,10 @@
-import { Cake, CalendarCheck2, CalendarHeart, Sunrise, Sunset, TimerReset, type LucideIcon } from "lucide-react";
+import { Cake, CalendarCheck2, CalendarHeart, Gift, Sunrise, Sunset, TimerReset, type LucideIcon } from "lucide-react";
 import type { AttendanceCompensationKind } from "@/lib/api-client/custom-hooks";
 
 // The compensation marker of an attendance day: what the attendance engine says shaped the day (backend/api/
 // attendance_final.py::compensation_marker_json). Every HR attendance JSON that shows a day carries three keys,
-//   compensationKind     null | "ot_allowance" | "window_late_in" | "window_early_out" | "birthday" | "relaxation"
+//   compensationKind     null | "ot_allowance" | "window_late_in" | "window_early_out" | "birthday" | "birthday_comp"
+//                        | "relaxation"
 //   compensationMinutes  the allowance minutes the arrival used (ot_allowance), else 0
 //   compensationNote     one plain sentence saying what happened (or null)
 // and every screen that draws a day shows them the same way, through the components next to this file, so HR can see at a
@@ -23,6 +24,7 @@ export const COMPENSATION_KINDS: readonly AttendanceCompensationKind[] = [
   "window_late_in",
   "window_early_out",
   "birthday",
+  "birthday_comp",
   "relaxation",
 ];
 
@@ -76,6 +78,15 @@ export const KIND_META: Record<MarkKind, KindMeta> = {
     solid: "bg-pink-600",
     meaning:
       "Birthday leave (paid): absent or on approved leave on the birthday, so the day is paid in full without using any leave balance.",
+  },
+  birthday_comp: {
+    label: "Birthday compensation",
+    short: "BC",
+    icon: Gift,
+    chip: "bg-rose-100 text-rose-800 border-rose-200",
+    solid: "bg-rose-600",
+    meaning:
+      "Birthday compensation (paid): the employee worked on their birthday and placed that day (or a half of it) here, in the birthday month; the Department Head and HR approved it, so this day or half is paid like Casual Leave without using any leave balance.",
   },
   relaxation: {
     label: "Relaxation (compensation day)",
