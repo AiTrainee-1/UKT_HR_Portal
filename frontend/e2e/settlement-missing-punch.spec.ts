@@ -215,7 +215,8 @@ test("the Export report starts from the page, and names the file after the type,
   expect((await download).suggestedFilename()).toMatch(
     /^Settlement_All_types_Pending_[A-Za-z]+_\d{4}_\d{4}-\d{2}-\d{2}\.xlsx$/,
   );
-  await dialog.getByRole("button", { name: "Close" }).click();
+  await page.keyboard.press("Escape"); // closes the report (the dialog has two "Close" buttons: the X and the footer's)
+  await expect(dialog).toHaveCount(0);
 
   // the Term Loan tab: the report starts on Term Loan; All statuses, All months, as a PDF
   await page.getByTestId("settlement-tab-loan").click();

@@ -1,9 +1,13 @@
 import type { jsPDF } from "jspdf";
 import { describe, expect, it } from "vitest";
 import {
+  PDF_TAIL_HEIGHT,
   buildSettlementPdf,
   buildSettlementWorkbook,
   exportFileName,
+  signatureSpans,
+  spans,
+  summaryText,
   settlementPdfColumns,
   settlementPdfRows,
 } from "./export";
@@ -65,9 +69,10 @@ const input = (rows: SettlementRow[], s = state()) => ({
   now: new Date(2026, 10, 20, 10, 30),
 });
 
-/** Every string the document draws, in drawing order. */
-function drawn(doc: jsPDF): string[] {
-  const out = doc.output();
+/** Every string the document draws, in drawing order (one page's when `page` is given, from 1). */
+function drawn(doc: jsPDF, page?: number): string[] {
+  const pages = (doc.internal as unknown as { pages: (string[] | undefined)[] }).pages;
+  const out = page ? (pages[page] ?? []).join(" ") : doc.output();
   const found: string[] = [];
   const re = /\(((?:\\.|[^\\)])*)\)\s*Tj/g;
   for (let m = re.exec(out); m; m = re.exec(out)) found.push(m[1].replace(/\\([()\\])/g, "$1"));
@@ -168,5 +173,166 @@ describe("the Settlement PDF", () => {
     expect(text).toContain("Total (1 advance)");
     expect(text).toContain("Page 1 of 1");
     expect(doc.internal.pageSize.getWidth()).toBeCloseTo(297, 0);
+  });
+});
+
+// ───────────────────── the Final Summary and the signatures (owner 2026-11-26) ─────────────────────
+
+describe("the Final Summary and the signatures", () => {
+  // Asha twice (two requests), Ravi once (waiting, no earned figures): two employees
+  const three = [
+    row({}),
+    row({
+      id: 2,
+      amount: 2000,
+      requestedAmount: 2000,
+      earnings: { ...row({}).earnings!, earnedAmount: 10000, workingSalary: 10000, limit: 5000 },
+    }),
+    row({
+      id: 3,
+      employeeId: 2,
+      employeeCode: "E002",
+      employeeName: "Ravi",
+      status: "pending",
+      amount: 3000,
+      requestedAmount: 3000,
+      earnings: null,
+    }),
+  ];
+  const summaryOf = (cols: string[] | undefined = undefined) =>
+    buildExport(three, state({ filters: NO_FILTERS }), 3, cols).summary;
+
+  it("five overall figures from the exported rows, whatever columns are ticked", () => {
+    const expected = [
+      { label: "Total Employee Count", value: 2, kind: "count" }, // distinct employees, not the 3 requests
+      { label: "Total Earned Salary", value: 26120.5, kind: "money" },
+      { label: "Total Requested Amount", value: 6000, kind: "money" },
+      { label: "Total Approved Amount", value: 2700, kind: "money" }, // the waiting one is not approved
+      { label: "Total Limit Amount", value: 13060, kind: "money" },
+    ];
+    expect(summaryOf()).toEqual(expected);
+    expect(summaryOf(["employee"])).toEqual(expected);
+    expect(summaryOf().map(summaryText)).toEqual([
+      "2",
+      "Rs. 26,120.50",
+      "Rs. 6,000.00",
+      "Rs. 2,700.00",
+      "Rs. 13,060.00",
+    ]);
+    expect(summaryText({ label: "x", value: 1234567.5, kind: "money" })).toBe("Rs. 12,34,567.50");
+  });
+
+  it("Excel: the Final Summary cards under the totals, then the signatures; no notes", async () => {
+    const wb = await buildSettlementWorkbook({ ...input(three, state({ filters: NO_FILTERS })) });
+    const ws = wb.worksheets[0];
+    const find = (text: string) => {
+      let at: { row: number; col: number } | null = null;
+      ws.eachRow({ includeEmpty: false }, (r, rowNo) =>
+        r.eachCell((cell, colNo) => {
+          if (!at && cell.value === text) at = { row: rowNo, col: colNo };
+        }),
+      );
+      return at as { row: number; col: number } | null;
+    };
+    const totals = find("Total (3 term loans)")!;
+    const title = find("Final Summary")!;
+    expect(title.row).toBe(totals.row + 3);
+    expect(ws.getCell(title.row, 1).font?.bold).toBe(true);
+    // a labels row and a large figures row, the five cards side by side over the 12 columns
+    const labels = title.row + 1;
+    const values = title.row + 2;
+    const cards = spans(12, 5).map(([first]) => first);
+    expect(cards).toEqual([1, 4, 7, 9, 11]);
+    expect(cards.map((c) => ws.getCell(labels, c).value)).toEqual([
+      "Total Employee Count",
+      "Total Earned Salary",
+      "Total Requested Amount",
+      "Total Approved Amount",
+      "Total Limit Amount",
+    ]);
+    expect(cards.map((c) => ws.getCell(values, c).value)).toEqual([2, 26120.5, 6000, 2700, 13060]);
+    expect(ws.getCell(values, 1).numFmt).toBe("#,##0");
+    expect(ws.getCell(values, 4).numFmt).toContain("##\\,##\\,##0.00");
+    expect(ws.getCell(values, 4).font?.size).toBe(15);
+    expect(ws.getCell(labels, 4).isMerged).toBe(true);
+    expect((ws.getCell(labels, 5).fill as { fgColor?: { argb?: string } }).fgColor?.argb).toBe("FFE8EEF6");
+
+    // the signatures: a tall row to sign in, then the five titles over a medium line, a column between them
+    const sign = find("Prepared By")!;
+    expect(sign.row).toBe(values + 4);
+    expect(ws.getRow(sign.row - 1).height).toBe(52);
+    const at = signatureSpans(12);
+    expect(at).toEqual([
+      [1, 2],
+      [4, 5],
+      [7, 8],
+      [10, 10],
+      [12, 12],
+    ]);
+    expect(at.map(([first]) => ws.getCell(sign.row, first).value)).toEqual([
+      "Prepared By",
+      "Checked By",
+      "HRM",
+      "Auditor",
+      "MD",
+    ]);
+    expect(ws.getCell(sign.row, 1).border?.top?.style).toBe("medium");
+    expect(ws.getCell(sign.row, 3).border?.top).toBeUndefined(); // the gap
+    expect(ws.getCell(sign.row, 1).font?.bold).toBe(true);
+
+    // no explanatory notes anywhere
+    const everything: string[] = [];
+    ws.eachRow((r) => r.eachCell((cell) => everything.push(String(cell.value ?? ""))));
+    expect(everything.join(" ")).not.toMatch(/monthly fixed salary|Requested = what/);
+  });
+
+  it("Excel: a report of two columns still gets five cards and five signatures", async () => {
+    const narrow = buildExport(three, state(), 3, ["sno", "employee"]);
+    const ws = (await buildSettlementWorkbook({ ...input(three), table: narrow })).worksheets[0];
+    const values: unknown[] = [];
+    ws.eachRow((r) => r.eachCell((cell) => values.push(cell.value)));
+    for (const text of ["Final Summary", "Total Limit Amount", "Prepared By", "MD"]) expect(values).toContain(text);
+    expect(signatureSpans(2)).toHaveLength(5);
+  });
+
+  it("PDF: the Final Summary and the signatures under the totals, no notes", async () => {
+    const doc = await buildSettlementPdf(input(three, state({ filters: NO_FILTERS })));
+    const text = drawn(doc).join(" | ");
+    expect(text).toContain("Total (3 term loans)");
+    expect(text).toContain("Final Summary");
+    for (const label of [
+      "Total Employee Count",
+      "Total Earned Salary",
+      "Total Requested Amount",
+      "Total Approved Amount",
+      "Total Limit Amount",
+    ])
+      expect(text).toContain(label);
+    expect(text).toContain("Rs. 26,120.50");
+    expect(text).toContain("Rs. 13,060.00");
+    for (const title of ["Prepared By", "Checked By", "HRM", "Auditor", "MD"]) expect(text).toContain(title);
+    expect(text).not.toMatch(/monthly fixed salary|Requested = what/);
+    expect(text.indexOf("Total (3 term loans)")).toBeLessThan(text.indexOf("Final Summary"));
+    expect(text.indexOf("Final Summary")).toBeLessThan(text.indexOf("Prepared By"));
+    expect(text).toContain("Page 1 of 1");
+  });
+
+  it("PDF: the summary and the signatures stay together, on a page of their own when they do not fit", async () => {
+    expect(PDF_TAIL_HEIGHT).toBeGreaterThan(60);
+    const many = Array.from({ length: 20 }, (_, i) =>
+      row({ id: 100 + i, employeeId: 100 + i, employeeCode: `E${100 + i}`, employeeName: `Person ${i}` }),
+    );
+    const doc = await buildSettlementPdf(input(many, state({ filters: NO_FILTERS })));
+    expect(doc.getNumberOfPages()).toBe(2);
+    const first = drawn(doc, 1).join(" | ");
+    const second = drawn(doc, 2).join(" | ");
+    expect(first).toContain("Person 19");
+    expect(first).not.toContain("Final Summary");
+    expect(second).toContain("Final Summary");
+    expect(second).toContain("Total Employee Count");
+    expect(second).toContain("Prepared By");
+    expect(second).toContain("MD");
+    expect(second).toContain("Page 2 of 2");
+    expect(first).toContain("Page 1 of 2");
   });
 });

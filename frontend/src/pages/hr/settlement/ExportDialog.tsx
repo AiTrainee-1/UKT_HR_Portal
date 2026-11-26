@@ -167,7 +167,7 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
           <DialogTitle>Export report</DialogTitle>
           <DialogDescription>
             The filters start from the page; change them here for the file only. Excel or PDF, with the totals of the
-            ticked money columns.
+            ticked money columns, the Final Summary and the signatures.
           </DialogDescription>
         </DialogHeader>
 
