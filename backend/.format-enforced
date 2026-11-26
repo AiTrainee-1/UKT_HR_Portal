@@ -669,3 +669,4 @@ api/birthday_compensation_views.py
 api/tests_birthday_compensation.py
 api/day_progress.py
 api/tests_day_in_progress.py
+api/advance_earnings.py

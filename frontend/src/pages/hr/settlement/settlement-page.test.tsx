@@ -7,9 +7,10 @@ import type { AdvanceDecisionItem } from "@/lib/api-client";
 import Settlement from "../Settlement";
 import type { SettlementRow } from "./logic";
 
-// The Settlement page against a small fake server (customFetch is replaced): the Overview / Term Loan / Term Advance tabs
-// and the month filter in the address, the remark rules of the Approve and Reject dialogs (what is sent, and the server's
-// refusal shown in the dialog), and the requested / approved amounts and the history in the detail sheet.
+// The Settlement page against a small fake server (customFetch is replaced): the Overview / Term Loan / Salary Advance
+// tabs and the month filter in the address, the remark rules of the Approve and Reject dialogs (what is sent, and the
+// server's refusal shown in the dialog), the requested / approved amounts and the history in the detail sheet, and the
+// 2026-11-26 rules: the salary earned 1st-20th and its 50 % limit in the New dialog, delete only while pending.
 
 const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
 
@@ -59,7 +60,7 @@ const base = (over: Partial<SettlementRow>): SettlementRow => ({
   ...over,
 });
 
-/** The fake server's advances: a pending term advance (Nov), a pending term loan (Nov), an approved term loan applied in
+/** The fake server's advances: a pending salary advance (Nov), a pending term loan (Nov), an approved term loan applied in
  *  October, approved for less, deducted Dec-Jan. */
 let advances: SettlementRow[] = [];
 let history: Record<number, AdvanceDecisionItem[]> = {};
@@ -67,6 +68,61 @@ let history: Record<number, AdvanceDecisionItem[]> = {};
 let puts: [number, Record<string, unknown>][] = [];
 /** The next PUT's refusal, when a test wants one. */
 let refuseNext: { error: string; code: string } | null = null;
+/** Every POST /api/advances body, and every DELETE's id. */
+let posts: Record<string, unknown>[] = [];
+let deletes: number[] = [];
+/** The next DELETE's refusal (409 not_pending), when a test wants one. */
+let refuseDelete: { error: string; code: string } | null = null;
+
+const EARNINGS = {
+  month: 11,
+  year: 2026,
+  throughDay: 20,
+  through: "2026-11-20",
+  fixedSalary: 26000,
+  dailyRate: 1000,
+  companyDays: 26,
+  workingDays: 14.5,
+  paidDays: 16.12,
+  earnedAmount: 16120,
+  percent: 50,
+  limit: 8060,
+};
+/** GET /api/advances/earnings per employee: 7 is a staff member of 2 months, 8 a production employee. */
+const preview = (employeeId: number) => ({
+  employeeId,
+  employeeType: employeeId === 8 ? "production" : "staff",
+  month: 11,
+  year: 2026,
+  throughDay: 20,
+  percent: 50,
+  earnings: employeeId === 8 ? null : EARNINGS,
+  noSalaryReason:
+    employeeId === 8 ? "Paid per shift: there is no monthly fixed salary, so no Salary Advance limit." : null,
+  termLoanService:
+    employeeId === 8
+      ? {
+          eligible: true,
+          joinDate: "2024-01-05",
+          serviceMonths: 34,
+          requiredMonths: 6,
+          eligibleFrom: "2024-07-05",
+          reason: null,
+        }
+      : {
+          eligible: false,
+          joinDate: "2026-09-15",
+          serviceMonths: 2,
+          requiredMonths: 6,
+          eligibleFrom: "2027-03-15",
+          reason: "A Term Loan needs 6 months of service. You can apply from 15 March 2027 (2/6 months of service).",
+        },
+});
+
+const EMPLOYEES = [
+  { id: 7, employeeCode: "S7", firstName: "Priya", lastName: "Nair", employmentType: "staff", status: "active" },
+  { id: 8, employeeCode: "P8", firstName: "Kumar", lastName: "Vel", employmentType: "production", status: "active" },
+];
 
 const refusal = (status: number, data: unknown) =>
   new ApiError(new Response(null, { status, statusText: "Bad Request" }), data, {
@@ -75,7 +131,26 @@ const refusal = (status: number, data: unknown) =>
   });
 
 function server(url: string, options?: { method?: string; body?: string }) {
+  const earnings = /^\/api\/advances\/earnings\?employeeId=(\d+)/.exec(url);
+  if (earnings) return Promise.resolve(preview(Number(earnings[1])));
+  if (url === "/api/advances" && options?.method === "POST") {
+    const body = JSON.parse(options.body ?? "{}") as Record<string, unknown>;
+    posts.push(body);
+    return Promise.resolve({ ...base({ id: 99 }), ...body, status: "pending" });
+  }
   const one = /^\/api\/advances\/(\d+)$/.exec(url);
+  if (one && options?.method === "DELETE") {
+    deletes.push(Number(one[1]));
+    if (refuseDelete) {
+      const r = refuseDelete;
+      refuseDelete = null;
+      throw new ApiError(new Response(null, { status: 409, statusText: "Conflict" }), r, {
+        method: "DELETE",
+        url,
+      });
+    }
+    return Promise.resolve(undefined);
+  }
   if (one && options?.method === "PUT") {
     const id = Number(one[1]);
     const body = JSON.parse(options.body ?? "{}") as Record<string, unknown>;
@@ -173,6 +248,9 @@ beforeEach(() => {
   };
   puts = [];
   refuseNext = null;
+  posts = [];
+  deletes = [];
+  refuseDelete = null;
   h.fetch.mockImplementation(server);
 });
 
@@ -194,7 +272,7 @@ function mount(search = "") {
     ["/api/advances", undefined],
     advances.map((a) => ({ ...a })),
   );
-  client.setQueryData(["/api/employees", "lite", { status: "active" }], []);
+  client.setQueryData(["/api/employees", "lite", { status: "active" }], EMPLOYEES);
   client.setQueryData(["/api/payroll-settings"], { companyName: "UK Textiles" });
   host = document.createElement("div");
   document.body.append(host);
@@ -236,7 +314,7 @@ describe("the Settlement page", () => {
     expect(q("filter-type")).not.toBeNull(); // only Overview has both types to choose from
   });
 
-  it("Term Loan lists only term loans, keeps the tab in the address, and Term Advance only the others", () => {
+  it("Term Loan lists only term loans, keeps the tab in the address, and Salary Advance only the others", () => {
     mount("?status=all");
     click(q("settlement-tab-loan"));
     expect(window.location.search).toContain("tab=loan");
@@ -347,5 +425,151 @@ describe("the Settlement page", () => {
     expect(item).toContain("Approved ₹700 of the ₹1,000 asked for");
     expect(item).toContain("Deductions from Dec 2026");
     expect(item).toContain("by HR Admin");
+  });
+
+  // ───────────────────── 2026-11-26: names, the earned limit, delete only while pending ─────────────────────
+
+  it("says Salary Advance and Term Loan: the tabs, the badges and the New button", () => {
+    mount("?tab=advance");
+    expect(text(q("settlement-tab-advance"))).toContain("Salary Advance");
+    expect(text(q("new-advance"))).toBe("New Salary Advance");
+    expect(text(q("advance-row-1"))).toContain("Salary Advance");
+    expect(document.body.textContent).not.toMatch(/term advance/i);
+    click(q("settlement-tab-loan"));
+    expect(text(q("new-advance"))).toBe("New Term Loan");
+  });
+
+  /** Opens New on the tab and picks the employee from the search list. */
+  async function openNewFor(tab: "advance" | "loan", code: string) {
+    mount(`?tab=${tab}`);
+    click(q("new-advance"));
+    expect(q("create-advance-dialog")).not.toBeNull();
+    click(q("advance-employee"));
+    const pick = [...document.querySelectorAll("button")].find((b) => (b.textContent ?? "").includes(code));
+    click(pick ?? null);
+    await flush();
+  }
+
+  it("New Salary Advance shows what was earned 1st-20th and the 50% limit; above it a reason is required and sent", async () => {
+    await openNewFor("advance", "S7");
+    expect(text(q("create-advance-title"))).toBe("New Salary Advance");
+    expect(text(q("advance-earnings"))).toContain("Earned in 1st–20th November 2026");
+    expect(text(q("advance-earned-fixed"))).toBe("₹26,000");
+    expect(text(q("advance-earned-days"))).toBe("14.5");
+    expect(text(q("advance-earned-amount"))).toBe("₹16,120");
+    expect(text(q("advance-limit"))).toBe("₹8,060");
+
+    type(q("advance-amount"), "8060");
+    expect(q("advance-over-limit")).toBeNull(); // the limit itself is fine
+    type(q("advance-amount"), "9000");
+    expect(text(q("advance-over-limit"))).toContain("₹940 above the ₹8,060 Salary Advance limit");
+    click(q("advance-submit"));
+    await flush();
+    expect(text(document.getElementById("advance-limit-remark-error"))).toBe(
+      "Write why this goes over the ₹8,060 limit (at least 3 characters).",
+    );
+    expect(posts).toEqual([]);
+
+    type(q("advance-limit-remark"), "Medical emergency");
+    click(q("advance-submit"));
+    await flush();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({
+      employeeId: 7,
+      advanceType: "general",
+      amount: 9000,
+      limitRemark: "Medical emergency",
+    });
+  });
+
+  it("a production employee has no limit: the reason is shown and nothing is above it", async () => {
+    await openNewFor("advance", "P8");
+    expect(text(q("advance-no-salary"))).toContain("Paid per shift");
+    expect(q("advance-limit")).toBeNull();
+    type(q("advance-amount"), "50000");
+    expect(q("advance-over-limit")).toBeNull();
+  });
+
+  it("New Term Loan warns about the 6-month service but still lets HR record it", async () => {
+    await openNewFor("loan", "S7");
+    expect(text(q("create-advance-title"))).toBe("New Term Loan");
+    expect(q("advance-limit")).toBeNull(); // the 50% limit is the Salary Advance's
+    const warning = text(q("advance-service-warning"));
+    expect(warning).toContain("Less than 6 months of service");
+    expect(warning).toContain("You can apply from 15 March 2027");
+    expect(warning).toContain("You can still record it.");
+    type(q("advance-amount"), "12000");
+    type(q("advance-months"), "6");
+    click(q("advance-submit"));
+    await flush();
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toMatchObject({ advanceType: "term", amount: 12000, repaymentMonths: 6 });
+    expect(posts[0]).not.toHaveProperty("limitRemark");
+  });
+
+  it("only a waiting advance has Delete: in the list and in the detail sheet", async () => {
+    mount("?status=all");
+    expect(q("advance-delete-1")).not.toBeNull();
+    expect(q("advance-card-delete-1")).not.toBeNull();
+    expect(q("advance-delete-3")).toBeNull(); // approved
+    expect(q("advance-card-delete-3")).toBeNull();
+    click(q("advance-row-3"));
+    await flush();
+    expect(q("advance-detail")).not.toBeNull();
+    expect(q("detail-delete")).toBeNull();
+  });
+
+  it("a delete the server refuses (409 not_pending) is a toast with its words, and the list is read again", async () => {
+    mount();
+    click(q("advance-delete-1"));
+    expect(text(q("delete-dialog"))).toContain("cannot be undone");
+    refuseDelete = {
+      error:
+        "Only an advance still waiting for approval can be deleted. Approved, rejected and completed advances are kept.",
+      code: "not_pending",
+    };
+    const reads = h.fetch.mock.calls.length;
+    click(q("delete-confirm"));
+    await flush();
+    expect(deletes).toEqual([1]);
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "This advance can no longer be deleted",
+        description:
+          "Only an advance still waiting for approval can be deleted. Approved, rejected and completed advances are kept.",
+        variant: "destructive",
+      }),
+    );
+    expect(h.fetch.mock.calls.slice(reads).some(([url]) => url === "/api/advances")).toBe(true);
+  });
+
+  it("the detail sheet and the Approve dialog show the salary earned 1st-20th and the reason for going over", async () => {
+    Object.assign(advances[0], {
+      amount: 9000,
+      requestedAmount: 9000,
+      employeeType: "staff",
+      earnings: { ...EARNINGS, workingSalary: 16120, workedOutOn: "2026-11-20" },
+      limitRemark: "Medical emergency",
+    });
+    mount();
+    click(q("advance-row-1"));
+    await flush();
+    const earned = text(q("advance-earned"));
+    expect(earned).toContain("Earned in 1st–20th November 2026");
+    expect(earned).toContain("Fixed salary₹26,000");
+    expect(earned).toContain("Working days (present shifts)14.5");
+    expect(earned).toContain("Working salary (earned amount)₹16,120");
+    expect(earned).toContain("50% limit₹8,060");
+    expect(text(q("advance-limit-remark"))).toContain("Medical emergency");
+
+    click(q("detail-approve"));
+    expect(text(q("decision-earned"))).toContain("Earned 1st–20th November 2026: ₹16,120");
+    expect(text(q("decision-earned"))).toContain("Salary Advance limit (50%): ₹8,060");
+    expect(text(q("decision-limit-remark"))).toContain("Medical emergency");
+    expect(text(q("decision-over-limit"))).toBe(
+      "₹9,000 is ₹940 above the earned limit of ₹8,060. You can still approve it.",
+    );
+    type(q("decision-amount"), "8000");
+    expect(q("decision-over-limit")).toBeNull();
   });
 });

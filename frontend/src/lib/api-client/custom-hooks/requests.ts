@@ -67,6 +67,61 @@ export type Advance = {
   scheduleMonths?: string[];
   /** Every approval / rejection / reopening, newest first (the detail endpoint only). */
   history?: AdvanceDecisionItem[];
+  /** "Salary Advance" | "Term Loan" (2026-11-26). */
+  typeLabel?: string;
+  /** The salary earned from the 1st to the 20th of the month the advance was raised in, as kept on it (2026-11-26);
+   *  null for a production employee or when it has not been worked out yet. */
+  earnings?: AdvanceEarnings | null;
+  /** Why HR recorded a Salary Advance above the 50 % earned limit ("" when it was not above it). */
+  limitRemark?: string;
+};
+
+/** The salary earned from the 1st to the 20th of a month (advance_earnings.earnings_json / Earnings.to_json). */
+export type AdvanceEarnings = {
+  month: number;
+  year: number;
+  throughDay: number;
+  /** "YYYY-MM-DD" of the last day counted (the preview only). */
+  through?: string;
+  /** The monthly fixed salary. */
+  fixedSalary: number | null;
+  dailyRate?: number;
+  companyDays?: number;
+  /** Present shifts on the working days 1st-20th. */
+  workingDays: number;
+  /** Present shifts + paid holidays. */
+  paidDays: number;
+  earnedAmount: number;
+  /** = earnedAmount (the kept figures only). */
+  workingSalary?: number;
+  percent: number;
+  /** 50 % of the earned amount, whole rupees down: the Salary Advance limit. */
+  limit: number | null;
+  workedOutOn?: string | null;
+};
+
+/** The Term Loan's 6-month service check (advance_earnings.term_loan_service). */
+export type TermLoanService = {
+  eligible: boolean;
+  joinDate: string | null;
+  serviceMonths: number | null;
+  requiredMonths: number;
+  eligibleFrom: string | null;
+  reason: string | null;
+};
+
+/** GET /api/advances/earnings?employeeId= (2026-11-26): the New Salary Advance / Term Loan dialog's figures. */
+export type AdvanceEarningsPreview = {
+  employeeId: number;
+  employeeType: string;
+  month: number;
+  year: number;
+  throughDay: number;
+  percent: number;
+  earnings: AdvanceEarnings | null;
+  /** Why there are no figures (a production employee, or no salary recorded). */
+  noSalaryReason: string | null;
+  termLoanService: TermLoanService;
 };
 
 /** One decision on an advance, as GET /api/advances/<id> lists them in `history` (settlement_views.decision_json). */
@@ -156,6 +211,8 @@ export const useCreateAdvance = () =>
       repaymentStartMonth?: number;
       repaymentStartYear?: number;
       notes?: string;
+      /** Why HR records a Salary Advance above the 50 % earned limit (required then: 400 over_limit without it). */
+      limitRemark?: string;
     }) =>
       customFetch<Advance>("/api/advances", {
         method: "POST",
@@ -184,6 +241,18 @@ export const useAdvanceDetail = (id: number | null) =>
     queryKey: getAdvanceDetailQueryKey(id ?? 0),
     queryFn: () => customFetch<Advance>(`/api/advances/${id}`),
     enabled: id !== null && id > 0,
+  });
+
+export const getAdvanceEarningsQueryKey = (employeeId: number) => ["/api/advances/earnings", employeeId] as const;
+
+/** The salary an employee earned this month from the 1st to the 20th, the Salary Advance limit and the Term Loan's service
+ *  check, for the New Salary Advance / Term Loan dialog. */
+export const useAdvanceEarnings = (employeeId: number | null) =>
+  useQuery({
+    queryKey: getAdvanceEarningsQueryKey(employeeId ?? 0),
+    queryFn: () => customFetch<AdvanceEarningsPreview>(`/api/advances/earnings?employeeId=${employeeId}`),
+    enabled: employeeId !== null && employeeId > 0,
+    staleTime: 60_000,
   });
 
 export const useCreateAdvanceRepayment = () =>

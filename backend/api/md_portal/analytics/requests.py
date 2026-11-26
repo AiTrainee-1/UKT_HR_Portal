@@ -2120,7 +2120,7 @@ def _facts_advance(r: dict) -> dict:
         if r["repayment_start_year"] and r["repayment_start_month"]
         else None
     )
-    kind = {"general": "General advance", "term": "Term advance (loan)"}.get(r["advance_type"] or "", "Advance")
+    kind = {"general": "Salary advance", "term": "Term loan"}.get(r["advance_type"] or "", "Advance")
     asked, granted = r["requested_amount"], r["amount"]
     partial = asked is not None and granted is not None and float(granted) < float(asked)
     return {

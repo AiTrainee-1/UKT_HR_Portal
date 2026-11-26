@@ -1944,7 +1944,7 @@ class PendingApprovalsTests(ContractMixin, ApprovalBase):
         res = {r["stage"]: r for r in rows if r["module"] == "Resignation"}
         self.assertEqual(res["HOD stage"]["pendingWith"], "HOD RL_H1 T (HR can only reject)")
         self.assertEqual((res["HR stage"]["pendingWith"], res["HR stage"]["hodAssigned"]), ("HR", "No"))
-        self.assertEqual(by[("Advance / Loan", "RL_C")]["subject"], "General Advance of Rs. 5,000.00")
+        self.assertEqual(by[("Advance / Loan", "RL_C")]["subject"], "Salary Advance of Rs. 5,000.00")
         own = by[("Leave", "RL_H1")]
         self.assertEqual(own["pendingWith"], "HR (the employee is their own HOD)")
 

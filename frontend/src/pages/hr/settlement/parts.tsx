@@ -176,7 +176,7 @@ export function EmptyState({
   );
 }
 
-/** Overview / Term Loan / Term Advance, each with how many wait for approval. */
+/** Overview / Term Loan / Salary Advance, each with how many wait for approval. */
 export function TabBar<T extends string>({
   items,
   value,

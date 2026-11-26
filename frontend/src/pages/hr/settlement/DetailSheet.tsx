@@ -9,6 +9,7 @@ import {
   Printer,
   RotateCcw,
   Trash2,
+  Wallet,
   XCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,8 +25,11 @@ import {
   TYPE_LABEL,
   appliedByEmployee,
   approvedOf,
+  canDelete,
   decidedAtOf,
   decidedByOf,
+  earnedPeriodLabel,
+  formatDays,
   hasLeft,
   historyText,
   progressPct,
@@ -42,7 +46,8 @@ type Props = {
   onApprove: (row: SettlementRow) => void;
   onReject: (row: SettlementRow) => void;
   onDelete: (row: SettlementRow) => void;
-  /** false: this account may not approve this type of advance (General / Term are separate switches), so no Approve / Reject. */
+  /** false: this account may not approve this type of advance (Salary Advance / Term Loan are separate switches), so no
+   *  Approve / Reject. */
   canDecide?: (row: SettlementRow) => boolean;
 };
 
@@ -256,17 +261,46 @@ export default function DetailSheet({
               )}
             </section>
 
+            {adv.earnings && (
+              <section className="space-y-2" aria-label="Salary earned" data-testid="advance-earned">
+                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-gray-400">
+                  <Wallet size={13} /> Earned in {earnedPeriodLabel(adv.earnings)}
+                </p>
+                <dl className="space-y-1.5 rounded-xl border border-gray-100 bg-white p-3">
+                  <Detail label="Fixed salary" value={formatMoney(adv.earnings.fixedSalary)} />
+                  <Detail label="Working days (present shifts)" value={formatDays(adv.earnings.workingDays)} />
+                  <Detail
+                    label="Working salary (earned amount)"
+                    value={formatMoney(adv.earnings.workingSalary ?? adv.earnings.earnedAmount)}
+                  />
+                  {adv.earnings.limit != null && (
+                    <Detail label={`${adv.earnings.percent}% limit`} value={formatMoney(adv.earnings.limit)} />
+                  )}
+                </dl>
+              </section>
+            )}
+
+            {(adv.limitRemark ?? "").trim() && (
+              <div
+                className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"
+                data-testid="advance-limit-remark"
+              >
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-semibold">Recorded above the {adv.earnings?.percent ?? 50}% limit</p>
+                  <p className="break-words">{adv.limitRemark}</p>
+                </div>
+              </div>
+            )}
+
             <dl className="space-y-1.5 rounded-xl bg-gray-50 p-3" aria-label="Advance details">
               <Detail label="Purpose" value={adv.purpose} />
               <Detail
                 label="Applied by"
                 value={appliedByEmployee(adv) ? "The employee, from the mobile app" : "HR (recorded here)"}
               />
-              {adv.salaryAtRequest != null && (
-                <Detail
-                  label="Monthly salary when applying"
-                  value={`${formatMoney(adv.salaryAtRequest)}${adv.advanceType === "general" ? ` (60% = ${formatMoney(Math.floor(adv.salaryAtRequest * 0.6))})` : ""}`}
-                />
+              {adv.salaryAtRequest != null && !adv.earnings && (
+                <Detail label="Monthly fixed salary" value={formatMoney(adv.salaryAtRequest)} />
               )}
               {adv.advanceType === "term" && adv.emiAmount > 0 && (
                 <Detail
@@ -335,15 +369,17 @@ export default function DetailSheet({
               >
                 <Printer size={13} /> Print statement
               </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto gap-1.5 text-red-500 hover:text-red-600"
-                onClick={() => onDelete(adv)}
-                data-testid="detail-delete"
-              >
-                <Trash2 size={13} /> Delete advance
-              </Button>
+              {canDelete(adv) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto gap-1.5 text-red-500 hover:text-red-600"
+                  onClick={() => onDelete(adv)}
+                  data-testid="detail-delete"
+                >
+                  <Trash2 size={13} /> Delete {TYPE_LABEL[adv.advanceType]}
+                </Button>
+              )}
             </div>
 
             <Separator />

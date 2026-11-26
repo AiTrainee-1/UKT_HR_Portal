@@ -74,7 +74,8 @@ class AdvanceDecisionTests(TestCase):
         self.assertEqual(res.json()["history"][0]["remark"], "")
 
     def test_never_more_than_was_asked_for_even_when_hr_recorded_it(self):
-        res = self.client.post(URL, {"employeeId": self.emp.id, "amount": 1500, "advanceType": "general"},
+        res = self.client.post(URL, {"employeeId": self.emp.id, "amount": 1500, "advanceType": "general",
+                                     "limitRemark": "No attendance yet this month"},
                                content_type="application/json", **self.auth)  # fmt: skip
         self.assertEqual(res.status_code, 201, res.content)
         adv = Advance.objects.get(pk=res.json()["id"])

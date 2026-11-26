@@ -117,8 +117,8 @@ class Advance(models.Model):
     ADVANCE_TYPE_GENERAL = "general"
     ADVANCE_TYPE_TERM = "term"
     ADVANCE_TYPES = [
-        (ADVANCE_TYPE_GENERAL, "General Advance"),
-        (ADVANCE_TYPE_TERM, "Term Advance (Loan)"),
+        (ADVANCE_TYPE_GENERAL, "Salary Advance"),  # was "General Advance" (renamed 2026-11-26)
+        (ADVANCE_TYPE_TERM, "Term Loan"),  # was "Term Advance (Loan)"
     ]
     STATUS_PENDING = "pending"
     STATUS_APPROVED = "approved"
@@ -160,6 +160,18 @@ class Advance(models.Model):
     # than was asked for; the employee sees it in their request history. Every decision is also in AdvanceDecision.
     decision_remark = models.TextField(blank=True, default="", db_default="", db_column="decision_remark")
     decided_at = models.DateTimeField(null=True, blank=True, db_column="decided_at")
+    # The salary earned from the 1st to the 20th of the month the advance was raised in (owner 2026-11-26): the Salary
+    # Advance limit is 50 % of it (advance_earnings.py). Kept when raised and when decided; the Settlement report's
+    # Working Days / Working Salary / Earned Amount. Null for a production employee (no monthly fixed salary).
+    earned_month = models.IntegerField(null=True, blank=True)
+    earned_year = models.IntegerField(null=True, blank=True)
+    earned_working_days = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    earned_paid_days = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    earned_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    earned_limit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    earned_on = models.DateField(null=True, blank=True)
+    # Why HR recorded a Salary Advance above that limit (HR may, with a remark; employees never can).
+    limit_remark = models.TextField(blank=True, default="", db_default="")
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

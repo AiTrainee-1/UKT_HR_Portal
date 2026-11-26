@@ -3102,7 +3102,7 @@
     },
     {
       "key": "advance_general",
-      "label": "General advances",
+      "label": "Salary advances",
       "module": "settlement",
       "description": "Approve or reject a one-time salary advance.",
       "group": "settlement",
@@ -3110,7 +3110,7 @@
     },
     {
       "key": "advance_term",
-      "label": "Term advances (loans)",
+      "label": "Term loans",
       "module": "settlement",
       "description": "Approve or reject a loan repaid in monthly instalments.",
       "group": "settlement",

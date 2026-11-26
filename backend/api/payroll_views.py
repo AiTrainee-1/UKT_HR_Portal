@@ -462,7 +462,7 @@ def _pending_advance_repayments(
     emp: Employee, month: int, year: int, again=(), whole_month: bool = False
 ) -> tuple[Decimal, list[dict]]:
     """
-    The advance repayments (General Advance and Term Advance / loan instalments alike) this payroll deducts for the month:
+    The advance repayments (Salary Advance and Term Loan instalments alike) this payroll deducts for the month:
     (total_amount, list_of_details).
 
     The month's repayments not deducted yet, PLUS the ones this same payroll already deducted when it was generated before.

@@ -1,9 +1,10 @@
 """
 Withdraw one of my own requests (mobile app, owner 2026-11-24).
 
-    POST /api/my/requests/<module>/<id>/withdraw        module: leave | permission | casual_leave
+    POST /api/my/requests/<module>/<id>/withdraw        module: leave | permission | casual_leave | advance
 
-Only the kinds the owner chose: Leave, Permission and Casual Leave. Compensation claims already have their own
+Only the kinds the owner chose: Leave, Permission and Casual Leave, and (owner 2026-11-26) a Salary Advance or Term Loan
+application (module "advance"; HR decides those alone, so no Department Head is told). Compensation claims already have their own
 (DELETE /api/employee/compensation/claims/<id>); On-Duty, missing punch, On-Duty punches and outpasses are deliberately
 NOT withdrawable from the app (sensitive: they touch attendance and the gate).
 
@@ -19,6 +20,8 @@ moment; what was withdrawn is kept in the audit log. A Department Head who was w
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from django.db import transaction
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
@@ -27,30 +30,48 @@ from rest_framework.response import Response
 from . import approval_workflow as approval
 from .audit_utils import log_action
 from .auth import get_token_employee_id, require_auth
-from .models import CasualLeaveRequest, EmployeePermission, LeaveRequest, Notification
+from .models import Advance, CasualLeaveRequest, EmployeePermission, LeaveRequest, Notification
 
 # module -> (model, approval workflow key, what to call it in sentences, the Department Head's can_approve_* switch)
 WITHDRAWABLE = {
     "leave": (LeaveRequest, "leave", "leave request", "can_approve_leaves"),
     "permission": (EmployeePermission, "permission", "permission request", "can_approve_permissions"),
     "casual_leave": (CasualLeaveRequest, "casual_leave", "casual leave request", "can_approve_casual_leave"),
+    # owner 2026-11-26: a Salary Advance / Term Loan while HR has not decided it (HR only: no Department Head flag)
+    "advance": (Advance, "advance", "advance application", None),
 }
+ADVANCE_WHAT = {"general": "Salary Advance application", "term": "Term Loan application"}
 # The app also sends these spellings.
-ALIASES = {"casual-leave": "casual_leave", "casualLeave": "casual_leave", "leave-requests": "leave", "permissions": "permission"}
+ALIASES = {
+    "casual-leave": "casual_leave",
+    "casualLeave": "casual_leave",
+    "leave-requests": "leave",
+    "permissions": "permission",
+    "advances": "advance",
+    "salary_advance": "advance",
+    "term_loan": "advance",
+}
 
 
 def _snapshot(obj) -> dict:
     keep = {}
     for field in ("leave_type_id", "start_date", "end_date", "date", "cl_date", "permission_type", "type",
-                  "reason", "status", "is_half_day", "half_day_session", "start_time", "end_time"):
+                  "reason", "status", "is_half_day", "half_day_session", "start_time", "end_time",
+                  "advance_type", "amount", "requested_amount", "purpose", "repayment_months"):
         if hasattr(obj, field):
             value = getattr(obj, field)
-            keep[field] = value.isoformat() if hasattr(value, "isoformat") else value
+            if hasattr(value, "isoformat"):
+                value = value.isoformat()
+            elif isinstance(value, Decimal):
+                value = str(value)  # an advance's amounts (the audit log stores JSON)
+            keep[field] = value
     return keep
 
 
 def _tell_waiting_head(workflow: str, flag: str, obj, employee, what: str) -> None:
     """In-app note for the Department Head the request was waiting on (when it was waiting on one)."""
+    if not flag:
+        return  # HR decides it alone (an advance): there is no Department Head to tell
     try:
         progress = approval.progress(workflow, obj) or {}
         waiting = progress.get("waitingFor") or []
@@ -93,7 +114,9 @@ def withdraw_my_request(request: Request, module: str, pk: int) -> Response:
         if obj is None or obj.employee_id != employee_id:
             # Someone else's request is reported exactly like a missing one.
             return Response({"error": "Request not found.", "code": "not_found"}, status=404)
-        if not approval.is_pending(workflow, obj):
+        # an advance has a fixed HR-only pipeline (no approval adapter): waiting = status "pending"
+        still_waiting = obj.status == "pending" if module == "advance" else approval.is_pending(workflow, obj)
+        if not still_waiting:
             status = getattr(obj, "status", "")
             return Response(
                 {
@@ -105,6 +128,8 @@ def withdraw_my_request(request: Request, module: str, pk: int) -> Response:
                 status=409,
             )
         employee = obj.employee
+        if module == "advance":
+            what = ADVANCE_WHAT.get(obj.advance_type, what)
         snapshot = _snapshot(obj)
         _tell_waiting_head(workflow, flag, obj, employee, what)
         obj.delete()

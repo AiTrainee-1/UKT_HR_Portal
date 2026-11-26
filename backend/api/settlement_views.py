@@ -1,18 +1,21 @@
 import math
 from decimal import Decimal, InvalidOperation
 
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval, hr_access, whatsapp_approvals
+from . import advance_earnings, approval_workflow as approval, hr_access, whatsapp_approvals
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .clock import ist_today
 from .models import Advance, AdvanceDecision, AdvanceRepayment, Employee
 from .payroll_insights import inr
 from .view_common import paginate
 
+
+TYPE_LABELS = {"general": "Salary Advance", "term": "Term Loan"}  # renamed 2026-11-26 ("General" / "Term Advance")
 
 MONTH_NAMES = [
     "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -110,6 +113,12 @@ def advance_json(a: Advance, include_repayments: bool = False) -> dict:
         "decisionRemark": a.decision_remark or "",
         "decidedAt": a.decided_at.isoformat() if a.decided_at else None,
         "scheduleMonths": sorted({f"{r.year:04d}-{r.month:02d}" for r in a.repayments.all()}),
+        # additive (2026-11-26): the salary earned from the 1st to the 20th of the month it was raised in (Fixed Salary,
+        # Working Days, Working Salary = Earned Amount, the 50 % Salary Advance limit); null for a production employee.
+        # `limitRemark`: why HR recorded a Salary Advance above that limit.
+        "typeLabel": TYPE_LABELS.get(a.advance_type, "Advance"),
+        "earnings": advance_earnings.earnings_json(a),
+        "limitRemark": a.limit_remark or "",
     }
     if include_repayments:
         data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("year", "month", "id")]
@@ -181,6 +190,11 @@ def advances(request: Request) -> Response:
                 qs = qs.filter(status="approved")
             else:
                 qs = qs.filter(status=adv_status)
+        # the salary earned in the 1st-20th (2026-11-26): worked out once for advances that do not have it yet (and again
+        # for a waiting one asked for before its month's 20th was over); later reads use what is kept
+        advance_earnings.fill_missing(
+            qs.filter(Q(earned_on__isnull=True) | Q(status="pending"))[: advance_earnings.FILL_PER_READ * 2]
+        )
         return paginate(request, qs, advance_json)
 
     if not is_hr(request):
@@ -190,6 +204,8 @@ def advances(request: Request) -> Response:
     data = request.data
     if not data.get("employeeId") or not data.get("amount") or not data.get("advanceType"):
         return Response({"error": "employeeId, amount, advanceType are required"}, status=400)
+    if data["advanceType"] not in TYPE_LABELS:
+        return Response({"error": "advanceType must be general (Salary Advance) or term (Term Loan)"}, status=400)
 
     try:
         emp = Employee.objects.get(pk=data["employeeId"])
@@ -203,6 +219,25 @@ def advances(request: Request) -> Response:
 
     amount = float(data["amount"])
     repayment_months = int(data["repaymentMonths"]) if data.get("repaymentMonths") else None
+
+    # Salary Advance limit (owner 2026-11-26): 50 % of the salary earned in the 1st-20th of this month. Employees can never
+    # ask for more; HR may record more, with a remark saying why.
+    today = ist_today()
+    earnings = advance_earnings.earned_in_month(emp, today.month, today.year)
+    limit_remark = " ".join(str(data.get("limitRemark") or "").split())[:1000]
+    if data["advanceType"] == "general" and earnings is not None and Decimal(str(amount)) > earnings.limit:
+        if len(limit_remark) < REMARK_MIN:
+            return Response(
+                {
+                    "error": f"{inr(amount)} is above the Salary Advance limit of {inr(earnings.limit)} (50% of "
+                    f"{inr(earnings.earned)} earned from the 1st to the 20th). Write a remark to record it anyway.",
+                    "code": "over_limit",
+                    "limit": float(earnings.limit),
+                },
+                status=400,
+            )
+    else:
+        limit_remark = ""
     emi = float(data.get("emiAmount", 0))
 
     # Auto-calculate EMI from months if only months provided
@@ -221,7 +256,9 @@ def advances(request: Request) -> Response:
         repayment_start_month=data.get("repaymentStartMonth"),
         repayment_start_year=data.get("repaymentStartYear"),
         notes=data.get("notes"),
+        limit_remark=limit_remark,
     )
+    advance_earnings.store(adv, earnings, today)
     return Response(advance_json(adv), status=201)
 
 
@@ -423,6 +460,7 @@ def advance_detail(request: Request, pk: int) -> Response:
             _auto_create_repayments(adv)
             adv.refresh_from_db()
             if deciding:
+                advance_earnings.refresh(adv)  # the 1st-20th salary as it stands when HR decides (2026-11-26)
                 _record_decision(adv, AdvanceDecision.ACTION_APPROVED, requested, remark, request)
             if previous_status != "approved":
                 hr_access.log_decision(
@@ -436,6 +474,7 @@ def advance_detail(request: Request, pk: int) -> Response:
 
         adv.save()
         if deciding:
+            advance_earnings.refresh(adv)  # the 1st-20th salary as it stands when HR decides (2026-11-26)
             action = {
                 "approved": AdvanceDecision.ACTION_APPROVED,
                 "rejected": AdvanceDecision.ACTION_REJECTED,
@@ -451,7 +490,18 @@ def advance_detail(request: Request, pk: int) -> Response:
             )
         return Response(advance_json(adv, include_repayments=was_approved))
 
-    # DELETE
+    # DELETE: only an advance still waiting for a decision (owner 2026-11-26). An approved / rejected / completed one is
+    # history, and an approved one's deductions may already be in a payroll.
+    if adv.status != Advance.STATUS_PENDING:
+        return Response(
+            {
+                "error": "Only an advance still waiting for approval can be deleted. Approved, rejected and completed "
+                "advances are kept.",
+                "code": "not_pending",
+                "status": adv.status,
+            },
+            status=409,
+        )
     adv.delete()
     return Response(status=204)
 
@@ -471,3 +521,41 @@ def advance_repayments(request: Request, pk: int) -> Response:
 
     reps = adv.repayments.order_by("year", "month", "id")
     return Response([repayment_json(r) for r in reps])
+
+
+@api_view(["GET"])
+@require_hr
+def advance_earnings_preview(request: Request) -> Response:
+    """GET /api/advances/earnings?employeeId=&month=&year= (2026-11-26): the New Salary Advance / Term Loan dialog's
+    figures for one employee - the salary earned from the 1st to the 20th (this month unless month/year are given), the
+    50 % Salary Advance limit, and the Term Loan's 6-month service check (HR may still record either; it is shown)."""
+    try:
+        emp = Employee.objects.get(pk=int(request.query_params.get("employeeId") or 0))
+    except (Employee.DoesNotExist, ValueError):
+        return Response({"error": "Employee not found"}, status=404)
+    today = ist_today()
+    month = _int_or_none(request.query_params.get("month")) or today.month
+    year = _int_or_none(request.query_params.get("year")) or today.year
+    if not 1 <= month <= 12 or not 2000 <= year <= 2100:
+        return Response({"error": "Invalid month or year"}, status=400)
+    earnings = advance_earnings.earned_in_month(emp, month, year)
+    no_salary = None
+    if earnings is None:
+        no_salary = (
+            "Paid per shift: there is no monthly fixed salary, so no Salary Advance limit."
+            if emp.employment_type != Employee.EMPLOYMENT_TYPE_STAFF
+            else "No monthly salary is recorded for this employee."
+        )
+    return Response(
+        {
+            "employeeId": emp.id,
+            "employeeType": emp.employment_type,
+            "month": month,
+            "year": year,
+            "throughDay": advance_earnings.EARNED_THROUGH_DAY,
+            "percent": advance_earnings.SALARY_ADVANCE_PERCENT,
+            "earnings": earnings.to_json() if earnings else None,
+            "noSalaryReason": no_salary,
+            "termLoanService": advance_earnings.term_loan_service(emp, today),
+        }
+    )

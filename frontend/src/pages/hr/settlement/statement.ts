@@ -8,6 +8,8 @@ import {
   approvedOf,
   decidedAtOf,
   decidedByOf,
+  earnedPeriodLabel,
+  formatDays,
   hasLeft,
   progressPct,
   requestedOf,
@@ -34,6 +36,13 @@ export function buildStatementHtml(a: SettlementRow, repayments: AdvanceRepaymen
         }</td></tr>`,
     )
     .join("");
+  const e = a.earnings;
+  const earned = e
+    ? `<h2>Earned in ${esc(earnedPeriodLabel(e))}</h2>
+<table>
+${row("Fixed salary", formatMoney(e.fixedSalary))}${row("Working days (present shifts)", formatDays(e.workingDays))}${row("Working salary (earned amount)", formatMoney(e.workingSalary ?? e.earnedAmount))}${e.limit != null ? row(`${e.percent}% limit`, formatMoney(e.limit)) : ""}${(a.limitRemark ?? "").trim() ? row("Reason for going over the limit", a.limitRemark ?? "") : ""}
+</table>`
+    : "";
   const left = hasLeft(a)
     ? `<p class="note">The employee has left. The outstanding ${esc(formatMoney(a.outstanding))} is to be settled in their full and final settlement.</p>`
     : "";
@@ -68,6 +77,7 @@ ${row("Requested", formatMoney(requestedOf(a)))}${row("Approved", approvedOf(a) 
       : ""
   }${row("Applied on", formatDate(a.createdAt))}${row("Decided by", decidedByOf(a))}${row("Decided on", decidedAtOf(a) ? formatDate(decidedAtOf(a)) : "")}${row(a.status === "rejected" ? "Reason for rejecting" : "HR's remark", a.status === "pending" ? "" : (a.decisionRemark ?? ""))}${row("Notes", a.notes ?? "")}
 </table>
+${earned}
 ${left}
 <h2>Deduction schedule${repayments.length ? ` (${repayments.length})` : ""}</h2>
 ${

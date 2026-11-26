@@ -27,6 +27,10 @@ import {
   approvalRemarkProblem,
   cleanRemark,
   describeSchedule,
+  earnedLimitOf,
+  earnedPeriodLabel,
+  formatDays,
+  overLimitBy,
   rejectionPayload,
   rejectionProblem,
   remarkRequired,
@@ -98,6 +102,10 @@ export function DecisionDialog({
   const partial = !!(row && edit && approve && !amountProblem && remarkRequired(row, edit));
   const needsRemark = !approve || partial;
   const term = row?.advanceType === "term";
+  // a Salary Advance's earned limit (50 % of the salary earned 1st-20th): information only, HR may approve more
+  const earned = row && !term ? (row.earnings ?? null) : null;
+  const limit = row && !term ? earnedLimitOf(row) : null;
+  const aboveLimit = approve && !amountProblem ? overLimitBy(approvedNow, limit) : 0;
   const remarkLength = edit ? cleanRemark(edit.remark).length : 0;
   // a missing remark does not grey the button out: pressing it says what is missing and puts the cursor there
   const blocked = busy || !!amountProblem;
@@ -137,8 +145,8 @@ export function DecisionDialog({
       <AlertDialogContent className="max-h-[92vh] overflow-y-auto" data-testid="decision-dialog">
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {approve ? "Approve" : "Reject"} the {row ? TYPE_LABEL[row.advanceType].toLowerCase() : "advance"} for{" "}
-            {row?.employeeName}?
+            {approve ? "Approve" : "Reject"} the {row ? TYPE_LABEL[row.advanceType] : "advance"} for {row?.employeeName}
+            ?
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-sm text-muted-foreground">
@@ -148,10 +156,23 @@ export function DecisionDialog({
                 {row?.purpose ? `, for ${row.purpose}` : ""}.
                 {byEmployee && " The employee applied from the mobile app."}
               </p>
-              {byEmployee && row?.salaryAtRequest != null && row.advanceType === "general" && (
-                <p className="text-xs" data-testid="decision-salary">
-                  Monthly salary when applying: {formatMoney(row.salaryAtRequest)} (60% limit{" "}
-                  {formatMoney(Math.floor(row.salaryAtRequest * 0.6))}).
+              {earned ? (
+                <p className="text-xs" data-testid="decision-earned">
+                  Earned {earnedPeriodLabel(earned)}: {formatMoney(earned.earnedAmount)} (
+                  {formatDays(earned.workingDays)} working days, fixed salary {formatMoney(earned.fixedSalary)}).
+                  {limit != null && ` Salary Advance limit (${earned.percent}%): ${formatMoney(limit)}.`}
+                </p>
+              ) : (
+                row?.salaryAtRequest != null &&
+                row.advanceType === "general" && (
+                  <p className="text-xs" data-testid="decision-salary">
+                    Monthly fixed salary: {formatMoney(row.salaryAtRequest)}.
+                  </p>
+                )
+              )}
+              {row && !term && (row.limitRemark ?? "").trim() && (
+                <p className="text-xs" data-testid="decision-limit-remark">
+                  Recorded above the limit: &ldquo;{row.limitRemark}&rdquo;
                 </p>
               )}
               {!approve && <p>Nothing will be deducted from payroll for a rejected advance.</p>}
@@ -238,6 +259,12 @@ export function DecisionDialog({
                 {amountProblem}
               </p>
             )}
+            {aboveLimit > 0 && (
+              <p className="text-xs font-medium text-amber-700" data-testid="decision-over-limit">
+                {formatMoney(approvedNow)} is {formatMoney(aboveLimit)} above the earned limit of {formatMoney(limit)}.
+                You can still approve it.
+              </p>
+            )}
             {partial && !remarkProblem && (
               <p className="text-xs font-medium text-amber-700" data-testid="decision-less">
                 Approving {formatMoney(approvedNow)} of the {formatMoney(asked)} asked for. The employee sees both, and
@@ -279,7 +306,7 @@ export function DecisionDialog({
                   ? partial
                     ? "Why less than asked for, e.g. Budget limit this month"
                     : "Anything the employee should know (optional)"
-                  : "e.g. A term loan is already running"
+                  : "e.g. A Term Loan is already running"
               }
               aria-invalid={!!remarkProblem && (tried || remarkLength > 0)}
               aria-describedby="decision-remark-help"
@@ -356,23 +383,18 @@ export function DeleteDialog({
   onConfirm: (row: SettlementRow) => void;
   onCancel: () => void;
 }) {
-  const recovered = row?.totalRepaid ?? 0;
   return (
     <AlertDialog open={row !== null} onOpenChange={(o) => !o && onCancel()}>
       <AlertDialogContent data-testid="delete-dialog">
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete this advance?</AlertDialogTitle>
+          <AlertDialogTitle>Delete this {row ? TYPE_LABEL[row.advanceType] : "advance"}?</AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-2 text-sm text-muted-foreground">
               <p>
-                This permanently deletes the advance for <strong>{row?.employeeName}</strong> (
-                {formatMoney(row?.amount)}) and its repayment schedule. This cannot be undone.
+                This permanently deletes the waiting {row ? TYPE_LABEL[row.advanceType] : "advance"} for{" "}
+                <strong>{row?.employeeName}</strong> ({formatMoney(row ? requestedOf(row) : 0)}). This cannot be undone.
               </p>
-              {recovered > 0 && (
-                <p className="font-medium text-red-700">
-                  {formatMoney(recovered)} has already been recovered through payroll. Deleting removes that record too.
-                </p>
-              )}
+              <p className="text-xs">Only an advance still waiting for approval can be deleted.</p>
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>

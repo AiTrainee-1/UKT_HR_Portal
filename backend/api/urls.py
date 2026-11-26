@@ -25,7 +25,7 @@ from .leave_views import (
     employee_permissions, employee_permission_detail,
 )
 from .settlement_views import (
-    advances, advance_detail, advance_repayments,
+    advances, advance_detail, advance_repayments, advance_earnings_preview,
 )
 from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
@@ -415,6 +415,7 @@ urlpatterns = [
 
     # ── Settlement ──────────────────────────────────────────────────────────
     path("advances", advances),
+    path("advances/earnings", advance_earnings_preview),
     path("advances/<int:pk>", advance_detail),
     path("advances/<int:pk>/repayments", advance_repayments),
 

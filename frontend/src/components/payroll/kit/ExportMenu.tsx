@@ -36,6 +36,7 @@ export function ExportMenu({
   className,
   heading,
   testId = "export-menu",
+  leading,
   trailing,
 }: {
   items: ExportItem[];
@@ -46,6 +47,8 @@ export function ExportMenu({
   /** A small heading inside the popup: "What to export". */
   heading?: ReactNode;
   testId?: string;
+  /** Menu content above the export items (after the heading): e.g. a choice of what the file holds. */
+  leading?: ReactNode;
   trailing?: ReactNode;
 }) {
   const { toast } = useToast();
@@ -89,6 +92,7 @@ export function ExportMenu({
         <DropdownMenuContent align="end" className="w-72" {...{ [VIEW_SAFE_ATTR]: "" }}>
           {heading && <DropdownMenuLabel className="text-xs text-muted-foreground">{heading}</DropdownMenuLabel>}
           {heading && <DropdownMenuSeparator />}
+          {leading}
           {items.map((item) => {
             const Icon = item.icon ?? Download;
             return (

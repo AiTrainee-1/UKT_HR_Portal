@@ -1056,13 +1056,13 @@ class AttendanceCorrectionAndFixedWorkflowTests(Base):
 
     def test_advance_and_other_requests_can_be_switched_off(self):
         self.configure("advance", enabled=False)
-        r = self.send("post", "/api/advances", {"employeeId": self.emp.id, "amount": 1000, "advanceType": "salary"})
+        r = self.send("post", "/api/advances", {"employeeId": self.emp.id, "amount": 1000, "advanceType": "term"})
         self.assertEqual((r.status_code, r.json()["code"]), (403, "workflow_disabled"))
         self.configure("request", enabled=False)
         r = self.as_employee("post", "/api/employee-requests", {"subject": "Letter", "requestType": "document"})
         self.assertEqual((r.status_code, r.json()["code"]), (403, "workflow_disabled"))
         self.configure("advance", enabled=True)
-        r = self.send("post", "/api/advances", {"employeeId": self.emp.id, "amount": 1000, "advanceType": "salary"})
+        r = self.send("post", "/api/advances", {"employeeId": self.emp.id, "amount": 1000, "advanceType": "term"})
         self.assertEqual(r.status_code, 201, r.content)
 
 

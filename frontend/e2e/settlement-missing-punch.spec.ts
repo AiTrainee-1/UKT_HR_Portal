@@ -18,7 +18,7 @@ async function api(page: Page, method: string, url: string, data?: unknown) {
   return { status: res.status(), body: text ? JSON.parse(text) : null };
 }
 
-type Row = { id: number; purpose?: string; reason?: string };
+type Row = { id: number; purpose?: string; reason?: string; status?: string };
 
 async function employeeId(page: Page, code: string): Promise<number> {
   const list = (await api(page, "GET", "/api/employees")).body as { id: number; employeeCode: string }[];
@@ -27,6 +27,8 @@ async function employeeId(page: Page, code: string): Promise<number> {
 
 async function cleanUp(page: Page) {
   for (const a of ((await api(page, "GET", "/api/advances")).body as Row[]).filter((a) => a.purpose?.startsWith(TAG))) {
+    // only a waiting advance can be deleted (2026-11-26): put a decided one back to waiting first
+    if (a.status && a.status !== "pending") await api(page, "PUT", `/api/advances/${a.id}`, { status: "pending" });
     await api(page, "DELETE", `/api/advances/${a.id}`);
   }
   const punches = (await api(page, "GET", "/api/missing-punch-requests?status=all")).body as Row[];
@@ -97,7 +99,7 @@ test("Settlement shows the summary, and searches and filters the advances", asyn
   // type filter
   await page.getByTestId("settlement-search").fill(TAG);
   await page.getByTestId("filter-type").click();
-  await page.getByRole("option", { name: "Term loan" }).click();
+  await page.getByRole("option", { name: "Term Loan" }).click();
   await expect(page.getByTestId(`advance-row-${ids.term}`)).toBeVisible();
   await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
 
@@ -146,8 +148,10 @@ test("the new-advance form explains what is wrong, previews the schedule, and cr
   page,
 }) => {
   await page.goto("/hr/settlement");
-  await page.getByTestId("new-advance").click();
+  await page.getByTestId("new-advance").click(); // on Overview it is a menu: New Salary Advance / New Term Loan
+  await page.getByTestId("new-advance-general").click();
   const dialog = page.getByTestId("create-advance-dialog");
+  await expect(dialog.getByTestId("create-advance-title")).toHaveText("New Salary Advance");
   await dialog.getByTestId("advance-submit").click();
   await expect(dialog.getByText("Choose the employee this advance is for.")).toBeVisible();
   await expect(dialog.getByText("Enter the amount.")).toBeVisible();
@@ -162,7 +166,7 @@ test("the new-advance form explains what is wrong, previews the schedule, and cr
   await expect(dialog.getByText("The amount must be more than 0.")).toBeVisible();
 
   await dialog.getByTestId("advance-type").click();
-  await page.getByRole("option", { name: "Term loan (monthly EMIs)" }).click();
+  await page.getByRole("option", { name: "Term Loan (monthly EMIs)" }).click();
   await dialog.getByTestId("advance-amount").fill("6000");
   await dialog.getByTestId("advance-submit").click();
   await expect(dialog.getByText("Enter the number of months or the monthly EMI.")).toBeVisible();
@@ -193,21 +197,30 @@ test("deleting an advance asks first", async ({ page }) => {
   await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
 });
 
-test("Settlement exports the filtered list as Excel and PDF, named after the tab and month", async ({ page }) => {
+test("Settlement exports the filtered list as Excel and PDF, named after the tab, status and month", async ({
+  page,
+}) => {
   await seedAdvances(page);
   await page.goto("/hr/settlement");
   await page.getByTestId("settlement-search").fill(TAG);
+  // the export's status starts on the page's (Pending) and can be changed in the menu
   let download = page.waitForEvent("download");
   await page.getByTestId("settlement-export").click();
+  await expect(page.getByTestId("settlement-export-status-pending")).toHaveAttribute("data-state", "checked");
   await page.getByTestId("settlement-export-xlsx").click();
-  expect((await download).suggestedFilename()).toMatch(/^Settlement_Overview_All_months_\d{4}-\d{2}-\d{2}\.xlsx$/);
+  expect((await download).suggestedFilename()).toMatch(
+    /^Settlement_Overview_Pending_All_months_\d{4}-\d{2}-\d{2}\.xlsx$/,
+  );
 
   await page.getByTestId("settlement-tab-loan").click();
   await expect(page).toHaveURL(/tab=loan/);
   download = page.waitForEvent("download");
   await page.getByTestId("settlement-export").click();
+  await page.getByTestId("settlement-export-status-all").click();
   await page.getByTestId("settlement-export-pdf").click();
-  expect((await download).suggestedFilename()).toMatch(/^Settlement_Term_Loan_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
+  expect((await download).suggestedFilename()).toMatch(
+    /^Settlement_Term_Loan_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/,
+  );
 });
 
 test("rejecting needs a reason, which is saved and shown in the details", async ({ page }) => {

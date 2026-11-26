@@ -556,7 +556,7 @@ def settlement_report(request: Request):
         results.append({
             **_emp_base(a.employee),
             "advanceType": a.advance_type,
-            "advanceTypeLabel": "General Advance" if a.advance_type == "general" else "Term Loan",
+            "advanceTypeLabel": "Salary Advance" if a.advance_type == "general" else "Term Loan",
             "amount": float(a.amount),
             "purpose": a.purpose or "",
             "status": a.status,

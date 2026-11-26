@@ -1,0 +1,275 @@
+"""Salary Advance / Term Loan business rules of 2026-11-26 (advance_earnings.py, mobile_settlement_views.py,
+settlement_views.py, mobile_withdraw_views.py):
+
+  * the limit is 50 % of the salary EARNED in the 1st-20th, priced exactly like the staff payroll (checked here against the
+    payroll engine itself over a whole month);
+  * a Term Loan needs 6 completed months of service (like the Casual Leave service rule);
+  * an employee may delete their own application only while it waits for HR; HR's Delete is pending-only too;
+  * HR may record a Salary Advance above the limit with a remark; GET /api/advances/earnings for the New dialog;
+  * the 1st-20th figures are kept on the advance and served in the list (the Settlement report's columns).
+
+Calendar: February 2026 starts on a Sunday, so it has 24 Mon-Sat days; a salary of 24,000 is exactly 1,000 a day.
+
+Run via: python manage.py test api.tests_advance_earnings -v 2
+"""
+
+from datetime import date, datetime, timezone as dt_timezone
+from decimal import Decimal
+from unittest.mock import patch
+
+from django.test import TestCase
+
+from . import advance_earnings, approval_workflow as approval
+from .attendance_final import _holiday_dates_for_month
+from .jwt_utils import sign_token
+from .models import Advance, AttendanceDayRecord, Employee, Holiday, HRUser, PayrollSettings
+from .payroll_views import _generate_staff_payroll
+
+
+def _bearer(payload: dict) -> dict:
+    return {"HTTP_AUTHORIZATION": f"Bearer {sign_token(payload)}"}
+
+
+def _staff(code="ADV_E", salary="24000.00", join_date="2020-01-01", **kw) -> Employee:
+    return Employee.objects.create(
+        employee_code=code, first_name=code, last_name="Staff", employment_type="staff", status="active",
+        salary_type="monthly", salary_amount=Decimal(salary), join_date=join_date, **kw,
+    )  # fmt: skip
+
+
+def _day(emp, d, status="present", shifts="1.00"):
+    return AttendanceDayRecord.objects.create(
+        employee=emp, date=d, status=status, shifts_earned=Decimal(shifts), is_half_shift=(status == "half_shift"),
+        source="manual",
+    )  # fmt: skip
+
+
+def _configure():
+    ps = PayrollSettings.get()
+    ps.staff_pf_rules = []
+    ps.staff_esi_rules = []
+    ps.late_free_allowance = 3
+    ps.late_deduction_slabs = []
+    ps.permission_monthly_cap = 3
+    ps.attendance_mode = "simple"
+    ps.save()
+
+
+class CalculatorTests(TestCase):
+    """The 1st-20th salary is the payroll's own arithmetic, just stopped at the 20th."""
+
+    def setUp(self):
+        _configure()
+        self.addCleanup(_holiday_dates_for_month.cache_clear)
+        self.emp = _staff()
+
+    def _february(self):
+        """2-7 Feb present, 9 Feb half day, 10 Feb HR-marked holiday, 11 Feb a declared holiday, 12-14 absent, 16-20
+        present (a quarter cut on the 16th), 21-28 present."""
+        Holiday.objects.create(name="Festival", date=date(2026, 2, 11))
+        _holiday_dates_for_month.cache_clear()
+        for n in range(2, 8):
+            _day(self.emp, date(2026, 2, n))
+        _day(self.emp, date(2026, 2, 9), "half_shift", "0.50")
+        _day(self.emp, date(2026, 2, 10), "holiday", "0")
+        _day(self.emp, date(2026, 2, 16), "present", "0.75")
+        for n in (17, 18, 19, 20):
+            _day(self.emp, date(2026, 2, n))
+        for n in (21, 23, 24, 25, 26, 27, 28):
+            _day(self.emp, date(2026, 2, n))
+
+    def test_the_first_20_days(self):
+        self._february()
+        e = advance_earnings.earned_in_month(self.emp, 2, 2026)
+        # present: 6 + 0.5 + 0.75 + 4 = 11.25; paid: + the HR holiday + the declared holiday = 13.25 days of 1,000
+        self.assertEqual((e.company_days, e.through), (24, date(2026, 2, 20)))
+        self.assertEqual((e.working_days, e.paid_days), (Decimal("11.25"), Decimal("13.25")))
+        self.assertEqual((e.earned, e.limit, e.fixed_salary), (Decimal("13250.00"), Decimal("6625"), Decimal("24000")))
+
+    def test_over_the_whole_month_it_is_exactly_what_payroll_pays(self):
+        self._february()
+        whole = advance_earnings.earned_in_month(self.emp, 2, 2026, through_day=31)
+        payroll = _generate_staff_payroll(self.emp, 2, 2026)["payroll"]
+        self.assertEqual(whole.earned, payroll.gross_salary)
+
+    def test_the_limit_is_whole_rupees_rounded_down(self):
+        _day(self.emp, date(2026, 2, 2), "half_shift", "0.50")  # 500 earned -> 250
+        _day(self.emp, date(2026, 2, 3), "present", "0.75")  # +750 -> 1,250 earned -> 625
+        self.assertEqual(advance_earnings.earned_in_month(self.emp, 2, 2026).limit, Decimal("625"))
+        emp = _staff("ADV_ODD", salary="25000.00")  # 25,000 / 24 a day
+        _day(emp, date(2026, 2, 2))
+        e = advance_earnings.earned_in_month(emp, 2, 2026)
+        self.assertEqual((e.earned, e.limit), (Decimal("1041.67"), Decimal("520")))
+
+    def test_a_production_employee_has_no_figures(self):
+        emp = Employee.objects.create(
+            employee_code="ADV_P", first_name="P", last_name="Prod", employment_type="production", status="active",
+            salary_per_shift=Decimal("500"),
+        )  # fmt: skip
+        self.assertIsNone(advance_earnings.earned_in_month(emp, 2, 2026))
+
+
+class TermLoanServiceTests(TestCase):
+    def test_six_completed_months_from_the_joining_date(self):
+        emp = _staff(join_date="2026-05-31")
+        # 31 May + 6 months: 30 November is not yet 6 COMPLETED months (the Casual Leave count), 1 December is
+        before = advance_earnings.term_loan_service(emp, date(2026, 11, 30))
+        self.assertFalse(before["eligible"])
+        self.assertEqual((before["serviceMonths"], before["eligibleFrom"]), (5, "2026-12-01"))
+        self.assertIn("6 months of service", before["reason"])
+        self.assertIn("1 December 2026", before["reason"])
+        self.assertTrue(advance_earnings.term_loan_service(emp, date(2026, 12, 1))["eligible"])
+
+    def test_no_joining_date(self):
+        emp = _staff(join_date=None)
+        s = advance_earnings.term_loan_service(emp, date(2026, 11, 30))
+        self.assertFalse(s["eligible"])
+        self.assertIn("joining date is not recorded", s["reason"])
+
+
+class _AppBase(TestCase):
+    DAY = date(2026, 2, 21)
+
+    def setUp(self):
+        _configure()
+        approval.clear_cache()
+        self.addCleanup(approval.clear_cache)
+        self.addCleanup(_holiday_dates_for_month.cache_clear)
+        admin, _ = HRUser.objects.get_or_create(
+            username="adv_rules_admin", defaults={"password_hash": "x", "is_super_admin": True}
+        )
+        self.hr = _bearer({"role": "hr", "hrUserId": admin.id, "name": "Meena HR"})
+        self.emp = _staff()
+        for n in range(2, 8):  # 6 days of 1,000 earned -> limit 3,000
+            _day(self.emp, date(2026, 2, n))
+        self.me = _bearer({"role": "employee", "employeeId": self.emp.id})
+
+    def at(self, day):
+        for target in ("api.mobile_settlement_views.ist_today", "api.settlement_views.ist_today"):
+            p = patch(target, return_value=day)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def apply(self, body, day=None):
+        self.at(day or self.DAY)
+        r = self.client.post("/api/my/advances", body, content_type="application/json", **self.me)
+        if r.status_code == 201:
+            d = day or self.DAY
+            Advance.objects.filter(pk=r.json()["id"]).update(
+                created_at=datetime(d.year, d.month, d.day, 6, 30, tzinfo=dt_timezone.utc)
+            )
+        return r
+
+
+class EmployeeApplicationTests(_AppBase):
+    def test_the_limit_is_half_of_what_was_earned_by_the_20th(self):
+        r = self.apply({"advanceType": "general", "amount": 3001, "purpose": "School fees"})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "over_limit"))
+        self.assertIn("₹3,000", r.json()["error"])
+        self.assertIn("₹6,000", r.json()["error"])
+        r = self.apply({"advanceType": "general", "amount": 3000, "purpose": "School fees"})
+        self.assertEqual(r.status_code, 201, r.content)
+        e = r.json()["earnings"]
+        self.assertEqual(
+            (e["month"], e["fixedSalary"], e["workingDays"], e["workingSalary"], e["earnedAmount"], e["limit"]),
+            (2, 24000.0, 6.0, 6000.0, 6000.0, 3000.0),
+        )
+        body = self.client.get("/api/my/advances/eligibility", **self.me).json()["salaryAdvance"]
+        self.assertEqual((body["limit"], body["earned"]["earnedAmount"], body["earned"]["final"]), (3000.0, 6000.0, True))
+
+    def test_a_term_loan_needs_six_months_of_service(self):
+        self.emp.join_date = "2025-09-01"
+        self.emp.save()
+        r = self.apply({"advanceType": "term", "amount": 5000, "repaymentMonths": 5, "purpose": "Repairs"})
+        self.assertEqual((r.status_code, r.json()["code"]), (403, "service"))
+        self.assertIn("1 March 2026", r.json()["error"])
+        term = self.client.get("/api/my/advances/eligibility", **self.me).json()["termLoan"]
+        self.assertFalse(term["canApply"])
+        self.assertEqual((term["service"]["serviceMonths"], term["service"]["requiredMonths"]), (5, 6))
+        r = self.apply(
+            {"advanceType": "term", "amount": 5000, "repaymentMonths": 5, "purpose": "Repairs"}, day=date(2026, 3, 1)
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+
+    def test_withdraw_only_while_it_waits_for_hr(self):
+        pk = self.apply({"advanceType": "general", "amount": 1000, "purpose": "Medical"}).json()["id"]
+        other = _staff("ADV_O")
+        them = _bearer({"role": "employee", "employeeId": other.id})
+        self.assertEqual(self.client.post(f"/api/my/requests/advance/{pk}/withdraw", **them).status_code, 404)
+        r = self.client.post(f"/api/my/requests/advance/{pk}/withdraw", **self.me)
+        self.assertEqual(r.status_code, 200, r.content)
+        self.assertIn("Salary Advance application", r.json()["message"])
+        self.assertFalse(Advance.objects.filter(pk=pk).exists())
+        # decided: stays
+        pk = self.apply({"advanceType": "general", "amount": 1000, "purpose": "Medical"}).json()["id"]
+        put = self.client.put(f"/api/advances/{pk}", {"status": "approved"}, content_type="application/json", **self.hr)
+        self.assertEqual(put.status_code, 200, put.content)
+        r = self.client.post(f"/api/my/requests/advances/{pk}/withdraw", **self.me)
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "not_pending"))
+        self.assertTrue(Advance.objects.filter(pk=pk).exists())
+
+
+class HrTests(_AppBase):
+    def test_hr_delete_is_for_pending_advances_only(self):
+        pending = Advance.objects.create(employee=self.emp, advance_type="term", amount=Decimal("1000"),
+                                         outstanding=Decimal("1000"))  # fmt: skip
+        for status in ("approved", "rejected", "closed"):
+            a = Advance.objects.create(employee=self.emp, advance_type="general", amount=Decimal("100"),
+                                       outstanding=Decimal("100"), status=status)  # fmt: skip
+            r = self.client.delete(f"/api/advances/{a.id}", **self.hr)
+            self.assertEqual((r.status_code, r.json()["code"]), (409, "not_pending"), status)
+        self.assertEqual(self.client.delete(f"/api/advances/{pending.id}", **self.hr).status_code, 204)
+        self.assertEqual(Advance.objects.count(), 3)
+
+    def test_hr_may_go_above_the_limit_with_a_remark(self):
+        self.at(self.DAY)
+        body = {"employeeId": self.emp.id, "amount": 4000, "advanceType": "general", "repaymentStartMonth": 2,
+                "repaymentStartYear": 2026}  # fmt: skip
+        r = self.client.post("/api/advances", body, content_type="application/json", **self.hr)
+        self.assertEqual((r.status_code, r.json()["code"], r.json()["limit"]), (400, "over_limit", 3000.0))
+        r = self.client.post(
+            "/api/advances", {**body, "limitRemark": "Hospital bill"}, content_type="application/json", **self.hr
+        )
+        self.assertEqual(r.status_code, 201, r.content)
+        self.assertEqual((r.json()["limitRemark"], r.json()["earnings"]["limit"]), ("Hospital bill", 3000.0))
+        self.assertEqual(r.json()["typeLabel"], "Salary Advance")
+        # within the limit no remark is needed; a Term Loan has no such limit
+        ok = self.client.post("/api/advances", {**body, "amount": 3000}, content_type="application/json", **self.hr)
+        self.assertEqual((ok.status_code, ok.json()["limitRemark"]), (201, ""))
+        loan = {**body, "advanceType": "term", "amount": 50000, "repaymentMonths": 10}
+        self.assertEqual(self.client.post("/api/advances", loan, content_type="application/json", **self.hr).status_code, 201)
+        bad = self.client.post("/api/advances", {**body, "advanceType": "loan"}, content_type="application/json", **self.hr)
+        self.assertEqual(bad.status_code, 400)
+
+    def test_the_new_dialogs_figures(self):
+        self.at(self.DAY)
+        r = self.client.get(f"/api/advances/earnings?employeeId={self.emp.id}", **self.hr)
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual((body["month"], body["year"], body["percent"], body["throughDay"]), (2, 2026, 50, 20))
+        self.assertEqual((body["earnings"]["earnedAmount"], body["earnings"]["limit"]), (6000.0, 3000.0))
+        self.assertTrue(body["termLoanService"]["eligible"])
+        self.assertEqual(self.client.get("/api/advances/earnings?employeeId=0", **self.hr).status_code, 404)
+        me = self.client.get(f"/api/advances/earnings?employeeId={self.emp.id}", **self.me)
+        self.assertEqual(me.status_code, 403)
+
+    def test_the_list_carries_the_figures_and_fills_older_advances(self):
+        old = Advance.objects.create(employee=self.emp, advance_type="term", amount=Decimal("2000"),
+                                     outstanding=Decimal("2000"))  # fmt: skip
+        Advance.objects.filter(pk=old.pk).update(created_at=datetime(2026, 2, 21, 6, 0, tzinfo=dt_timezone.utc))
+        self.at(date(2026, 2, 25))
+        rows = self.client.get("/api/advances", **self.hr).json()
+        e = rows[0]["earnings"]
+        self.assertEqual((e["month"], e["workingDays"], e["earnedAmount"], e["fixedSalary"]), (2, 6.0, 6000.0, 24000.0))
+        self.assertEqual(rows[0]["typeLabel"], "Term Loan")
+        old.refresh_from_db()
+        self.assertEqual(old.earned_amount, Decimal("6000.00"))
+
+    def test_deciding_works_the_figures_out_again(self):
+        pk = self.apply({"advanceType": "general", "amount": 1000, "purpose": "Medical"}).json()["id"]
+        AttendanceDayRecord.objects.update_or_create(  # an HR correction after the request: one more day earned
+            employee=self.emp, date=date(2026, 2, 9),
+            defaults={"status": "present", "shifts_earned": Decimal("1.00"), "source": "manual"},
+        )  # fmt: skip
+        r = self.client.put(f"/api/advances/{pk}", {"status": "approved"}, content_type="application/json", **self.hr)
+        self.assertEqual(r.json()["earnings"]["earnedAmount"], 7000.0)

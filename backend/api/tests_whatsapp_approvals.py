@@ -202,12 +202,12 @@ class EveryWorkflowTests(ApprovalBase):
     def test_advance(self):
         adv = Advance.objects.create(employee=self.emp, advance_type="general", amount=5000, purpose="Medical")
         self.call("put", f"/api/advances/{adv.id}", {"status": "approved", "approvedBy": "Meena"})
-        self.check_approved("advance", self.texts()[0], "*Advance*", "General Advance - Rs 5,000.00 - Medical")
+        self.check_approved("advance", self.texts()[0], "*Advance*", "Salary Advance - Rs 5,000.00 - Medical")
 
     def test_advance_rejection(self):
         adv = Advance.objects.create(employee=self.emp, advance_type="term", amount=20000, purpose="House")
         self.call("put", f"/api/advances/{adv.id}", {"status": "rejected", "notes": "Over the limit"})
-        self.check_rejected("advance", self.texts()[0], "Term Advance (Loan)", "Over the limit")
+        self.check_rejected("advance", self.texts()[0], "Term Loan", "Over the limit")
 
     def test_other_employee_requests(self):
         er = EmployeeRequest.objects.create(

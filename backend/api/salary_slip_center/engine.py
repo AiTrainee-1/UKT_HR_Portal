@@ -256,7 +256,7 @@ def advance_instalments(emp: Employee, month: int, year: int) -> tuple[Decimal, 
                 "advanceId": r.advance_id,
                 "repaymentId": r.id,
                 "amount": float(r.amount),
-                "type": "Term advance" if kind == "term" else "Advance",
+                "type": "Term Loan" if kind == "term" else "Salary Advance",
             }
         )
     return d2(total), details

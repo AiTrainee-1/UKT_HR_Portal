@@ -208,7 +208,7 @@ APPROVAL_KINDS: tuple[ApprovalKind, ...] = (
     ),
     ApprovalKind(
         "advance_general",
-        "General advances",
+        "Salary advances",
         "settlement",
         "Approve or reject a one-time salary advance.",
         "settlement",
@@ -216,7 +216,7 @@ APPROVAL_KINDS: tuple[ApprovalKind, ...] = (
     ),
     ApprovalKind(
         "advance_term",
-        "Term advances (loans)",
+        "Term loans",
         "settlement",
         "Approve or reject a loan repaid in monthly instalments.",
         "settlement",

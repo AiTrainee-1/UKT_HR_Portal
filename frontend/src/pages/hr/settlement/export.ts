@@ -14,10 +14,10 @@ import {
 import { renderTablePdf, type ExportCompany, type PdfColumn, type PdfRow } from "../attendance/export";
 import type { ExportCell, SettlementExport } from "./logic";
 
-// The Settlement exports (owner 2026-11-20): one tab's list exactly as the page shows it (tab, month, every filter, the
-// search and the sort) as an Excel workbook through the shared lazy ExcelJS, and as an A4 landscape PDF drawn by the same
-// table renderer as the attendance exports. The page loads this module only when an export is asked for. Nothing here
-// changes data.
+// The Settlement exports (owner 2026-11-20, columns 2026-11-26): one tab's list as the page shows it (tab, month, every
+// filter, the search and the sort) in the status chosen in the Export menu, as an Excel workbook through the shared lazy
+// ExcelJS, and as an A4 landscape PDF drawn by the same table renderer as the attendance exports. The page loads this
+// module only when an export is asked for. Nothing here changes data.
 
 export type SettlementExportInput = ExportCompany & { table: SettlementExport; now: Date };
 
@@ -26,7 +26,7 @@ const MONEY_FMT = "#,##0.00";
 const stamp = (now: Date) =>
   now.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
-/** "Settlement_Term_Loan_November_2026_2026-11-20.xlsx". */
+/** "Settlement_Term_Loan_Pending_November_2026_2026-11-20.xlsx". */
 export const exportFileName = (table: SettlementExport, ext: "xlsx" | "pdf") =>
   `${fileSafe(table.fileStem)}_${todayStamp()}.${ext}`;
 
@@ -64,10 +64,10 @@ export async function buildSettlementWorkbook(input: SettlementExportInput): Pro
     const total = r === lines.length - 1;
     values.forEach((v, i) => {
       const cell = row.getCell(i + 1);
-      const money = table.columns[i].money;
+      const { money, numeric } = table.columns[i];
       cell.value = v === "" ? null : v;
       if (money && typeof v === "number") cell.numFmt = MONEY_FMT;
-      cell.alignment = { vertical: "top", wrapText: true, horizontal: money ? "right" : "left" };
+      cell.alignment = { vertical: "top", wrapText: true, horizontal: money || numeric ? "right" : "left" };
       cell.border = allBorders("hair", "FFD0D7E2");
       if (total) {
         cell.font = { bold: true };
@@ -86,7 +86,7 @@ export function settlementPdfColumns(table: SettlementExport, width = 277): PdfC
   return table.columns.map((c) => ({
     header: c.money ? `${c.header} (Rs)` : c.header,
     mm: (c.weight / sum) * width,
-    align: c.money ? "center" : "left",
+    align: c.money || c.numeric ? "center" : "left",
   }));
 }
 
@@ -108,7 +108,8 @@ export async function buildSettlementPdf(input: SettlementExportInput): Promise<
     columns: settlementPdfColumns(table),
     rows: settlementPdfRows(table),
     notes: [
-      "Requested = what was asked for; Approved = what HR approved, the amount payroll deducts. Repaid and outstanding are for approved advances only.",
+      "Fixed Salary = the monthly fixed salary. Working Days, Working Salary and Earned Amount are for the 1st to the 20th of the month the advance was raised in (blank for production employees).",
+      "Requested = what was asked for; Approved = what HR approved (active and completed advances only), the amount payroll deducts.",
     ],
     now: input.now,
   });

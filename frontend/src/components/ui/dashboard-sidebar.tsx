@@ -752,7 +752,7 @@ function HrSidebarView({
   const activeResignationsCount = canApprove(user, 'resignation')
     ? (resignData ?? []).filter((r: any) => r.status === 'pending' || r.status === 'dept_approved').length
     : 0;
-  // General and Term advances are separate approvals: count the ones this account may decide
+  // Salary Advances and Term Loans are separate approvals: count the ones this account may decide
   const pendingAdvancesCount = canApprove(user, 'advance')
     ? (advanceData ?? []).filter(
         (a: any) => a.status === 'pending' && canApprove(user, kindFor('advance', { advanceType: a.advanceType })),

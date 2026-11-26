@@ -8,6 +8,7 @@ import {
   TYPE_LABEL,
   appliedByEmployee,
   approvedOf,
+  canDelete,
   decidedByOf,
   hasLeft,
   progressPct,
@@ -29,8 +30,8 @@ type Props = {
   onDelete: (row: SettlementRow) => void;
   /** The advance whose decision is being saved: its buttons are disabled meanwhile. */
   busyId?: number | null;
-  /** false for a row: this account may not approve that type of advance (an HR Manager / HR Assistant without it, General
-   *  and Term are separate switches), so that row has no Approve / Reject. */
+  /** false for a row: this account may not approve that type of advance (an HR Manager / HR Assistant without it, Salary
+   *  Advance and Term Loan are separate switches), so that row has no Approve / Reject. */
   canDecide?: (row: SettlementRow) => boolean;
 };
 
@@ -182,6 +183,7 @@ function Decide({
   );
 }
 
+/** Only a waiting advance can be deleted (owner 2026-11-26): no button on an approved, rejected or completed one. */
 function DeleteButton({
   a,
   onDelete,
@@ -191,6 +193,7 @@ function DeleteButton({
   onDelete: () => void;
   prefix?: string;
 }) {
+  if (!canDelete(a)) return null;
   return (
     <Button
       variant="ghost"

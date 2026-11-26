@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Banknote,
+  ChevronDown,
   FileSpreadsheet,
   FileText,
   HandCoins,
@@ -21,6 +22,16 @@ import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { kindFor } from "@/lib/hr-access";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -39,13 +50,17 @@ import Toolbar from "./settlement/Toolbar";
 import {
   DEFAULT_FILTER_URL,
   DEFAULT_SORT,
+  EXPORT_STATUS_OPTIONS,
   NO_FILTERS,
   SETTLEMENT_TABS,
   SETTLEMENT_URL_DEFAULTS,
   TAB_NOUN,
   TAB_TYPE,
+  TYPE_LABEL,
   buildExport,
   countOf,
+  exportState,
+  exportStatusLabel,
   filtersActive,
   filtersFromUrl,
   filtersToUrl,
@@ -58,7 +73,9 @@ import {
   periodLabel,
   pickFilterUrl,
   rowsOfTab,
+  serverError,
   sortValue,
+  statusCounts,
   tabLabel,
   tabOfType,
   yearOptions,
@@ -72,6 +89,7 @@ import {
   type SettlementRow,
   type SettlementTab,
   type SettlementUrl,
+  type StatusFilter,
 } from "./settlement/logic";
 import { EmptyState, StatCard, TabBar } from "./settlement/parts";
 import { formatMoney } from "./settlement/shared";
@@ -89,24 +107,22 @@ const FIRST_DIRECTION: Record<SortKey, Sort["dir"]> = {
 
 const TAB_ICON: Record<SettlementTab, typeof LayoutGrid> = { overview: LayoutGrid, loan: Landmark, advance: Banknote };
 
-const NEW_LABEL: Record<SettlementTab, string> = {
-  overview: "New Advance",
-  loan: "New Term Loan",
-  advance: "New Term Advance",
-};
-
-/** Settlement: term loans (repaid in monthly EMIs) and term advances (deducted once): raise one, approve or reject it
- *  with a remark, follow what payroll has recovered, and export any tab, month and filter as Excel or PDF. */
+/** Settlement: Term Loans (repaid in monthly EMIs) and Salary Advances (deducted once; renamed from "Term Advance"
+ *  2026-11-26): raise one, approve or reject it with a remark, follow what payroll has recovered, and export any tab,
+ *  month, filter and status as Excel or PDF. */
 export default function Settlement() {
   const { toast } = useToast();
   // approving an advance is a right of its own (HR Manager / HR Assistant categories); unchanged for everyone else
-  // Term advances and term loans are separate switches: each row's Approve / Reject asks about its own type.
+  // Salary Advances and Term Loans are separate switches: each row's Approve / Reject asks about its own type.
   const { user } = useAuth();
   const canDecide = (row: Pick<SettlementRow, "advanceType">) =>
     canApprove(user, kindFor("advance", { advanceType: row.advanceType }));
   const queryClient = useQueryClient();
   const company = useCompany();
   const [showCreate, setShowCreate] = useState(false);
+  const [createType, setCreateType] = useState<SettlementRow["advanceType"]>("general");
+  // the status the Export menu writes: the page's status filter until HR picks another one (for that filter)
+  const [exportChoice, setExportChoice] = useState<{ page: StatusFilter; status: StatusFilter } | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SettlementRow | null>(null);
   const [decision, setDecision] = useState<DecisionRequest | null>(null);
@@ -199,17 +215,21 @@ export default function Settlement() {
     setUrl({ tab: target, ...DEFAULT_FILTER_URL, ...(keepMonth ? {} : { month: "", year: "", basis: "any" }) });
   };
 
+  // only a waiting advance can be deleted: the server answers 409 not_pending once it is decided (someone else may have
+  // approved it meanwhile), and the list is refreshed so it shows what it is now
   const removeAdvance = async (row: SettlementRow) => {
     try {
       await deleteMutation.mutateAsync(row.id);
       toast({ title: "Advance deleted" });
       refreshLists();
     } catch (err) {
+      const said = serverError(err, "The advance could not be deleted.");
       toast({
-        title: "Failed to delete advance",
-        description: err instanceof Error ? err.message : undefined,
+        title: said.code === "not_pending" ? "This advance can no longer be deleted" : "Failed to delete advance",
+        description: said.text,
         variant: "destructive",
       });
+      if (said.code === "not_pending") refreshLists();
     } finally {
       setDeleteTarget(null);
     }
@@ -218,12 +238,21 @@ export default function Settlement() {
   const onHeadSort = (key: SortKey) =>
     setSort(sort.key === key ? { key, dir: sort.dir === "asc" ? "desc" : "asc" } : { key, dir: FIRST_DIRECTION[key] });
 
-  // the list exactly as shown: this tab, this month, every filter, the search and the sort
+  // the list as shown (this tab, this month, every filter, the search and the sort) in the status chosen in the menu
+  const exportStatus: StatusFilter =
+    exportChoice && exportChoice.page === view.filters.status ? exportChoice.status : view.filters.status;
+  const exportPage = useMemo(() => exportState(state, exportStatus), [state, exportStatus]);
+  const exportView = useMemo(() => pageView(all, exportPage), [all, exportPage]);
+  const exportCounts = useMemo(() => statusCounts(view.periodRows, view.filters), [view]);
   const exportInput = () => ({
     ...company.excel,
-    table: buildExport(shown, state, view.periodRows.length),
+    table: buildExport(exportView.shown, exportPage, exportView.periodRows.length),
     now: new Date(),
   });
+  const openCreate = (type: SettlementRow["advanceType"]) => {
+    setCreateType(type);
+    setShowCreate(true);
+  };
 
   const statsLoading = isLoading || isError;
   const noneAtAll = !isLoading && !isError && all.length === 0;
@@ -239,8 +268,9 @@ export default function Settlement() {
           <div className="min-w-0">
             <h2 className="text-2xl font-black text-gray-900">Settlement</h2>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              Term loans are repaid in monthly EMIs; term advances are deducted once. Employees can also apply from the
-              mobile app: Salary Advance from the 20th to the 22nd, Term Loan any day.
+              Term Loans are repaid in monthly EMIs; Salary Advances are deducted once, at most 50% of the salary earned
+              from the 1st to the 20th. Employees can also apply from the mobile app: Salary Advance on the 21st and
+              22nd, Term Loan after 6 months of service.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -249,14 +279,46 @@ export default function Settlement() {
               label="Export"
               size="default"
               className="h-10 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-              heading={`${tabLabel(tab)} · ${periodLabel(period)} · ${shown.length} as filtered`}
-              disabled={isLoading || shown.length === 0}
+              heading={`${tabLabel(tab)} · ${periodLabel(period)} · ${exportStatusLabel(exportStatus)}: ${countOf(
+                exportView.shown.length,
+                tab,
+              )}`}
+              disabled={isLoading || exportCounts.all === 0}
+              leading={
+                <>
+                  <DropdownMenuLabel className="pb-1 pt-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Status in the file
+                  </DropdownMenuLabel>
+                  <DropdownMenuRadioGroup
+                    value={exportStatus}
+                    onValueChange={(v) => setExportChoice({ page: view.filters.status, status: v as StatusFilter })}
+                  >
+                    {EXPORT_STATUS_OPTIONS.map((o) => (
+                      <DropdownMenuRadioItem
+                        key={o.value}
+                        value={o.value}
+                        onSelect={(e) => e.preventDefault()}
+                        className="py-1.5 text-sm"
+                        data-testid={`settlement-export-status-${o.value}`}
+                      >
+                        <span className="flex-1">
+                          {o.label}
+                          {o.hint && <span className="text-[11px] text-muted-foreground"> ({o.hint})</span>}
+                        </span>
+                        <span className="ml-3 text-xs tabular-nums text-muted-foreground">{exportCounts[o.value]}</span>
+                      </DropdownMenuRadioItem>
+                    ))}
+                  </DropdownMenuRadioGroup>
+                  <DropdownMenuSeparator />
+                </>
+              }
               items={[
                 {
                   key: "xlsx",
                   label: "Excel (.xlsx)",
-                  hint: `${countOf(shown.length, tab)}, requested and approved amounts, with the totals`,
+                  hint: `${countOf(exportView.shown.length, tab)}: requested, salary earned 1st–20th and approved, with the totals`,
                   icon: FileSpreadsheet,
+                  disabled: exportView.shown.length === 0,
                   run: async () => (await import("./settlement/export")).downloadSettlementExcel(exportInput()),
                 },
                 {
@@ -264,13 +326,33 @@ export default function Settlement() {
                   label: "PDF",
                   hint: "A4 landscape, for printing, with the totals",
                   icon: FileText,
+                  disabled: exportView.shown.length === 0,
                   run: async () => (await import("./settlement/export")).downloadSettlementPdf(exportInput()),
                 },
               ]}
             />
-            <Button className="h-10 gap-2" onClick={() => setShowCreate(true)} data-testid="new-advance">
-              <Plus size={15} /> {NEW_LABEL[tab]}
-            </Button>
+            {tab === "overview" ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button className="h-10 gap-2" data-testid="new-advance">
+                    <Plus size={15} /> New
+                    <ChevronDown size={13} className="opacity-70" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onSelect={() => openCreate("general")} data-testid="new-advance-general">
+                    <Banknote size={14} /> New {TYPE_LABEL.general}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => openCreate("term")} data-testid="new-advance-term">
+                    <Landmark size={14} /> New {TYPE_LABEL.term}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Button className="h-10 gap-2" onClick={() => openCreate(newType)} data-testid="new-advance">
+                <Plus size={15} /> New {TYPE_LABEL[newType]}
+              </Button>
+            )}
           </div>
         </div>
 
@@ -304,7 +386,7 @@ export default function Settlement() {
                   : tab === "advance"
                     ? `${summary.completedCount} completed`
                     : `${summary.completedCount} completed · ${formatMoney(summary.monthlyEmi)}/month in ${
-                        tab === "loan" ? "EMIs" : "term EMIs"
+                        tab === "loan" ? "EMIs" : "Term Loan EMIs"
                       }`
               }
               icon={HandCoins}
@@ -379,15 +461,15 @@ export default function Settlement() {
                 title={`No ${noun.many} yet`}
                 text={
                   tab === "loan"
-                    ? "Record a term loan for an employee. Once approved, payroll deducts the monthly EMI automatically."
+                    ? "Record a Term Loan for an employee. Once approved, payroll deducts the monthly EMI automatically."
                     : tab === "advance"
-                      ? "Record a term advance for an employee. Once approved, payroll deducts it once, in the month you choose."
-                      : "Record a term loan or a term advance for an employee. Once approved, payroll deducts it automatically."
+                      ? "Record a Salary Advance for an employee. Once approved, payroll deducts it once, in the month you choose."
+                      : "Record a Term Loan or a Salary Advance for an employee. Once approved, payroll deducts it automatically."
                 }
                 testId="advances-empty"
               >
-                <Button onClick={() => setShowCreate(true)} className="gap-1.5">
-                  <Plus size={15} /> Create the first {noun.one}
+                <Button onClick={() => openCreate(newType)} className="gap-1.5">
+                  <Plus size={15} /> Create the first {tab === "overview" ? noun.one : TYPE_LABEL[newType]}
                 </Button>
               </EmptyState>
             ) : shown.length === 0 ? (
@@ -423,7 +505,7 @@ export default function Settlement() {
           onClose={() => setShowCreate(false)}
           employees={employees}
           onSubmit={createAdvance}
-          defaultType={newType}
+          defaultType={createType}
         />
 
         <DecisionDialog decision={decision} onConfirm={decide} onCancel={() => setDecision(null)} />

@@ -4,19 +4,22 @@ Until now only HR could record an advance (Settlement page, POST /api/advances).
 mobile app, and HR approves on the same Settlement page through the existing "advance" approval workflow (HR only).
 
 Owner's rules, all decided here and nowhere else:
-  * When (owner decision 2026-11-25, factory date, clock.ist_today): a Salary Advance ("general") only from the 20th to
-    the 22nd of each month (3 days, both included); a Term Loan on any day, no date restriction. (Until then both forms
-    shared one window, the 20th to the month end.)
-  * Salary Advance: at most 60 % of the employee's MONTHLY FIXED salary (`Employee.salary_amount`, the figure the staff
-    payroll engine pays). It is deducted in full from THAT month's salary (the month the application is made in).
-    No monthly salary on record (production staff are paid per shift) = no Salary Advance.
-  * Term Loan: any amount from MIN_TERM_AMOUNT, repaid in 1 to 12 monthly EMIs starting NEXT month. The EMI is the
+  * When (factory date, clock.ist_today): a Salary Advance ("general") only on the 21st and 22nd of each month (owner
+    2026-11-26; the 20th to the 22nd from 2026-11-25, the 20th to the month end before); a Term Loan on any day.
+  * Salary Advance (owner 2026-11-26): at most 50 % of the salary EARNED from the 1st to the 20th of the month, priced
+    exactly like the staff payroll (advance_earnings.py: per-day salary x present shifts + paid holidays). Until
+    2026-11-26 it was 60 % of the monthly fixed salary. It is deducted in full from THAT month's salary (the month the
+    application is made in). No monthly salary on record (production staff are paid per shift) = no Salary Advance.
+  * Term Loan: only after 6 completed months of service from the joining date (owner 2026-11-26, counted like the
+    Casual Leave service rule). Any amount from MIN_TERM_AMOUNT, repaid in 1 to 12 monthly EMIs starting NEXT month. The EMI is the
     amount over the months rounded UP to whole rupees, so the last EMI is the smaller one that absorbs the remainder
     (10,000 over 3 months = 3,334 + 3,334 + 3,332). Nothing is left unscheduled.
   * HR may approve a SMALLER amount and move the first deduction month (settlement_views.advance_detail). `amount` is
     always the APPROVED amount (what is paid and deducted); `requested_amount` keeps what the employee asked for.
   * Duplicates: one Salary Advance per deduction month (unless the earlier one was rejected); no new Term Loan while
     another Term Loan is still waiting for HR.
+  * Withdrawing: the employee may delete their own application only while it is still waiting for HR (POST
+    /api/my/requests/advance/<id>/withdraw, mobile_withdraw_views.py); HR's Delete is pending-only too (2026-11-26).
 
 Payroll is not touched: approval creates the AdvanceRepayment rows (settlement_views._auto_create_repayments) exactly as
 for an advance HR records, and payroll deducts them as it always has.
@@ -39,7 +42,7 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import approval_workflow as approval
+from . import advance_earnings, approval_workflow as approval
 from .auth import get_token_employee_id, require_auth
 from .clock import FACTORY_TZ, ist_today
 from .models import Advance, Employee
@@ -48,12 +51,13 @@ from .settlement_views import advance_json, whole_rupee_emi
 
 WORKFLOW = "advance"
 
-# The Salary Advance window: the 20th to the 22nd of every month, both days included (owner 2026-11-25). A Term Loan has
-# no window.
-SALARY_ADVANCE_OPENS_ON_DAY = 20
+# The Salary Advance window: the 21st and the 22nd of every month, both days included (owner 2026-11-26; the 20th to the
+# 22nd from 2026-11-25). A Term Loan has no window.
+SALARY_ADVANCE_OPENS_ON_DAY = 21
 SALARY_ADVANCE_CLOSES_ON_DAY = 22
 WINDOW_OPENS_ON_DAY = SALARY_ADVANCE_OPENS_ON_DAY  # the old name (one window for both forms until 2026-11-25)
-SALARY_ADVANCE_PERCENT = 60
+SALARY_ADVANCE_PERCENT = advance_earnings.SALARY_ADVANCE_PERCENT  # 50 % of the salary earned in the 1st-20th
+WINDOW_TEXT = "the 21st and 22nd of each month"
 MIN_TERM_MONTHS = 1
 MAX_TERM_MONTHS = 12
 MIN_TERM_AMOUNT = 1000
@@ -81,7 +85,7 @@ def next_month(month: int, year: int) -> tuple[int, int]:
 
 
 def _day_month(d: date) -> str:
-    """"20 December" (no leading zero)."""
+    """ "20 December" (no leading zero)."""
     return f"{d.day} {MONTH_NAMES[d.month]}"
 
 
@@ -93,8 +97,8 @@ TERM_LOAN_ANY_DAY = "You can apply for a Term Loan on any day."
 
 
 def window(today: date) -> dict:
-    """The Salary Advance window around `today`: open from the 20th to the 22nd of the month (both included). Before the
-    20th it is this month's window that is coming; after the 22nd, next month's. Also the `window` key older apps read
+    """The Salary Advance window around `today`: open on the 21st and the 22nd of the month. Before the 21st it is this
+    month's window that is coming; after the 22nd, next month's. Also the `window` key older apps read
     (until 2026-11-25 one window, the 20th to the month end, held both forms)."""
     opens_on, closes_on = _salary_advance_days(today.month, today.year)
     if today > closes_on:
@@ -105,8 +109,7 @@ def window(today: date) -> dict:
     if is_open:
         days_left = (closes_on - today).days + 1  # today included
         message = (
-            f"Salary Advance applications are open until {_day_month(closes_on)} (the 20th to the 22nd of each month). "
-            + TERM_LOAN_ANY_DAY
+            f"Salary Advance applications are open until {_day_month(closes_on)} ({WINDOW_TEXT}). " + TERM_LOAN_ANY_DAY
         )
     else:
         days_left = 0
@@ -155,28 +158,34 @@ def windows(today: date) -> dict:
 
 
 def window_closed_message(today: date) -> str:
-    """Why a Salary Advance cannot be sent today (outside the 20th to the 22nd)."""
+    """Why a Salary Advance cannot be sent today (outside the 21st and 22nd)."""
     w = window(today)
     opens_on = date.fromisoformat(w["opensOn"])
     closes_on = date.fromisoformat(w["closesOn"])
     return (
-        "A Salary Advance can be applied for only from the 20th to the 22nd of each month. "
+        f"A Salary Advance can be applied for only on {WINDOW_TEXT}. "
         f"The next window is {_day_month(opens_on)} to {_day_month(closes_on)}. " + TERM_LOAN_ANY_DAY
     )
 
 
 def monthly_salary(emp: Employee) -> Decimal | None:
-    """The monthly fixed salary the 60 % limit is taken from: `salary_amount`, which the staff payroll pays every month.
-    Production employees are paid per shift (`salary_per_shift`), so they have no monthly fixed salary."""
-    if emp.employment_type != Employee.EMPLOYMENT_TYPE_STAFF:
+    """The monthly fixed salary (`salary_amount`, which the staff payroll pays every month). Production employees are paid
+    per shift (`salary_per_shift`), so they have no monthly fixed salary - and no Salary Advance."""
+    return advance_earnings.monthly_fixed_salary(emp)
+
+
+def salary_advance_limit(earned: Decimal) -> Decimal:
+    """50 % of the salary earned in the 1st-20th, in whole rupees (rounded down)."""
+    return Decimal(math.floor(earned * SALARY_ADVANCE_PERCENT / 100))
+
+
+def earned_this_window(emp: Employee, today: date):
+    """The 1st-20th earnings the Salary Advance limit is taken from: this month's while its window is open or still
+    ahead (before the 21st it is the salary earned so far); None after the 22nd (next month's is not earned yet) or
+    without a monthly salary."""
+    if today.day > SALARY_ADVANCE_CLOSES_ON_DAY:
         return None
-    s = emp.salary_amount
-    return Decimal(s) if s and Decimal(s) > 0 else None
-
-
-def salary_advance_limit(salary: Decimal) -> Decimal:
-    """60 % of the monthly salary, in whole rupees (rounded down)."""
-    return Decimal(math.floor(salary * SALARY_ADVANCE_PERCENT / 100))
+    return advance_earnings.earned_in_month(emp, today.month, today.year)
 
 
 def term_emi(amount: Decimal, months: int) -> Decimal:
@@ -258,14 +267,15 @@ def pending_term_loan(emp: Employee) -> Advance | None:
 
 def rules_text() -> list[str]:
     return [
-        f"Salary Advance: apply from the {SALARY_ADVANCE_OPENS_ON_DAY}th to the {SALARY_ADVANCE_CLOSES_ON_DAY}nd of each "
-        "month. Term Loan: apply on any day.",
-        f"Salary Advance: up to {SALARY_ADVANCE_PERCENT}% of your monthly fixed salary. "
-        "It is deducted in full from that month's salary.",
-        f"Term Loan: any amount from {inr(MIN_TERM_AMOUNT)}, repaid in {MIN_TERM_MONTHS} to {MAX_TERM_MONTHS} monthly EMIs "
-        "starting from next month's salary.",
+        f"Salary Advance: apply on {WINDOW_TEXT}. Term Loan: apply on any day.",
+        f"Salary Advance: up to {SALARY_ADVANCE_PERCENT}% of the salary you earned from the 1st to the 20th of the month "
+        "(your present days and paid holidays). It is deducted in full from that month's salary.",
+        f"Term Loan: after {advance_earnings.TERM_LOAN_SERVICE_MONTHS} months of service. Any amount from "
+        f"{inr(MIN_TERM_AMOUNT)}, repaid in {MIN_TERM_MONTHS} to {MAX_TERM_MONTHS} monthly EMIs starting from next "
+        "month's salary.",
         "HR approves every application. HR may approve a smaller amount or change the month deductions start.",
         "One Salary Advance per month. A new Term Loan can be applied for once your earlier one has been decided.",
+        "You can delete an application while it is still waiting for HR; once HR approves or rejects it, it stays.",
     ]
 
 
@@ -455,17 +465,23 @@ def eligibility_json(emp: Employee, today: date) -> dict:
     common_reason = inactive_reason or workflow_message
 
     salary = monthly_salary(emp)
-    limit = salary_advance_limit(salary) if salary else None
+    earnings = earned_this_window(emp, today) if salary else None
+    limit = earnings.limit if earnings is not None else None
     existing = salary_advance_this_month(emp, today)
     if salary is None:
         general_reason = (
-            "A Salary Advance is up to 60% of a monthly fixed salary. You are paid per shift, so there is no monthly "
-            "salary to take it from. Please speak to HR."
+            f"A Salary Advance is up to {SALARY_ADVANCE_PERCENT}% of the monthly salary you earned in the 1st to the "
+            "20th. You are paid per shift, so there is no monthly salary to take it from. Please speak to HR."
             if emp.employment_type != Employee.EMPLOYMENT_TYPE_STAFF
             else "Your monthly salary is not recorded yet, so a Salary Advance cannot be worked out. Please contact HR."
         )
     elif not win["isOpen"]:
         general_reason = window_closed_message(today)
+    elif earnings is not None and earnings.limit <= 0:
+        general_reason = (
+            "No salary was earned from the 1st to the 20th of this month (no present days), so there is nothing to give "
+            "a Salary Advance from."
+        )
     elif existing is not None:
         general_reason = (
             f"You already have a Salary Advance for {month_label(today.month, today.year)} "
@@ -476,10 +492,15 @@ def eligibility_json(emp: Employee, today: date) -> dict:
     general_reason = common_reason or general_reason
 
     pending_term = pending_term_loan(emp)
-    term_reason = common_reason or (
-        "Your earlier Term Loan application is still waiting for HR. You can apply again once it is decided."
-        if pending_term
-        else None
+    service = advance_earnings.term_loan_service(emp, today)
+    term_reason = (
+        common_reason
+        or service["reason"]
+        or (
+            "Your earlier Term Loan application is still waiting for HR. You can apply again once it is decided."
+            if pending_term
+            else None
+        )
     )
     nm, ny = next_month(today.month, today.year)
     active_terms = Advance.objects.filter(employee=emp, advance_type="term", status="approved").count()
@@ -508,6 +529,14 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             "existing": (
                 {"id": existing.id, "status": existing.status, "amount": float(existing.amount)} if existing else None
             ),
+            # additive (2026-11-26): what the limit is taken from - the salary earned in the 1st-20th of this month
+            # (`final` once the 20th is over; before it, earned so far). Null after the 22nd or without a salary.
+            "limitBasis": "earned_1_to_20",
+            "earned": (
+                {**earnings.to_json(), "final": today.day > advance_earnings.EARNED_THROUGH_DAY}
+                if earnings is not None
+                else None
+            ),
         },
         "termLoan": {
             "canApply": term_reason is None,
@@ -521,6 +550,8 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             "firstDeductionLabel": month_label(nm, ny),
             "pending": {"id": pending_term.id, "amount": float(pending_term.amount)} if pending_term else None,
             "activeCount": active_terms,
+            # additive (2026-11-26): the 6-month service rule
+            "service": service,
         },
         "rules": rules_text(),
         "approvalPath": approval.pipeline_text("Employee", cfg.steps),
@@ -602,19 +633,20 @@ def _apply(request: Request, emp: Employee) -> Response:
         return _bad(f"Keep the purpose under {MAX_PURPOSE} characters.", field="purpose")
 
     salary = monthly_salary(emp)
+    earnings = advance_earnings.earned_in_month(emp, today.month, today.year) if salary else None
     months = None
     if advance_type == "general":
-        if salary is None:
+        if salary is None or earnings is None:
             return _bad(
-                "A Salary Advance is up to 60% of your monthly fixed salary, and no monthly salary is recorded for "
-                "you. Please contact HR.",
+                f"A Salary Advance is up to {SALARY_ADVANCE_PERCENT}% of the salary you earned from the 1st to the 20th, "
+                "and no monthly salary is recorded for you. Please contact HR.",
                 "no_salary",
             )
-        limit = salary_advance_limit(salary)
+        limit = earnings.limit
         if amount > limit:
             return _bad(
-                f"The most you can ask for is {inr(limit)} ({SALARY_ADVANCE_PERCENT}% of your monthly salary of "
-                f"{inr(salary)}).",
+                f"The most you can ask for is {inr(limit)} ({SALARY_ADVANCE_PERCENT}% of the {inr(earnings.earned)} you "
+                "earned from the 1st to the 20th).",
                 "over_limit",
                 field="amount",
             )
@@ -634,6 +666,9 @@ def _apply(request: Request, emp: Employee) -> Response:
             return _bad(problem, field="repaymentMonths")
         if amount < MIN_TERM_AMOUNT:
             return _bad(f"A Term Loan starts from {inr(MIN_TERM_AMOUNT)}.", field="amount")
+        service = advance_earnings.term_loan_service(emp, today)
+        if not service["eligible"]:
+            return _bad(service["reason"], "service", status=403)
         if pending_term_loan(emp) is not None:
             return _bad(
                 "Your earlier Term Loan application is still waiting for HR. You can apply again once it is decided.",
@@ -658,6 +693,7 @@ def _apply(request: Request, emp: Employee) -> Response:
         repayment_start_year=start_year,
         outstanding=amount,
     )
+    advance_earnings.store(adv, earnings, today)  # the 1st-20th figures for the Settlement report (2026-11-26)
     approval.notify_new_request(WORKFLOW, emp, f"{TYPE_LABEL[advance_type]} application", obj=adv)
     adv = _own_rows(emp).get(pk=adv.pk)
     return Response(my_advance_json(adv, today), status=201)

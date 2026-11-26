@@ -11,6 +11,7 @@ from unittest.mock import patch
 from django.test import TestCase
 
 from . import approval_workflow as approval
+from .advance_earnings import Earnings, monthly_fixed_salary
 from .jwt_utils import sign_token
 from .mobile_settlement_views import schedule_plan, term_window, window
 from .models import Advance, AdvanceRepayment, Department, Employee, HRUser
@@ -27,13 +28,30 @@ def on(day: date):
     return patch("api.mobile_settlement_views.ist_today", return_value=day)
 
 
-# A day inside the Salary Advance window (the 20th to the 22nd, owner 2026-11-25), so both forms can be sent.
+# A day inside the Salary Advance window (the 21st and 22nd, owner 2026-11-26), so both forms can be sent.
 DAY = date(2026, 10, 21)
+
+# What every test employee earned in the 1st-20th (advance_earnings.earned_in_month is replaced here; the calculator itself
+# is tested against the payroll engine in tests_advance_earnings): 24,000 earned, so the 50 % limit is 12,000.
+EARNED = Decimal("24000")
+
+
+def fake_earned(emp, month, year, *args, **kwargs):
+    salary = monthly_fixed_salary(emp)
+    if salary is None:
+        return None
+    return Earnings(
+        month=month, year=year, through=date(year, month, 20), fixed_salary=salary, daily_rate=Decimal("1000"),
+        company_days=26, working_days=Decimal("18"), paid_days=Decimal("24"), earned=EARNED,
+    )  # fmt: skip
 
 
 class _Base(TestCase):
     def setUp(self):
         approval.clear_cache()
+        earned = patch("api.advance_earnings.earned_in_month", side_effect=fake_earned)
+        earned.start()
+        self.addCleanup(earned.stop)
         admin, _ = HRUser.objects.get_or_create(
             username="settle_mobile_admin", defaults={"password_hash": "x", "is_super_admin": True}
         )
@@ -84,26 +102,26 @@ class _Base(TestCase):
 
 
 class WindowTests(_Base):
-    """Owner decision 2026-11-25: a Salary Advance only from the 20th to the 22nd of each month (both included, factory
-    date); a Term Loan on any day."""
+    """Owner decision 2026-11-26: a Salary Advance only on the 21st and the 22nd of each month (factory date; the 20th
+    to the 22nd from 2026-11-25); a Term Loan on any day."""
 
-    def test_the_19th_is_refused_with_the_opening_date(self):
-        r = self.general(day=date(2026, 11, 19))
+    def test_the_20th_is_refused_with_the_opening_date(self):
+        r = self.general(day=date(2026, 11, 20))
         self.assertEqual(r.status_code, 400, r.content)
         self.assertEqual(r.json()["code"], "window_closed")
-        self.assertIn("20 November", r.json()["error"])
-        self.assertIn("20th to the 22nd", r.json()["error"])
+        self.assertIn("21 November", r.json()["error"])
+        self.assertIn("21st and 22nd", r.json()["error"])
         self.assertFalse(Advance.objects.exists())
 
-    def test_a_salary_advance_is_open_from_the_20th_to_the_22nd(self):
-        self.assertEqual(self.general(day=date(2026, 11, 20)).status_code, 201)
+    def test_a_salary_advance_is_open_on_the_21st_and_22nd(self):
+        self.assertEqual(self.general(day=date(2026, 11, 21)).status_code, 201)
         self.assertEqual(self.general(day=date(2026, 11, 22), auth=self.them).status_code, 201)
 
     def test_the_23rd_and_the_month_end_are_closed_for_a_salary_advance(self):
         for day in (date(2026, 11, 23), date(2026, 11, 30), date(2026, 12, 1)):
             r = self.general(day=day)
             self.assertEqual((r.status_code, r.json()["code"]), (400, "window_closed"), day)
-        self.assertIn("20 December", self.general(day=date(2026, 11, 25)).json()["error"])
+        self.assertIn("21 December", self.general(day=date(2026, 11, 25)).json()["error"])
         self.assertFalse(Advance.objects.exists())
 
     def test_a_term_loan_can_be_applied_for_on_any_day(self):
@@ -117,7 +135,7 @@ class WindowTests(_Base):
         class FakeDateTime(datetime):
             @classmethod
             def now(cls, tz=None):
-                moment = datetime(2026, 11, 19, 19, 0, tzinfo=dt_timezone.utc)  # 00:30 on the 20th in Tirupur
+                moment = datetime(2026, 11, 20, 19, 0, tzinfo=dt_timezone.utc)  # 00:30 on the 21st in Tirupur
                 return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
 
         with patch("api.clock.datetime", FakeDateTime):
@@ -134,17 +152,17 @@ class WindowTests(_Base):
             body = self.client.get("/api/my/advances/eligibility", **self.me).json()
         w = body["window"]
         self.assertEqual(
-            (w["isOpen"], w["opensOn"], w["closesOn"], w["daysUntilOpen"]), (False, "2026-11-20", "2026-11-22", 15)
+            (w["isOpen"], w["opensOn"], w["closesOn"], w["daysUntilOpen"]), (False, "2026-11-21", "2026-11-22", 16)
         )
         self.assertFalse(body["salaryAdvance"]["canApply"])
-        self.assertIn("20 November", body["salaryAdvance"]["reason"])
+        self.assertIn("21 November", body["salaryAdvance"]["reason"])
         self.assertTrue(body["termLoan"]["canApply"])  # a Term Loan has no window
         self.assertIsNone(body["termLoan"]["reason"])
         # each form's own window; `window` (what older apps read) is the Salary Advance one
         self.assertEqual(body["windows"]["general"], w)
         t = body["windows"]["term"]
         self.assertEqual((t["isOpen"], t["alwaysOpen"], t["closesOn"], t["type"]), (True, True, None, "term"))
-        self.assertEqual((w["type"], w["alwaysOpen"], w["opensOnDay"], w["closesOnDay"]), ("general", False, 20, 22))
+        self.assertEqual((w["type"], w["alwaysOpen"], w["opensOnDay"], w["closesOnDay"]), ("general", False, 21, 22))
 
     def test_after_the_22nd_the_window_is_next_months(self):
         with on(date(2026, 11, 25)):
@@ -152,41 +170,65 @@ class WindowTests(_Base):
         w = body["window"]
         self.assertEqual(
             (w["isOpen"], w["opensOn"], w["closesOn"], w["nextOpensOn"], w["daysUntilOpen"], w["daysLeft"]),
-            (False, "2026-12-20", "2026-12-22", "2026-12-20", 25, 0),
+            (False, "2026-12-21", "2026-12-22", "2026-12-21", 26, 0),
         )
-        self.assertIn("20 December", w["message"])
+        self.assertIn("21 December", w["message"])
         self.assertIn("Term Loan on any day", w["message"])
         self.assertFalse(body["salaryAdvance"]["canApply"])
-        self.assertIn("20 December", body["salaryAdvance"]["reason"])
+        self.assertIn("21 December", body["salaryAdvance"]["reason"])
         self.assertTrue(body["termLoan"]["canApply"])
 
     def test_window_rules(self):
         self.assertFalse(window(date(2027, 2, 28))["isOpen"])
-        self.assertEqual(window(date(2027, 2, 28))["opensOn"], "2027-03-20")
+        self.assertEqual(window(date(2027, 2, 28))["opensOn"], "2027-03-21")
         self.assertTrue(window(date(2027, 2, 22))["isOpen"])
         self.assertEqual(window(date(2027, 2, 22))["daysLeft"], 1)
-        self.assertEqual(window(date(2027, 2, 20))["daysLeft"], 3)
-        self.assertEqual(window(date(2026, 12, 21))["nextOpensOn"], "2027-01-20")
-        self.assertEqual(window(date(2026, 12, 25))["nextOpensOn"], "2027-01-20")
+        self.assertEqual(window(date(2027, 2, 21))["daysLeft"], 2)
+        self.assertFalse(window(date(2027, 2, 20))["isOpen"])
+        self.assertEqual(window(date(2026, 12, 21))["nextOpensOn"], "2027-01-21")
+        self.assertEqual(window(date(2026, 12, 25))["nextOpensOn"], "2027-01-21")
         self.assertEqual(window(date(2026, 12, 25))["closesOn"], "2027-01-22")
-        self.assertEqual(window(date(2026, 12, 19))["daysUntilOpen"], 1)
+        self.assertEqual(window(date(2026, 12, 20))["daysUntilOpen"], 1)
         self.assertTrue(term_window(date(2026, 12, 25))["isOpen"])
 
 
 class SalaryAdvanceTests(_Base):
-    def test_up_to_60_percent_of_the_monthly_salary(self):
-        r = self.general(18001)
+    def test_up_to_50_percent_of_the_salary_earned_in_the_1st_to_20th(self):
+        r = self.general(12001)
         self.assertEqual(r.status_code, 400)
         self.assertEqual(r.json()["code"], "over_limit")
-        self.assertIn("₹18,000", r.json()["error"])
-        self.assertIn("₹30,000", r.json()["error"])
-        r = self.general(18000)
+        self.assertIn("₹12,000", r.json()["error"])
+        self.assertIn("₹24,000", r.json()["error"])
+        r = self.general(12000)
         self.assertEqual(r.status_code, 201, r.content)
         a = Advance.objects.get()
         self.assertEqual(
             (a.amount, a.requested_amount, a.salary_at_request, a.applied_by, a.status),
-            (Decimal("18000"), Decimal("18000"), Decimal("30000"), "employee", "pending"),
+            (Decimal("12000"), Decimal("12000"), Decimal("30000"), "employee", "pending"),
         )
+        # the figures are kept for the Settlement report
+        self.assertEqual(
+            (a.earned_month, a.earned_year, a.earned_working_days, a.earned_amount, a.earned_limit),
+            (10, 2026, Decimal("18.00"), Decimal("24000.00"), Decimal("12000.00")),
+        )
+        e = r.json()["earnings"]
+        self.assertEqual(
+            (e["fixedSalary"], e["workingDays"], e["workingSalary"], e["earnedAmount"], e["limit"]),
+            (30000.0, 18.0, 24000.0, 24000.0, 12000.0),
+        )
+
+    def test_nothing_earned_means_no_salary_advance(self):
+        global EARNED
+        EARNED, kept = Decimal("0"), EARNED
+        try:
+            r = self.general(100)
+            self.assertEqual((r.status_code, r.json()["code"]), (400, "over_limit"))
+            with on(DAY):
+                body = self.client.get("/api/my/advances/eligibility", **self.me).json()
+            self.assertFalse(body["salaryAdvance"]["canApply"])
+            self.assertIn("No salary was earned", body["salaryAdvance"]["reason"])
+        finally:
+            EARNED = kept
 
     def test_deducted_in_full_from_the_month_it_is_applied_in(self):
         r = self.general(5000, day=date(2026, 12, 22))
@@ -443,11 +485,16 @@ class RecordsTests(_Base):
             body = self.client.get("/api/my/advances/eligibility", **self.me).json()
         self.assertEqual(body["monthlySalary"], 30000.0)
         self.assertEqual(
-            (body["salaryAdvance"]["limit"], body["salaryAdvance"]["deductionLabel"]), (18000.0, "December 2026")
+            (body["salaryAdvance"]["limit"], body["salaryAdvance"]["deductionLabel"]), (12000.0, "December 2026")
         )
+        self.assertEqual((body["salaryAdvance"]["percent"], body["salaryAdvance"]["limitBasis"]), (50, "earned_1_to_20"))
+        earned = body["salaryAdvance"]["earned"]
+        self.assertEqual((earned["earnedAmount"], earned["workingDays"], earned["final"]), (24000.0, 18.0, False))
         self.assertEqual(body["termLoan"]["firstDeductionLabel"], "January 2027")
-        self.assertTrue(body["salaryAdvance"]["canApply"] and body["termLoan"]["canApply"])
-        self.assertEqual(len(body["rules"]), 5)
+        self.assertFalse(body["salaryAdvance"]["canApply"])  # the 20th: the window opens on the 21st
+        self.assertTrue(body["termLoan"]["canApply"])
+        self.assertTrue(body["termLoan"]["service"]["eligible"])
+        self.assertEqual(len(body["rules"]), 6)
 
     def test_closed_window_names_the_salary_of_the_next_window(self):
         # 2026-11-25: after the 22nd the next Salary Advance can only be asked for next month, so next month's salary.

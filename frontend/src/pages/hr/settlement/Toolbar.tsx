@@ -181,8 +181,8 @@ export default function Toolbar({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All types</SelectItem>
-              <SelectItem value="term">Term loan</SelectItem>
-              <SelectItem value="general">Term advance</SelectItem>
+              <SelectItem value="term">Term Loan</SelectItem>
+              <SelectItem value="general">Salary Advance</SelectItem>
             </SelectContent>
           </Select>
         )}
