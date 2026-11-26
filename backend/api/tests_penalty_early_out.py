@@ -270,7 +270,7 @@ class TodayTests(EngineBase):
         rec = self.judge(TODAY)
         self.assertEqual(
             (rec.status, rec.early_leave, rec.penalty_early_out, rec.shifts_earned),
-            ("present", False, False, Decimal("1.00")),
+            ("half_shift", False, False, Decimal("0.50")),  # a Half Day so far (owner 2026-11-26), never a penalty
         )
         self.assertEqual(rec.provisional_until, datetime(2026, 11, 13, 18, 11, tzinfo=FACTORY_TZ))
 
@@ -304,10 +304,10 @@ class TodayTests(EngineBase):
             )
             self.assertEqual(attendance_refresh.refresh_provisional(), 0, "final now: nothing left to do")
 
-    def test_a_morning_only_day_becomes_a_half_day_in_the_background(self):
+    def test_a_morning_only_day_stays_a_half_day_and_becomes_final_in_the_background(self):
         self.punch(TODAY, time(9, 0))
         self.at(11, 0)
-        self.assertEqual(self.judge(TODAY).status, "present")
+        self.assertEqual(self.judge(TODAY).status, "half_shift")  # judged by the punches so far (owner 2026-11-26)
         self.at(19, 0)
         with mock.patch("django.utils.timezone.now", return_value=datetime(2026, 11, 13, 19, 0, tzinfo=FACTORY_TZ)):
             attendance_refresh.refresh_provisional()

@@ -363,32 +363,12 @@ def _half_day_status(
     return "absent", Decimal("0"), False
 
 
-def _still_at_work(d, day_secs, shift, settings, second_half_start_override=None, limits=None) -> bool:
-    """True while TODAY's day of someone who attended the morning half has not been over long enough to judge its
-    evening half: no second-half punch yet and the shift's end (plus its grace) not yet passed. Never for another day,
-    an employee without a shift, or a shift that runs past midnight."""
-    if d != ist_today() or shift is None or not getattr(shift, "end_time", None) or not day_secs:
-        return False
-    start, end = getattr(shift, "start_time", None), shift.end_time
-    if start is not None and _t2s(end) <= _t2s(start):
-        return False
-    morning, evening = _halves_attended(
-        day_secs, settings, second_half_start_override=second_half_start_override,
-        first_half_limit_s=limits.first_half_until if limits else None,
-    )
-    if not morning or evening:
-        return False
-    grace = int(getattr(shift, "grace_period_minutes", 0) or 0)
-    # in whole minutes, like every other limit: the last minute of the grace still counts as the shift
-    return _t2s(ist_now().time()) // 60 * 60 <= _t2s(end) + grace * 60
-
-
 def _evening_open_until(d, shift):
     """While TODAY's shift is still running, the moment its evening edge can first be judged: the minute after the
     shift's end plus its grace (an aware datetime, IST). Until then a last punch is not yet the day's exit (a lunch
     break, someone still at work), so no Early-Out or Penalty Early Out is decided and the stored day says it is
     provisional (AttendanceDayRecord.provisional_until). None for any other day, once that moment has passed, with no
-    shift, or for a shift that runs past midnight - the same window as _still_at_work."""
+    shift, or for a shift that runs past midnight - the same window the old still-at-work rule used."""
     if d != ist_today() or shift is None or not getattr(shift, "end_time", None):
         return None
     start, end = getattr(shift, "start_time", None), shift.end_time
@@ -1696,17 +1676,10 @@ def compute_day_record(emp, d: date_type, punch_logs=None, settings=None,
                 day_secs, settings, second_half_start_override=second_half_override,
                 first_half_limit_s=limits.first_half_until if limits else None,
             )
-            if (
-                status == AttendanceDayRecord.STATUS_HALF
-                and not half_day_slot
-                and not paid_halves
-                and _still_at_work(d, day_secs, effective_shift, settings, second_half_override, limits)
-            ):
-                # TODAY, while the shift is still running (owner 2026-11-13): someone who came in for the morning and has
-                # not punched out yet is at work, not a Half Day - the evening half cannot be judged before it is over.
-                # Present until the shift's end (+ its grace) has passed; then, still without a second-half punch, the
-                # day is a Half Day as before. The arrival zone, Late mark and quarter deduction below are unchanged.
-                status, shifts_earned, is_half = AttendanceDayRecord.STATUS_PRESENT, Decimal("1.00"), False
+            # TODAY's unfinished day is judged by its punches so far, as before 2026-11-13: a morning punch alone is a
+            # Half Day until a second-half punch arrives (owner 2026-11-26 - the released mobile app shows the server's
+            # status; the newer screens show such a day as In progress via provisional_until, set below, and payroll
+            # pays it 0, day_progress.py). The 13 Nov 'Present while still at work' step was removed.
             computed["status"] = status
             computed["shifts_earned"] = shifts_earned
             computed["is_half_shift"] = is_half

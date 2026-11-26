@@ -207,7 +207,8 @@ class SavedPunchesTests(RefreshBase):
 
 
 class TodayInProgressTests(RefreshBase):
-    """Today, while the shift is still running, a morning arrival with no exit punch yet is at work, not a Half Day."""
+    """Today, while the shift is still running, the day is judged by its punches so far (as before 13 Nov; owner
+    2026-11-26): a morning arrival with no second-half punch yet is a Half Day, stored as provisional (In progress)."""
 
     TODAY_REAL = date(2026, 11, 13)  # a Friday
 
@@ -225,38 +226,49 @@ class TodayInProgressTests(RefreshBase):
     def judge(self, d=None, **kwargs):
         return compute_day_record(self.emp, d or self.TODAY_REAL, settings=PayrollSettings.get(), **kwargs)
 
-    def test_at_half_past_ten_someone_who_came_on_time_is_present_not_half_day(self):
+    def test_at_half_past_ten_someone_who_came_on_time_is_a_provisional_half_day(self):
         self.at(10, 30)
         self.punch(self.TODAY_REAL, time(9, 5))
         rec = self.judge()
         self.assertEqual(
             (rec.status, rec.shifts_earned, rec.is_half_shift, rec.arrival_zone, rec.is_late),
-            ("present", Decimal("1.00"), False, "on_time", False),
+            ("half_shift", Decimal("0.50"), True, "on_time", False),
         )
+        self.assertIsNotNone(rec.provisional_until)  # the newer screens show it as In progress
+
+    def test_an_exit_punch_in_the_second_half_makes_it_present(self):
+        self.at(17, 30)
+        self.punch(self.TODAY_REAL, time(9, 5), time(17, 25))
+        rec = self.judge()
+        self.assertEqual((rec.status, rec.shifts_earned), ("present", Decimal("1.00")))
 
     def test_a_late_and_a_quarter_arrival_keep_their_marks_while_at_work(self):
         self.at(11, 0)
         self.punch(self.TODAY_REAL, time(9, 40))
         rec = self.judge()
         self.assertEqual(
-            (rec.status, rec.arrival_zone, rec.is_late, rec.shifts_earned), ("present", "late", True, Decimal("1.00"))
+            (rec.status, rec.arrival_zone, rec.is_late, rec.shifts_earned),
+            ("half_shift", "late", True, Decimal("0.50")),
         )
         quarter = self.staff("RFQ")
         self.punch(self.TODAY_REAL, time(10, 40), emp=quarter)
         rec = compute_day_record(quarter, self.TODAY_REAL, settings=PayrollSettings.get())
-        self.assertEqual((rec.status, rec.arrival_zone, rec.shifts_earned), ("present", "quarter", Decimal("0.75")))
+        self.assertEqual((rec.status, rec.arrival_zone, rec.shifts_earned), ("half_shift", "quarter", Decimal("0.50")))
 
-    def test_lunch_punches_do_not_end_it_but_the_end_of_the_shift_does(self):
+    def test_lunch_punches_are_a_half_day_until_the_exit_and_provisional_until_the_end_of_the_shift(self):
         self.at(16, 0)
         self.punch(self.TODAY_REAL, time(9, 5), time(13, 0), time(14, 0))
-        self.assertEqual(self.judge().status, "present")
+        rec = self.judge()
+        self.assertEqual((rec.status, rec.early_leave), ("half_shift", False))  # no Early-Out for a lunch punch
+        self.assertIsNotNone(rec.provisional_until)
         mock.patch.stopall()
         self.at(18, 10)  # 18:00 end + 10 min grace: still inside
-        self.assertEqual(self.judge().status, "present")
+        self.assertIsNotNone(self.judge().provisional_until)
         mock.patch.stopall()
-        self.at(18, 11)  # past it, and still no exit punch: a Half Day, as before
+        self.at(18, 11)  # past it, and still no exit punch: a Half Day, now final
         rec = self.judge()
         self.assertEqual((rec.status, rec.shifts_earned, rec.is_half_shift), ("half_shift", Decimal("0.50"), True))
+        self.assertIsNone(rec.provisional_until)
 
     def test_another_day_is_never_in_progress(self):
         self.at(10, 30)

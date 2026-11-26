@@ -1,8 +1,8 @@
 """TODAY's unfinished attendance day (owner 2026-11-26).
 
 While a staff day's shift is still running the engine stores it as provisional (AttendanceDayRecord.provisional_until,
-see attendance_final._evening_open_until): someone with only a morning punch is counted Present 1.00 for now and the
-background refresh (attendance_refresh.refresh_provisional) judges the day again once the shift is over. Every screen
+see attendance_final._evening_open_until): someone with only a morning punch is a Half Day for now (as before 13 Nov;
+owner 2026-11-26) and the background refresh (attendance_refresh.refresh_provisional) judges the day again once the shift is over. Every screen
 shows such a day as "In progress" with no shift count, and payroll never pays it: these helpers are the one place that
 decides it.
 

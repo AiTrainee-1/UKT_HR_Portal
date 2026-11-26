@@ -137,7 +137,9 @@ class Base(TestCase):
 class EngineTests(Base):
     def test_a_morning_only_day_is_provisional_and_left_out_of_the_month_totals(self):
         rec = self.judge_today()
-        self.assertEqual((rec.status, rec.shifts_earned, rec.provisional_until), ("present", Decimal("1.00"), STORED))
+        self.assertEqual(
+            (rec.status, rec.shifts_earned, rec.provisional_until), ("half_shift", Decimal("0.50"), STORED)
+        )
         y = compute_day_record(self.emp, YESTERDAY, settings=PayrollSettings.get())
         s = month_summary_from_records([y, rec])
         self.assertEqual((s["present"], s["totalShifts"], s["inProgressDays"], s["totalDays"]), (1, "1.00", 1, 2))
