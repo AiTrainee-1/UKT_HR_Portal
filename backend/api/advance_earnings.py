@@ -33,7 +33,8 @@ from decimal import Decimal
 EARNED_THROUGH_DAY = 20
 SALARY_ADVANCE_PERCENT = 50
 TERM_LOAN_SERVICE_MONTHS = 6
-FILL_PER_READ = 150  # at most this many advances get their figures worked out on one list read
+FILL_PER_READ = 25  # at most this many advances get their figures worked out on one list read (the rest: next read,
+# or `manage.py fill_advance_earnings` once after deploying migration 0187)
 
 
 @dataclass(frozen=True)
@@ -81,11 +82,21 @@ def monthly_fixed_salary(emp) -> Decimal | None:
 
 
 def earned_in_month(
-    emp, month: int, year: int, through_day: int = EARNED_THROUGH_DAY, settings=None
+    emp,
+    month: int,
+    year: int,
+    through_day: int = EARNED_THROUGH_DAY,
+    settings=None,
+    salary: Decimal | None = None,
+    today: date | None = None,
 ) -> Earnings | None:
     """The salary `emp` earned from the 1st to `through_day` of the month, priced exactly like the staff payroll (see the
-    module docstring). None without a monthly fixed salary or a company month."""
+    module docstring). None without a monthly fixed salary or a company month. `salary` prices it at a given monthly
+    salary (the one in force then) instead of today's; `today` is the factory date (declared holidays still to come are
+    not earned yet)."""
     import calendar
+
+    from .clock import ist_today
 
     from .attendance_final import compute_month_records
     from .compensation_shared import parse_join_date
@@ -93,9 +104,11 @@ def earned_in_month(
     from .models import Holiday, PayrollSettings
     from .payroll_views import _build_working_days, _d2, _effective_shift_times, _get_active_assignment
 
-    salary = monthly_fixed_salary(emp)
-    if salary is None:
-        return None
+    current = monthly_fixed_salary(emp)
+    if current is None:
+        return None  # production (paid per shift) or no salary recorded
+    salary = Decimal(str(salary)) if salary else current
+    today = today or ist_today()
     assignment = _get_active_assignment(emp, date(year, month, 15))
     saturday_off = _effective_shift_times(assignment)[3] if assignment else False
     company_days = len(_build_working_days(month, year, saturday_off, set()))
@@ -109,7 +122,7 @@ def earned_in_month(
     paid_holidays = sum(
         1
         for d in _build_working_days(month, year, saturday_off, set())
-        if d <= through and d in holiday_dates and (joined is None or d >= joined)
+        if d <= through and d <= today and d in holiday_dates and (joined is None or d >= joined)
     )
 
     records = {r.date: r for r in compute_month_records(emp, year, month, settings or PayrollSettings.get())}
@@ -174,10 +187,25 @@ def store(adv, earnings: Earnings | None, today: date | None = None) -> None:
         setattr(adv, name, value)
 
 
+def salary_for_month(emp, month: int, year: int) -> Decimal | None:
+    """The monthly salary a past month was paid at: its staff payroll's base salary, when that month has one."""
+    from .models import Payroll
+
+    base = (
+        Payroll.objects.filter(employee=emp, month=month, year=year, week_number=None, salary_mode="monthly")
+        .order_by("-id")
+        .values_list("base_salary", flat=True)
+        .first()
+    )
+    return Decimal(str(base)) if base and Decimal(str(base)) > 0 else None
+
+
 def refresh(adv, today: date | None = None) -> None:
-    """Work the figures out again for the month the advance was raised in and keep them."""
+    """Work the figures out again for the month the advance was raised in and keep them, priced at the salary of that
+    time: the one kept when it was raised, else that month's payroll's, else today's (an older advance HR recorded)."""
     month, year = raised_month(adv)
-    store(adv, earned_in_month(adv.employee, month, year), today)
+    salary = adv.salary_at_request or salary_for_month(adv.employee, month, year)
+    store(adv, earned_in_month(adv.employee, month, year, salary=salary), today)
 
 
 def is_stale(adv, today: date) -> bool:
@@ -191,14 +219,14 @@ def is_stale(adv, today: date) -> bool:
     return adv.earned_on <= through < today
 
 
-def fill_missing(advances, today: date | None = None) -> int:
-    """Give the advances in this list that lack figures (or have stale ones) their figures, at most FILL_PER_READ."""
+def fill_missing(advances, today: date | None = None, limit: int = FILL_PER_READ) -> int:
+    """Give the advances in this list that lack figures (or have stale ones) their figures, at most `limit`."""
     from .clock import ist_today
 
     today = today or ist_today()
     done = 0
     for adv in advances:
-        if done >= FILL_PER_READ:
+        if done >= limit:
             break
         if is_stale(adv, today):
             refresh(adv, today)

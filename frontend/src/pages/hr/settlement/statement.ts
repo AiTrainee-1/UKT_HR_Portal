@@ -40,7 +40,7 @@ export function buildStatementHtml(a: SettlementRow, repayments: AdvanceRepaymen
   const earned = e
     ? `<h2>Earned in ${esc(earnedPeriodLabel(e))}</h2>
 <table>
-${row("Fixed salary", formatMoney(e.fixedSalary))}${row("Working days (present shifts)", formatDays(e.workingDays))}${row("Working salary (earned amount)", formatMoney(e.workingSalary ?? e.earnedAmount))}${e.limit != null ? row(`${e.percent}% limit`, formatMoney(e.limit)) : ""}${(a.limitRemark ?? "").trim() ? row("Reason for going over the limit", a.limitRemark ?? "") : ""}
+${row("Fixed salary", formatMoney(e.fixedSalary))}${row("Working days", formatDays(e.workingDays))}${row("Earned salary", formatMoney(e.earnedAmount))}${e.limit != null ? row(`Limit (${e.percent}% of earned salary)`, formatMoney(e.limit)) : ""}${(a.limitRemark ?? "").trim() ? row("Reason for going over the limit", a.limitRemark ?? "") : ""}
 </table>`
     : "";
   const left = hasLeft(a)

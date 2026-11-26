@@ -3,20 +3,21 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Banknote,
+  CheckCircle2,
   ChevronDown,
-  FileSpreadsheet,
-  FileText,
+  Download,
   HandCoins,
   Hourglass,
+  Inbox,
   Landmark,
   LayoutGrid,
   Plus,
   Search,
   UserMinus,
   Wallet,
+  XCircle,
 } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
-import { ExportMenu } from "@/components/payroll/kit/ExportMenu";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
 import { canApprove, useAuth } from "@/contexts/AuthContext";
 import { kindFor } from "@/lib/hr-access";
@@ -26,10 +27,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -43,24 +40,24 @@ import {
 } from "@/lib/api-client";
 import { useCompany } from "./report-log/useCompany";
 import AdvanceList from "./settlement/AdvanceList";
+import BankFileDialog from "./settlement/BankFileDialog";
 import { DecisionDialog, DeleteDialog, type Decision, type DecisionRequest } from "./settlement/ConfirmDialogs";
 import CreateDialog from "./settlement/CreateDialog";
 import DetailSheet from "./settlement/DetailSheet";
+import ExportDialog from "./settlement/ExportDialog";
 import Toolbar from "./settlement/Toolbar";
 import {
+  DEFAULT_BASIS,
   DEFAULT_FILTER_URL,
   DEFAULT_SORT,
-  EXPORT_STATUS_OPTIONS,
   NO_FILTERS,
   SETTLEMENT_TABS,
   SETTLEMENT_URL_DEFAULTS,
   TAB_NOUN,
   TAB_TYPE,
   TYPE_LABEL,
-  buildExport,
+  bankFileRows,
   countOf,
-  exportState,
-  exportStatusLabel,
   filtersActive,
   filtersFromUrl,
   filtersToUrl,
@@ -71,12 +68,12 @@ import {
   parseSort,
   parseTab,
   periodLabel,
+  periodToUrl,
   pickFilterUrl,
   rowsOfTab,
   serverError,
   sortValue,
   statusCounts,
-  tabLabel,
   tabOfType,
   yearOptions,
   type FilterUrl,
@@ -108,8 +105,9 @@ const FIRST_DIRECTION: Record<SortKey, Sort["dir"]> = {
 const TAB_ICON: Record<SettlementTab, typeof LayoutGrid> = { overview: LayoutGrid, loan: Landmark, advance: Banknote };
 
 /** Settlement: Term Loans (repaid in monthly EMIs) and Salary Advances (deducted once; renamed from "Term Advance"
- *  2026-11-26): raise one, approve or reject it with a remark, follow what payroll has recovered, and export any tab,
- *  month, filter and status as Excel or PDF. */
+ *  2026-11-26): raise one, approve or reject it with a remark, follow what payroll has recovered, export a report (Excel or
+ *  PDF, filters and columns of HR's choosing) and pay the month's approved ones through the bank file. The page opens on
+ *  the current month, the requests raised in it (owner 2026-11-26). */
 export default function Settlement() {
   const { toast } = useToast();
   // approving an advance is a right of its own (HR Manager / HR Assistant categories); unchanged for everyone else
@@ -121,8 +119,8 @@ export default function Settlement() {
   const company = useCompany();
   const [showCreate, setShowCreate] = useState(false);
   const [createType, setCreateType] = useState<SettlementRow["advanceType"]>("general");
-  // the status the Export menu writes: the page's status filter until HR picks another one (for that filter)
-  const [exportChoice, setExportChoice] = useState<{ page: StatusFilter; status: StatusFilter } | null>(null);
+  const [showExport, setShowExport] = useState(false);
+  const [showBank, setShowBank] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SettlementRow | null>(null);
   const [decision, setDecision] = useState<DecisionRequest | null>(null);
@@ -166,10 +164,12 @@ export default function Settlement() {
 
   const setFilters = (next: Filters) => setUrl(filtersToUrl(next, sort));
   const setSort = (next: Sort) => setUrl({ sort: sortValue(next) });
-  const setPeriod = (next: Period) =>
-    setUrl(next ? { month: String(next.month), year: String(next.year) } : { month: "", year: "", basis: "any" });
+  // the month: "" in the address is the current month (the default), "all" All months
+  const setPeriod = (next: Period) => setUrl(periodToUrl(next));
   const setBasis = (next: MonthBasis) => setUrl({ basis: next });
-  const clearAll = () => setUrl({ ...filtersToUrl(NO_FILTERS, DEFAULT_SORT), month: "", year: "", basis: "any" });
+  const setStatus = (status: StatusFilter) => setFilters({ ...view.filters, status });
+  const clearAll = () =>
+    setUrl({ ...filtersToUrl(NO_FILTERS, DEFAULT_SORT), month: "", year: "", basis: DEFAULT_BASIS });
 
   const switchTab = (next: SettlementTab) => {
     if (next === tab) return;
@@ -211,8 +211,9 @@ export default function Settlement() {
     // show the new one: it starts as pending, on the tab of its kind and in a month it belongs to
     const target = tab === "overview" ? tab : tabOfType(payload.advanceType === "term" ? "term" : "general");
     if (target !== tab) remembered.current[tab] = pickFilterUrl(url);
+    // it is raised now: when the month shown does not hold it, go to this month
     const keepMonth = !period || !created || inPeriod(created, period, basis);
-    setUrl({ tab: target, ...DEFAULT_FILTER_URL, ...(keepMonth ? {} : { month: "", year: "", basis: "any" }) });
+    setUrl({ tab: target, ...DEFAULT_FILTER_URL, ...(keepMonth ? {} : { month: "", year: "", basis: DEFAULT_BASIS }) });
   };
 
   // only a waiting advance can be deleted: the server answers 409 not_pending once it is decided (someone else may have
@@ -238,17 +239,10 @@ export default function Settlement() {
   const onHeadSort = (key: SortKey) =>
     setSort(sort.key === key ? { key, dir: sort.dir === "asc" ? "desc" : "asc" } : { key, dir: FIRST_DIRECTION[key] });
 
-  // the list as shown (this tab, this month, every filter, the search and the sort) in the status chosen in the menu
-  const exportStatus: StatusFilter =
-    exportChoice && exportChoice.page === view.filters.status ? exportChoice.status : view.filters.status;
-  const exportPage = useMemo(() => exportState(state, exportStatus), [state, exportStatus]);
-  const exportView = useMemo(() => pageView(all, exportPage), [all, exportPage]);
-  const exportCounts = useMemo(() => statusCounts(view.periodRows, view.filters), [view]);
-  const exportInput = () => ({
-    ...company.excel,
-    table: buildExport(exportView.shown, exportPage, exportView.periodRows.length),
-    now: new Date(),
-  });
+  // the month's counts (this tab, every filter but the status pill): received = pending + approved + rejected
+  const counts = useMemo(() => statusCounts(view.periodRows, view.filters), [view]);
+  // the bank file: the month's approved (active or completed) advances of this tab and filters, whatever the status pill
+  const bankRows = useMemo(() => bankFileRows(all, state), [all, state]);
   const openCreate = (type: SettlementRow["advanceType"]) => {
     setCreateType(type);
     setShowCreate(true);
@@ -260,6 +254,15 @@ export default function Settlement() {
   const noun = TAB_NOUN[tab];
   const narrowed = period !== null || filtersActive({ ...view.filters, status: "all" });
   const newType = TAB_TYPE[tab] ?? "general";
+  const bankBlocked =
+    isLoading || isError
+      ? "The advances are still loading."
+      : bankRows.length === 0
+        ? `No approved ${noun.many} in ${periodLabel(period)}${
+            filtersActive({ ...view.filters, status: "all" }) ? " with these filters" : ""
+          } to pay.`
+        : null;
+  const inMonth = period ? `in ${periodLabel(period)}` : "in all months";
 
   return (
     <HrLayout>
@@ -274,63 +277,34 @@ export default function Settlement() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <ExportMenu
-              testId="settlement-export"
-              label="Export"
-              size="default"
-              className="h-10 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-              heading={`${tabLabel(tab)} · ${periodLabel(period)} · ${exportStatusLabel(exportStatus)}: ${countOf(
-                exportView.shown.length,
-                tab,
-              )}`}
-              disabled={isLoading || exportCounts.all === 0}
-              leading={
-                <>
-                  <DropdownMenuLabel className="pb-1 pt-0 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Status in the file
-                  </DropdownMenuLabel>
-                  <DropdownMenuRadioGroup
-                    value={exportStatus}
-                    onValueChange={(v) => setExportChoice({ page: view.filters.status, status: v as StatusFilter })}
-                  >
-                    {EXPORT_STATUS_OPTIONS.map((o) => (
-                      <DropdownMenuRadioItem
-                        key={o.value}
-                        value={o.value}
-                        onSelect={(e) => e.preventDefault()}
-                        className="py-1.5 text-sm"
-                        data-testid={`settlement-export-status-${o.value}`}
-                      >
-                        <span className="flex-1">
-                          {o.label}
-                          {o.hint && <span className="text-[11px] text-muted-foreground"> ({o.hint})</span>}
-                        </span>
-                        <span className="ml-3 text-xs tabular-nums text-muted-foreground">{exportCounts[o.value]}</span>
-                      </DropdownMenuRadioItem>
-                    ))}
-                  </DropdownMenuRadioGroup>
-                  <DropdownMenuSeparator />
-                </>
-              }
-              items={[
-                {
-                  key: "xlsx",
-                  label: "Excel (.xlsx)",
-                  hint: `${countOf(exportView.shown.length, tab)}: requested, salary earned 1st–20th and approved, with the totals`,
-                  icon: FileSpreadsheet,
-                  disabled: exportView.shown.length === 0,
-                  run: async () => (await import("./settlement/export")).downloadSettlementExcel(exportInput()),
-                },
-                {
-                  key: "pdf",
-                  label: "PDF",
-                  hint: "A4 landscape, for printing, with the totals",
-                  icon: FileText,
-                  disabled: exportView.shown.length === 0,
-                  run: async () => (await import("./settlement/export")).downloadSettlementPdf(exportInput()),
-                },
-              ]}
-            />
+            <span data-view-safe className="contents">
+              <Button
+                variant="outline"
+                className="h-10 gap-2 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                onClick={() => setShowExport(true)}
+                disabled={isLoading || all.length === 0}
+                data-testid="settlement-export"
+              >
+                <Download size={14} /> Export
+              </Button>
+              <span title={bankBlocked ?? undefined} className="inline-flex">
+                <Button
+                  variant="outline"
+                  className="h-10 gap-2 border-sky-200 text-sky-800 hover:bg-sky-50"
+                  onClick={() => setShowBank(true)}
+                  disabled={!!bankBlocked}
+                  aria-describedby={bankBlocked ? "settlement-bank-file-why" : undefined}
+                  data-testid="settlement-bank-file"
+                >
+                  <Landmark size={14} /> Export Bank File
+                </Button>
+              </span>
+              {bankBlocked && (
+                <span id="settlement-bank-file-why" className="sr-only" data-testid="settlement-bank-file-why">
+                  {bankBlocked}
+                </span>
+              )}
+            </span>
             {tab === "overview" ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -358,21 +332,67 @@ export default function Settlement() {
 
         <TabBar items={tabs} value={tab} onChange={switchTab} />
 
-        <div className="space-y-1.5">
+        <div className="space-y-3">
+          {/* the month's requests (this tab, every filter but the status pill): they always add up */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="settlement-counts">
+            <StatCard
+              testId="count-received"
+              label="Requests received"
+              value={statsLoading ? "-" : counts.all}
+              sub={statsLoading ? undefined : `${countOf(counts.all, tab)} ${inMonth}`}
+              icon={Inbox}
+              tone="bg-slate-100 text-slate-800"
+              onClick={() => setStatus("all")}
+              active={view.filters.status === "all"}
+              title="Show them all"
+            />
+            <StatCard
+              testId="count-approved"
+              label="Approved"
+              value={statsLoading ? "-" : counts.approved_all}
+              sub={statsLoading ? undefined : `${counts.approved} active · ${counts.closed} completed`}
+              icon={CheckCircle2}
+              tone="bg-green-50 text-green-800"
+              onClick={() => setStatus("approved_all")}
+              active={view.filters.status === "approved_all"}
+              title="Show the approved ones (active and completed)"
+            />
+            <StatCard
+              testId="count-rejected"
+              label="Rejected"
+              value={statsLoading ? "-" : counts.rejected}
+              icon={XCircle}
+              tone="bg-red-50 text-red-800"
+              onClick={() => setStatus("rejected")}
+              active={view.filters.status === "rejected"}
+              title="Show the rejected ones"
+            />
+            <StatCard
+              testId="count-pending"
+              label="Pending"
+              value={statsLoading ? "-" : counts.pending}
+              sub={statsLoading ? undefined : "waiting for approval"}
+              icon={Hourglass}
+              tone="bg-amber-50 text-amber-800"
+              onClick={() => setStatus("pending")}
+              active={view.filters.status === "pending"}
+              title="Show the ones waiting for approval"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             <StatCard
               testId="stat-pending"
-              label="Pending approval"
-              value={statsLoading ? "-" : summary.pendingCount}
-              sub={statsLoading ? undefined : `${formatMoney(summary.pendingAmount)} requested`}
-              icon={Hourglass}
-              tone="bg-amber-50 text-amber-800"
+              label="Pending amount"
+              value={statsLoading ? "-" : formatMoney(summary.pendingAmount)}
+              sub={statsLoading ? undefined : `requested by ${countOf(summary.pendingCount, tab)}`}
+              icon={HandCoins}
+              tone="bg-amber-50/60 text-amber-900"
             />
             <StatCard
               testId="stat-active"
-              label={`Active ${noun.many}`}
-              value={statsLoading ? "-" : summary.activeCount}
-              sub={statsLoading ? undefined : `${formatMoney(summary.outstanding)} still to recover`}
+              label="Active outstanding"
+              value={statsLoading ? "-" : formatMoney(summary.outstanding)}
+              sub={statsLoading ? undefined : `still to recover on ${summary.activeCount} active ${noun.many}`}
               icon={Wallet}
               tone="bg-blue-50 text-blue-800"
             />
@@ -410,7 +430,7 @@ export default function Settlement() {
           {narrowed && !statsLoading && (
             <p className="text-xs text-gray-500" data-testid="settlement-figures-scope">
               {period
-                ? `Figures for ${periodLabel(period)}${basis !== "any" ? ` (${basisWord(basis)})` : ""}, as filtered below`
+                ? `Figures for ${periodLabel(period)} (${basisWord(basis)}), as filtered below`
                 : "Figures as filtered below"}
               , every status.
             </p>
@@ -510,6 +530,18 @@ export default function Settlement() {
 
         <DecisionDialog decision={decision} onConfirm={decide} onCancel={() => setDecision(null)} />
 
+        {showExport && (
+          <ExportDialog
+            open={showExport}
+            onClose={() => setShowExport(false)}
+            all={all}
+            page={state}
+            company={company.excel}
+          />
+        )}
+
+        <BankFileDialog rows={bankRows} state={state} open={showBank} onClose={() => setShowBank(false)} />
+
         <DeleteDialog
           row={deleteTarget}
           busy={deleteMutation.isPending}
@@ -540,4 +572,10 @@ export default function Settlement() {
 }
 
 const basisWord = (basis: MonthBasis): string =>
-  basis === "applied" ? "applied" : basis === "decided" ? "approved or rejected" : "deducted";
+  basis === "applied"
+    ? "raised in it"
+    : basis === "decided"
+      ? "approved or rejected in it"
+      : basis === "deducted"
+        ? "deducted in it"
+        : "any activity in it";

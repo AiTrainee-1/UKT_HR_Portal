@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAsHr } from "./helpers";
 
-// Settlement (advances and term loans) and Missing Punch after their redesign: the stat cards, search and filters, the
+// Settlement (advances and term loans) and Missing Punch after their redesign: the count and stat cards (the page opens
+// on this month), search and filters, the report dialog and the bank file, the
 // approval confirmation, the detail view, validation in the new-advance form, bulk approval of missing punches, exports,
 // and the phone layout. Everything made here carries "settle_e2e" in its purpose / reason and is removed again; the
 // approval pipeline is handed back to the built-in one.
@@ -197,30 +198,52 @@ test("deleting an advance asks first", async ({ page }) => {
   await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
 });
 
-test("Settlement exports the filtered list as Excel and PDF, named after the tab, status and month", async ({
+test("the Export report starts from the page, and names the file after the type, status and month", async ({
   page,
 }) => {
   await seedAdvances(page);
-  await page.goto("/hr/settlement");
+  await page.goto("/hr/settlement"); // this month, raised in it: the seeded ones were raised today
   await page.getByTestId("settlement-search").fill(TAG);
-  // the export's status starts on the page's (Pending) and can be changed in the menu
+  // the report's status starts on the page's (Pending); the owner's 12 columns are ticked
   let download = page.waitForEvent("download");
   await page.getByTestId("settlement-export").click();
-  await expect(page.getByTestId("settlement-export-status-pending")).toHaveAttribute("data-state", "checked");
-  await page.getByTestId("settlement-export-xlsx").click();
+  const dialog = page.getByTestId("report-dialog");
+  await expect(dialog.getByTestId("report-summary")).toContainText("All types · Pending");
+  await expect(dialog.getByTestId("report-column-sno")).toHaveAttribute("data-state", "checked");
+  await expect(dialog.getByTestId("report-column-purpose")).toHaveAttribute("data-state", "unchecked");
+  await dialog.getByTestId("report-xlsx").click();
   expect((await download).suggestedFilename()).toMatch(
-    /^Settlement_Overview_Pending_All_months_\d{4}-\d{2}-\d{2}\.xlsx$/,
+    /^Settlement_All_types_Pending_[A-Za-z]+_\d{4}_\d{4}-\d{2}-\d{2}\.xlsx$/,
   );
+  await dialog.getByRole("button", { name: "Close" }).click();
 
+  // the Term Loan tab: the report starts on Term Loan; All statuses, All months, as a PDF
   await page.getByTestId("settlement-tab-loan").click();
   await expect(page).toHaveURL(/tab=loan/);
-  download = page.waitForEvent("download");
   await page.getByTestId("settlement-export").click();
-  await page.getByTestId("settlement-export-status-all").click();
-  await page.getByTestId("settlement-export-pdf").click();
+  await dialog.getByTestId("report-status").click();
+  await page.getByRole("option", { name: "All", exact: true }).click();
+  await dialog.getByTestId("report-month").click();
+  await page.getByRole("option", { name: "All months" }).click();
+  download = page.waitForEvent("download");
+  await dialog.getByTestId("report-pdf").click();
   expect((await download).suggestedFilename()).toMatch(
     /^Settlement_Term_Loan_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/,
   );
+});
+
+test("Export Bank File pays this month's approved ones, after a confirm", async ({ page }) => {
+  const ids = await seedAdvances(page);
+  const approved = await api(page, "PUT", `/api/advances/${ids.general}`, { status: "approved" });
+  expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+  await page.goto("/hr/settlement");
+  await page.getByTestId("settlement-search").fill(TAG);
+  await page.getByTestId("settlement-bank-file").click();
+  const dialog = page.getByTestId("bank-file-dialog");
+  await expect(dialog.getByTestId("bank-file-summary")).toContainText("approved (active or completed)");
+  const download = page.waitForEvent("download");
+  await dialog.getByTestId("bank-file-confirm").click();
+  expect((await download).suggestedFilename()).toMatch(/^Settlement_Bank_File_Overview_[A-Za-z]+_\d{4}\.xlsx$/);
 });
 
 test("rejecting needs a reason, which is saved and shown in the details", async ({ page }) => {

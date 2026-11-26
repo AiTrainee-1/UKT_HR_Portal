@@ -74,6 +74,10 @@ export type Advance = {
   earnings?: AdvanceEarnings | null;
   /** Why HR recorded a Salary Advance above the 50 % earned limit ("" when it was not above it). */
   limitRemark?: string;
+  /** The employee's bank details, for the Settlement page's bank file (HR's list only; 2026-11-26). */
+  bankAccount?: string | null;
+  bankIfsc?: string | null;
+  bankName?: string | null;
 };
 
 /** The salary earned from the 1st to the 20th of a month (advance_earnings.earnings_json / Earnings.to_json). */

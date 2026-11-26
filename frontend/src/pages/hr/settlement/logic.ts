@@ -6,6 +6,7 @@
 import { matchesNamedOrgOption } from "@/lib/departments";
 import type { Advance, AdvanceDecisionItem, AdvanceEarnings, AdvanceEarningsPreview } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-client/custom-fetch";
+import { istDay } from "@/lib/date-range";
 import type { Tone } from "@/lib/statusTones";
 import { MONTH_FULL, formatDate, formatMoney, inDayRange, localDay, matchesWords, monthLabel } from "./shared";
 
@@ -111,34 +112,62 @@ export function rowsOfTab(rows: SettlementRow[], tab: SettlementTab): Settlement
 
 // ─── The month filter ────────────────────────────────────────────────────────────
 
-/** Which activity puts an advance in a month: any of them, the application, the decision or a deduction. */
+/** Which activity puts an advance in a month: the application (it was RAISED in the month: the default, owner
+ *  2026-11-26), any activity, the decision or a deduction. */
 export type MonthBasis = "any" | "applied" | "decided" | "deducted";
 
+export const DEFAULT_BASIS: MonthBasis = "applied";
+
 export const BASIS_OPTIONS: { value: MonthBasis; label: string }[] = [
+  { value: "applied", label: "Raised in the month" },
   { value: "any", label: "Any activity in the month" },
-  { value: "applied", label: "Applied in the month" },
   { value: "decided", label: "Approved or rejected in the month" },
   { value: "deducted", label: "Deducted in the month" },
 ];
 
 export const parseBasis = (value: string | null | undefined): MonthBasis =>
-  value === "applied" || value === "decided" || value === "deducted" ? value : "any";
+  value === "any" || value === "decided" || value === "deducted" ? value : DEFAULT_BASIS;
 
 /** A month of a year; null = all months. */
 export type Period = { month: number; year: number } | null;
 
-/** The month from the address ("11", "2026"); null for "All months" or anything that is not a month. A month without a
- *  usable year is in this year. */
+/** The address's word for "All months" (an empty month is the current month, owner 2026-11-26). */
+export const ALL_MONTHS = "all";
+
+/** This month at the factory (India time), whatever zone the browser is in. */
+export function currentPeriod(now = new Date()): { month: number; year: number } {
+  const [y, m] = istDay(now).split("-").map(Number);
+  return { month: m, year: y };
+}
+
+/** The month from the address ("11", "2026"). The page opens on the current month (owner 2026-11-26): no month, or one
+ *  that is not a month, is this month; "all" is All months (null). A month without a usable year is in this year. */
 export function parsePeriod(
   month: string | null | undefined,
   year: string | null | undefined,
   now = new Date(),
 ): Period {
+  if (month === ALL_MONTHS) return null;
+  const current = currentPeriod(now);
   const m = Number(month);
-  if (!month || !Number.isInteger(m) || m < 1 || m > 12) return null;
+  if (!month || !Number.isInteger(m) || m < 1 || m > 12) return current;
   const y = Number(year);
-  return { month: m, year: year && Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : now.getFullYear() };
+  return { month: m, year: year && Number.isInteger(y) && y >= 2000 && y <= 2100 ? y : current.year };
 }
+
+/** The address values of a month: "" for the current month (a clean address), "all" for All months. */
+export function periodToUrl(p: Period, now = new Date()): { month: string; year: string } {
+  if (!p) return { month: ALL_MONTHS, year: "" };
+  const current = currentPeriod(now);
+  if (p.month === current.month && p.year === current.year) return { month: "", year: "" };
+  return { month: String(p.month), year: String(p.year) };
+}
+
+/** The page's month as it opens: this month, raised in it. */
+export const isDefaultPeriod = (p: Period, basis: MonthBasis, now = new Date()): boolean => {
+  const current = currentPeriod(now);
+  return !!p && p.month === current.month && p.year === current.year && basis === DEFAULT_BASIS;
+};
 
 /** "2026-11", as the server writes a deduction month. */
 export const periodKey = (p: { month: number; year: number }): string =>
@@ -289,7 +318,25 @@ export function summarize(rows: SettlementRow[]): Summary {
 
 // ─── Filters ────────────────────────────────────────────────────────────────────
 
-export type StatusFilter = "all" | AdvanceStatus;
+/** A status choice: one status, "all", or "approved_all" = Approved (active + completed, owner 2026-11-26: what the
+ *  Approved count card opens). */
+export type StatusFilter = "all" | AdvanceStatus | "approved_all";
+
+/** What a status choice is called in the filters and the export's subtitle. */
+export const STATUS_FILTER_LABEL: Record<StatusFilter, string> = {
+  all: "All",
+  pending: STATUS_LABEL.pending,
+  approved: STATUS_LABEL.approved,
+  closed: STATUS_LABEL.closed,
+  rejected: STATUS_LABEL.rejected,
+  approved_all: "Approved (active + completed)",
+};
+
+/** Does an advance's status fall under the choice? */
+export const statusMatches = (status: AdvanceStatus, choice: StatusFilter): boolean =>
+  choice === "all" ||
+  status === choice ||
+  (choice === "approved_all" && (status === "approved" || status === "closed"));
 
 export type Filters = {
   query: string;
@@ -340,7 +387,7 @@ export const tabFilters = (f: Filters, tab: SettlementTab): Filters =>
  *  decision remark. */
 export function filterRows(rows: SettlementRow[], f: Filters, ignoreStatus = false): SettlementRow[] {
   return rows.filter((a) => {
-    if (!ignoreStatus && f.status !== "all" && a.status !== f.status) return false;
+    if (!ignoreStatus && !statusMatches(a.status, f.status)) return false;
     if (f.type !== "all" && a.advanceType !== f.type) return false;
     if (f.branch !== "all" && (a.employeeBranch ?? "") !== f.branch) return false;
     // a department choice is "<staff|production>|<name>" (lib/departments.ts): staff and production have their own
@@ -364,11 +411,22 @@ export function filterRows(rows: SettlementRow[], f: Filters, ignoreStatus = fal
   });
 }
 
-/** How many advances each status tab would show with the other filters applied. */
+/** How many advances each status choice would show with the other filters applied. `all` = pending + approved_all +
+ *  rejected, and approved_all = approved + closed: the count cards always add up. */
 export function statusCounts(rows: SettlementRow[], f: Filters): Record<StatusFilter, number> {
   const base = filterRows(rows, f, true);
-  const counts: Record<StatusFilter, number> = { all: base.length, pending: 0, approved: 0, rejected: 0, closed: 0 };
-  for (const a of base) counts[a.status] += 1;
+  const counts: Record<StatusFilter, number> = {
+    all: base.length,
+    pending: 0,
+    approved: 0,
+    rejected: 0,
+    closed: 0,
+    approved_all: 0,
+  };
+  for (const a of base) {
+    counts[a.status] += 1;
+    if (a.status === "approved" || a.status === "closed") counts.approved_all += 1;
+  }
   return counts;
 }
 
@@ -438,12 +496,13 @@ export function sortRows(rows: SettlementRow[], sort: Sort): SettlementRow[] {
 // ─── The page's state in the address ────────────────────────────────────────────
 
 /** Everything the page keeps in the address (?tab=loan&month=11&year=2026&status=all ...). A value equal to its default
- *  is left out, so a fresh page has a clean address. Module-level: useUrlParams needs one identity. */
+ *  is left out, so a fresh page has a clean address: no month = the current month, raised in it (owner 2026-11-26);
+ *  `month=all` = All months. Module-level: useUrlParams needs one identity. */
 export const SETTLEMENT_URL_DEFAULTS = {
   tab: "overview",
   month: "",
   year: "",
-  basis: "any",
+  basis: "applied",
   q: "",
   status: "pending",
   type: "all",
@@ -462,7 +521,7 @@ export type SettlementUrl = Record<keyof typeof SETTLEMENT_URL_DEFAULTS, string>
 export const FILTER_URL_KEYS = ["q", "status", "type", "branch", "dept", "etype", "emp", "from", "to", "sort"] as const;
 export type FilterUrl = Pick<SettlementUrl, (typeof FILTER_URL_KEYS)[number]>;
 
-const STATUS_VALUES: readonly StatusFilter[] = ["all", "pending", "approved", "rejected", "closed"];
+const STATUS_VALUES: readonly StatusFilter[] = ["all", "pending", "approved", "rejected", "closed", "approved_all"];
 const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 /** The filters the address names; an unknown value falls back to its default. */
@@ -533,13 +592,13 @@ export function pageView(all: SettlementRow[], s: PageState): PageView {
   };
 }
 
-/** "Applied in the month · Status: Pending approval · Search: "asha"": what narrows the list, for the export's subtitle;
- *  "" when nothing does. */
+/** "Deducted in the month · Status: Pending approval · Search: "asha"": what narrows the list, for the export's subtitle;
+ *  "" when nothing does (a month raised in it is the default, so it is not said). */
 export function describeScope(s: PageState): string {
   const f = tabFilters(s.filters, s.tab);
   const parts: string[] = [];
-  if (s.period && s.basis !== "any") parts.push(BASIS_OPTIONS.find((o) => o.value === s.basis)!.label);
-  if (f.status !== "all") parts.push(`Status: ${STATUS_LABEL[f.status]}`);
+  if (s.period && s.basis !== DEFAULT_BASIS) parts.push(BASIS_OPTIONS.find((o) => o.value === s.basis)!.label);
+  if (f.status !== "all") parts.push(`Status: ${STATUS_FILTER_LABEL[f.status]}`);
   if (f.type !== "all") parts.push(`Type: ${TYPE_LABEL[f.type]}`);
   if (f.branch !== "all") parts.push(`Branch: ${f.branch}`);
   if (f.department !== "all") {
@@ -923,7 +982,7 @@ export function formPreview(f: AdvanceForm): SchedulePreview | null {
   return preview.items.length > 0 ? preview : null;
 }
 
-// ─── Export (Excel and PDF, per tab) ────────────────────────────────────────────
+// ─── Export (Excel and PDF): the customisable report ───────────────────────────
 
 export type ExportCell = string | number;
 
@@ -935,27 +994,31 @@ export type ExportColumn = {
   weight: number;
   /** A rupee amount: a number in Excel, summed in the totals row. */
   money?: boolean;
-  /** A count (S.No, working days): right-aligned, never summed. */
+  /** A count (S.No, working days, months): right-aligned, never summed. */
   numeric?: boolean;
   /** `index`: the row's place in the export, from 0. */
   value: (a: SettlementRow, index: number) => ExportCell;
 };
 
-/** The statuses the Export menu offers (owner 2026-11-26); "approved" is Active (still recovering), "closed" Completed. */
+/** The statuses the report offers; "approved" is Active (still recovering), "closed" Completed, "approved_all" both. */
 export const EXPORT_STATUS_OPTIONS: { value: StatusFilter; label: string; hint?: string }[] = [
   { value: "all", label: "All" },
   { value: "pending", label: "Pending" },
   { value: "approved", label: "Active", hint: "approved, still recovering" },
   { value: "closed", label: "Completed" },
   { value: "rejected", label: "Rejected" },
+  { value: "approved_all", label: "Approved", hint: "active + completed" },
 ];
 
-/** The status as the export's title says it: "All statuses", "Pending", "Active", "Completed", "Rejected". */
+/** The status as the export's title says it: "All statuses", "Pending", "Active", "Completed", "Rejected", "Approved". */
 export const exportStatusLabel = (status: StatusFilter): string =>
   status === "all" ? "All statuses" : EXPORT_STATUS_OPTIONS.find((o) => o.value === status)!.label;
 
-/** The page as the export reads it: everything the page shows (tab, month, every other filter, search, sort) with the
- *  status chosen in the Export menu instead of the page's. */
+/** The type as the export's title says it: Overview holds both. */
+export const exportTypeLabel = (tab: SettlementTab): string => (tab === "overview" ? "All types" : tabLabel(tab));
+
+/** The page as the export reads it: everything the page shows (tab, month, every other filter, search, sort) with
+ *  another status instead of the page's. */
 export const exportState = (s: PageState, status: StatusFilter): PageState => ({
   ...s,
   filters: { ...s.filters, status },
@@ -964,66 +1027,226 @@ export const exportState = (s: PageState, status: StatusFilter): PageState => ({
 /** A figure the export leaves blank when there is none (a production employee has no earned salary). */
 const orBlank = (n: number | null | undefined): ExportCell => (n == null || !Number.isFinite(n) ? "" : n);
 
-/** The 12 columns of every tab's export, in the owner's order (2026-11-26). The salary figures are the ones kept on the
- *  advance for the 1st-20th of the month it was raised in; Remarks is always left empty, for HR to write in. */
-export function exportColumns(): ExportColumn[] {
-  return [
-    { key: "sno", header: "S.No", width: 6, weight: 7, numeric: true, value: (_a, i) => i + 1 },
-    { key: "code", header: "Employee Code", width: 13, weight: 13, value: (a) => a.employeeCode },
-    { key: "employee", header: "Employee", width: 24, weight: 26, value: (a) => a.employeeName },
-    { key: "department", header: "Department", width: 18, weight: 19, value: (a) => a.employeeDepartment ?? "" },
-    { key: "type", header: "Type", width: 15, weight: 16, value: (a) => TYPE_LABEL[a.advanceType] },
-    {
-      key: "requested",
-      header: "Requested Amount",
-      width: 14,
-      weight: 16,
-      money: true,
-      value: (a) => requestedOf(a),
-    },
-    {
-      key: "fixedSalary",
-      header: "Fixed Salary",
-      width: 14,
-      weight: 16,
-      money: true,
-      value: (a) => orBlank(a.earnings?.fixedSalary ?? a.salaryAtRequest),
-    },
-    {
-      key: "workingSalary",
-      header: "Working Salary",
-      width: 14,
-      weight: 16,
-      money: true,
-      value: (a) => orBlank(a.earnings?.workingSalary ?? a.earnings?.earnedAmount),
-    },
-    {
-      key: "workingDays",
-      header: "Working Days",
-      width: 10,
-      weight: 12,
-      numeric: true,
-      value: (a) => orBlank(a.earnings?.workingDays),
-    },
-    {
-      key: "earned",
-      header: "Earned Amount",
-      width: 14,
-      weight: 16,
-      money: true,
-      value: (a) => orBlank(a.earnings?.earnedAmount),
-    },
-    {
-      key: "approved",
-      header: "Approved Amount",
-      width: 14,
-      weight: 16,
-      money: true,
-      value: (a) => orBlank(approvedOf(a)),
-    },
-    { key: "remarks", header: "Remarks", width: 30, weight: 30, value: () => "" },
-  ];
+/** Only an approved (active or completed) advance has anything repaid or outstanding. */
+const recovering = (a: SettlementRow) => a.status === "approved" || a.status === "closed";
+
+/** Every column the report can have, in the order they are written: the owner's 12 (ticked by default), then the
+ *  extras (unticked by default), owner 2026-11-26. Fixed Salary / Working Days / Earned Salary / Limit are the figures
+ *  kept for the 1st-20th of the month the advance was raised in; Limit = 50 % of the Earned Salary. ("Working Salary"
+ *  was the Earned Salary again: dropped.) */
+export const EXPORT_COLUMNS: readonly ExportColumn[] = [
+  { key: "sno", header: "S.No", width: 6, weight: 7, numeric: true, value: (_a, i) => i + 1 },
+  { key: "code", header: "Employee Code", width: 13, weight: 13, value: (a) => a.employeeCode },
+  { key: "employee", header: "Employee", width: 24, weight: 26, value: (a) => a.employeeName },
+  { key: "department", header: "Department", width: 18, weight: 19, value: (a) => a.employeeDepartment ?? "" },
+  { key: "type", header: "Type", width: 15, weight: 16, value: (a) => TYPE_LABEL[a.advanceType] },
+  {
+    key: "fixedSalary",
+    header: "Fixed Salary",
+    width: 14,
+    weight: 16,
+    money: true,
+    value: (a) => orBlank(a.earnings?.fixedSalary ?? a.salaryAtRequest),
+  },
+  {
+    key: "workingDays",
+    header: "Working Days",
+    width: 10,
+    weight: 12,
+    numeric: true,
+    value: (a) => orBlank(a.earnings?.workingDays),
+  },
+  {
+    key: "earned",
+    header: "Earned Salary",
+    width: 14,
+    weight: 16,
+    money: true,
+    value: (a) => orBlank(a.earnings?.earnedAmount),
+  },
+  { key: "requested", header: "Requested Amount", width: 14, weight: 16, money: true, value: (a) => requestedOf(a) },
+  {
+    key: "limit",
+    header: "Limit",
+    width: 13,
+    weight: 15,
+    money: true,
+    value: (a) => (a.earnings ? orBlank(a.earnings.limit) : ""),
+  },
+  {
+    key: "approved",
+    header: "Approved Amount",
+    width: 14,
+    weight: 16,
+    money: true,
+    value: (a) => orBlank(approvedOf(a)),
+  },
+  { key: "remarks", header: "Remarks", width: 30, weight: 30, value: () => "" },
+  // ── the extras ──
+  { key: "purpose", header: "Purpose", width: 24, weight: 24, value: (a) => a.purpose ?? "" },
+  { key: "branch", header: "Branch", width: 16, weight: 16, value: (a) => a.employeeBranch ?? "" },
+  { key: "designation", header: "Designation", width: 18, weight: 18, value: (a) => a.employeeDesignation ?? "" },
+  { key: "status", header: "Status", width: 16, weight: 16, value: (a) => STATUS_LABEL[a.status] },
+  {
+    key: "emi",
+    header: "EMI",
+    width: 12,
+    weight: 14,
+    money: true,
+    value: (a) => (a.advanceType === "term" && a.emiAmount > 0 ? a.emiAmount : ""),
+  },
+  {
+    key: "months",
+    header: "Months",
+    width: 8,
+    weight: 9,
+    numeric: true,
+    value: (a) => (a.advanceType === "term" ? orBlank(a.repaymentMonths) : ""),
+  },
+  {
+    key: "start",
+    header: "Deduction from",
+    width: 13,
+    weight: 14,
+    value: (a) =>
+      a.repaymentStartMonth && a.repaymentStartYear ? monthLabel(a.repaymentStartMonth, a.repaymentStartYear) : "",
+  },
+  {
+    key: "repaid",
+    header: "Repaid",
+    width: 12,
+    weight: 14,
+    money: true,
+    value: (a) => (recovering(a) ? a.totalRepaid : ""),
+  },
+  {
+    key: "outstanding",
+    header: "Outstanding",
+    width: 12,
+    weight: 15,
+    money: true,
+    value: (a) => (recovering(a) ? a.outstanding : ""),
+  },
+  { key: "decidedBy", header: "Decided by", width: 16, weight: 16, value: decidedByOf },
+  {
+    key: "decidedOn",
+    header: "Decided on",
+    width: 12,
+    weight: 14,
+    value: (a) => (decidedAtOf(a) ? formatDate(decidedAtOf(a)) : ""),
+  },
+  {
+    key: "decisionRemark",
+    header: "Decision remark",
+    width: 30,
+    weight: 28,
+    value: (a) => (a.status === "pending" ? "" : (a.decisionRemark ?? "")),
+  },
+  { key: "appliedOn", header: "Applied on", width: 12, weight: 14, value: (a) => formatDate(a.createdAt) },
+  {
+    key: "appliedBy",
+    header: "Applied by",
+    width: 14,
+    weight: 13,
+    value: (a) => (appliedByEmployee(a) ? "Employee (app)" : "HR"),
+  },
+  { key: "limitRemark", header: "Over-limit reason", width: 28, weight: 26, value: (a) => a.limitRemark ?? "" },
+];
+
+/** The owner's 12 columns, ticked by default. */
+export const DEFAULT_COLUMN_KEYS: readonly string[] = EXPORT_COLUMNS.slice(0, 12).map((c) => c.key);
+
+/** The extras, unticked by default. */
+export const EXTRA_COLUMN_KEYS: readonly string[] = EXPORT_COLUMNS.slice(12).map((c) => c.key);
+
+/** The chosen columns in the fixed order (whatever order they were ticked in); the default 12 when none is given. */
+export function exportColumns(keys: readonly string[] = DEFAULT_COLUMN_KEYS): ExportColumn[] {
+  const chosen = new Set(keys);
+  return EXPORT_COLUMNS.filter((c) => chosen.has(c.key));
 }
+
+/** A column choice as it can be trusted: known keys only, in the fixed order; null when nothing usable is left (then the
+ *  default applies). */
+export function cleanColumnChoice(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null;
+  const keys = exportColumns(value.filter((v): v is string => typeof v === "string")).map((c) => c.key);
+  return keys.length > 0 ? keys : null;
+}
+
+/** Where this browser remembers the last column choice (one per browser; the page works without it). v2: the default
+ *  columns changed (owner 2026-11-26), so a choice remembered under v1 is not read and everyone starts on the new default
+ *  once. */
+export const COLUMN_CHOICE_KEY = "uktex.settlement.reportColumns.v2";
+
+/** The column choice this browser remembers, or the default 12. Never throws (private window, blocked storage). */
+export function loadColumnChoice(): string[] {
+  try {
+    const raw = window.localStorage.getItem(COLUMN_CHOICE_KEY);
+    return (raw && cleanColumnChoice(JSON.parse(raw))) || [...DEFAULT_COLUMN_KEYS];
+  } catch {
+    return [...DEFAULT_COLUMN_KEYS];
+  }
+}
+
+/** Remembers the column choice in this browser (silently does nothing when storage is blocked). */
+export function saveColumnChoice(keys: readonly string[]): void {
+  try {
+    const clean = cleanColumnChoice([...keys]);
+    if (clean) window.localStorage.setItem(COLUMN_CHOICE_KEY, JSON.stringify(clean));
+  } catch {
+    /* storage blocked: the choice is simply not remembered */
+  }
+}
+
+/** What the report holds (the Export dialog, owner 2026-11-26): pre-filled from the page, editable there. */
+export type ReportSettings = {
+  period: Period;
+  basis: MonthBasis;
+  status: StatusFilter;
+  type: "all" | Advance["advanceType"];
+  department: string;
+  branch: string;
+  /** "all", "staff" or "production". */
+  employeeType: string;
+  columns: string[];
+};
+
+/** The report as the page shows the list now: its month, status, type (the tab's, or Overview's type filter),
+ *  department, branch, Staff / Production, and the columns given (the remembered choice). */
+export function reportDefaults(s: PageState, columns: readonly string[] = DEFAULT_COLUMN_KEYS): ReportSettings {
+  const f = tabFilters(s.filters, s.tab);
+  return {
+    period: s.period,
+    basis: s.basis,
+    status: f.status,
+    type: TAB_TYPE[s.tab] ?? f.type,
+    department: f.department,
+    branch: f.branch,
+    employeeType: f.employeeType,
+    columns: [...columns],
+  };
+}
+
+/** The tab a report's type reads like: Term Loan, Salary Advance, or Overview for both. */
+export const tabOfReportType = (type: ReportSettings["type"]): SettlementTab =>
+  type === "all" ? "overview" : tabOfType(type);
+
+/** The page state the report's rows come from: the dialog's month, status, type, department, branch and Staff /
+ *  Production, with the page's search text, its other filters (employment, raised from / to) and its sort. */
+export const reportState = (page: PageState, r: ReportSettings): PageState => ({
+  tab: tabOfReportType(r.type),
+  period: r.period,
+  basis: r.basis,
+  filters: {
+    ...page.filters,
+    status: r.status,
+    type: "all",
+    department: r.department,
+    branch: r.branch,
+    employeeType: r.employeeType,
+  },
+  sort: page.sort,
+});
 
 export type SettlementExport = {
   title: string;
@@ -1034,32 +1257,100 @@ export type SettlementExport = {
   fileStem: string;
   columns: ExportColumn[];
   rows: ExportCell[][];
-  /** The totals row (the rupee columns summed), as long as a row. */
+  /** The totals row (the ticked rupee columns summed), as long as a row. */
   totals: ExportCell[];
+  /** The Final Summary under the totals: five overall figures, whatever columns are ticked (owner 2026-11-26). */
+  summary: SummaryCard[];
 };
 
-/** A tab's export: the list as the page shows it (tab, month, every filter, search and sort) in the status chosen in the
- *  Export menu (`s.filters.status`: exportState). `total` is how many the tab has in the month, to say "12 of 40". */
-export function buildExport(rows: SettlementRow[], s: PageState, total: number): SettlementExport {
-  const columns = exportColumns();
+/** One Final Summary card: a count (no currency) or a rupee figure. */
+export type SummaryCard = { label: string; value: number; kind: "count" | "money" };
+
+/** The Final Summary of the exported rows (owner 2026-11-26), always these five and nothing per employee: the DISTINCT
+ *  employees (not the requests), the earned salary 1st-20th, what was requested, what was approved (active / completed
+ *  only, as in the column) and the 50 % limits. A missing figure counts 0. */
+export function exportSummary(rows: SettlementRow[]): SummaryCard[] {
+  const sum = (pick: (a: SettlementRow) => number | null | undefined) =>
+    round2(rows.reduce((total, a) => total + (Number(pick(a)) || 0), 0));
+  return [
+    { label: "Total Employee Count", value: new Set(rows.map((a) => a.employeeId)).size, kind: "count" },
+    { label: "Total Earned Salary", value: sum((a) => a.earnings?.earnedAmount), kind: "money" },
+    { label: "Total Requested Amount", value: sum(requestedOf), kind: "money" },
+    { label: "Total Approved Amount", value: sum(approvedOf), kind: "money" },
+    { label: "Total Limit Amount", value: sum((a) => a.earnings?.limit), kind: "money" },
+  ];
+}
+
+/** The signatures at the foot of the report, as on the Salary Statement. */
+export const EXPORT_SIGNATURES = ["Prepared By", "Checked By", "HRM", "Auditor", "MD"] as const;
+
+/** The report: the rows given (pageView(all, s).shown) under the columns chosen (the owner's 12 by default). The title,
+ *  subtitle, sheet and file name say the type, the status and the month (or All months). `total` is how many the type
+ *  has in the month, to say "12 of 40". */
+export function buildExport(
+  rows: SettlementRow[],
+  s: PageState,
+  total: number,
+  columnKeys: readonly string[] = DEFAULT_COLUMN_KEYS,
+): SettlementExport {
+  const columns = exportColumns(columnKeys);
   const lines = rows.map((a, i) => columns.map((c) => c.value(a, i)));
+  // "Total (12 advances)" goes under Employee, or the first text column when Employee is not ticked
+  const named = columns.findIndex((c) => c.key === "employee");
+  const labelAt = named >= 0 ? named : columns.findIndex((c) => !c.money && !c.numeric);
   const totals = columns.map((c, i): ExportCell => {
     if (c.money) return round2(lines.reduce((sum, line) => sum + (typeof line[i] === "number" ? line[i] : 0), 0));
-    return c.key === "employee" ? `Total (${countOf(rows.length, s.tab)})` : "";
+    return i === labelAt ? `Total (${countOf(rows.length, s.tab)})` : "";
   });
   const status = tabFilters(s.filters, s.tab).status;
   const statusText = exportStatusLabel(status);
   // the status leads the subtitle (always, "All statuses" too); the other filters follow it
   const scope = describeScope({ ...s, filters: { ...s.filters, status: "all" } });
-  const tab = tabLabel(s.tab);
+  const type = exportTypeLabel(s.tab);
   const when = periodLabel(s.period);
   return {
-    title: `Settlement - ${tab} - ${statusText} - ${when}`,
+    title: `Settlement - ${type} - ${statusText} - ${when}`,
     subtitle: `${rows.length} of ${countOf(total, s.tab)} · Status: ${statusText}${scope ? ` · ${scope}` : ""}`,
-    sheet: `${tab} ${s.period ? `${MONTH_FULL[s.period.month - 1].slice(0, 3)} ${s.period.year}` : "all months"}`,
-    fileStem: `Settlement_${tab}_${statusText}_${when}`,
+    sheet: `${type} ${s.period ? `${MONTH_FULL[s.period.month - 1].slice(0, 3)} ${s.period.year}` : "all months"}`,
+    fileStem: `Settlement_${type}_${statusText}_${when}`,
     columns,
     rows: lines,
     totals,
+    summary: exportSummary(rows),
   };
 }
+
+// ─── The bank file (owner 2026-11-26) ───────────────────────────────────────────
+
+/** What the bank file pays: the month's APPROVED advances (active or completed; never waiting or rejected) of the tab,
+ *  under every other page filter and the search, whatever the status pill says. */
+export const bankFileRows = (all: SettlementRow[], s: PageState): SettlementRow[] =>
+  pageView(all, exportState(s, "approved_all")).shown;
+
+/** One bank payment per advance: the APPROVED amount (`amount`), not what was asked for. */
+export const bankFileLines = (rows: SettlementRow[]) =>
+  rows.map((a) => ({
+    employeeCode: a.employeeCode,
+    employeeName: a.employeeName,
+    bankAccount: a.bankAccount ?? "",
+    bankIfsc: a.bankIfsc ?? "",
+    bankName: a.bankName ?? "",
+    amount: a.amount,
+  }));
+
+/** The advances the bank cannot pay as they are: no account number or no IFSC on the employee. */
+export const missingBankDetails = (rows: SettlementRow[]): SettlementRow[] =>
+  rows.filter((a) => !(a.bankAccount ?? "").trim() || !(a.bankIfsc ?? "").trim());
+
+/** What the bank file pays in all. */
+export const bankFileTotal = (rows: SettlementRow[]): number => round2(rows.reduce((sum, a) => sum + a.amount, 0));
+
+const fileWord = (text: string) => text.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
+
+/** "Settlement_Bank_File_Term_Loan_November_2026.xlsx" (the tab, then the month or All months). */
+export const bankFileName = (s: PageState): string =>
+  `Settlement_Bank_File_${fileWord(tabLabel(s.tab))}_${fileWord(periodLabel(s.period))}.xlsx`;
+
+/** The bank file's sheet: "Term Loan Nov 2026". */
+export const bankFileSheet = (s: PageState): string =>
+  `${tabLabel(s.tab)} ${s.period ? `${MONTH_FULL[s.period.month - 1].slice(0, 3)} ${s.period.year}` : "All months"}`;

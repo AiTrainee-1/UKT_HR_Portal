@@ -48,6 +48,8 @@ test.beforeAll(async ({ request }) => {
       amount,
       emiAmount: amount,
       purpose: "theme-clean-payroll",
+      // the e2e employees have no attendance this month, so the 1st-20th limit is 0 (HR may go over it with a reason)
+      limitRemark: "theme-clean-payroll e2e: above the 1st-20th limit",
       repaymentStartMonth: 3,
       repaymentStartYear: 2026,
     });
@@ -59,7 +61,11 @@ test.beforeAll(async ({ request }) => {
 });
 
 test.afterAll(async ({ request }) => {
-  for (const id of advanceIds) await api(request, "DELETE", `/api/advances/${id}`);
+  // only a waiting advance can be deleted (2026-11-26): put the approved one back to pending first
+  for (const id of advanceIds) {
+    await api(request, "PUT", `/api/advances/${id}`, { status: "pending" });
+    await api(request, "DELETE", `/api/advances/${id}`);
+  }
   advanceIds = [];
 });
 

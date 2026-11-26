@@ -273,3 +273,57 @@ class HrTests(_AppBase):
         )  # fmt: skip
         r = self.client.put(f"/api/advances/{pk}", {"status": "approved"}, content_type="application/json", **self.hr)
         self.assertEqual(r.json()["earnings"]["earnedAmount"], 7000.0)
+
+
+class ReviewFixTests(_AppBase):
+    """Fixes from the 2026-11-26 review."""
+
+    def test_an_advance_hr_recorded_cannot_be_withdrawn_by_the_employee(self):
+        hr_made = Advance.objects.create(employee=self.emp, advance_type="general", amount=Decimal("500"),
+                                         outstanding=Decimal("500"))  # fmt: skip
+        r = self.client.post(f"/api/my/requests/advance/{hr_made.id}/withdraw", **self.me)
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "recorded_by_hr"))
+        self.assertTrue(Advance.objects.filter(pk=hr_made.pk).exists())
+
+    def test_a_declared_holiday_still_to_come_is_not_earned_yet(self):
+        Holiday.objects.create(name="Festival", date=date(2026, 2, 16))
+        _holiday_dates_for_month.cache_clear()
+        before = advance_earnings.earned_in_month(self.emp, 2, 2026, today=date(2026, 2, 10))
+        after = advance_earnings.earned_in_month(self.emp, 2, 2026, today=date(2026, 2, 21))
+        self.assertEqual((before.paid_days, after.paid_days), (Decimal("6"), Decimal("7")))
+
+    def test_an_older_advance_is_priced_at_the_salary_of_its_own_month(self):
+        old = Advance.objects.create(employee=self.emp, advance_type="term", amount=Decimal("2000"),
+                                     outstanding=Decimal("2000"), salary_at_request=Decimal("12000"))  # fmt: skip
+        Advance.objects.filter(pk=old.pk).update(created_at=datetime(2026, 2, 21, 6, 0, tzinfo=dt_timezone.utc))
+        old.refresh_from_db()
+        advance_earnings.refresh(old)
+        # 6 days at 12,000 / 24 = 500, not at today's 24,000
+        self.assertEqual((old.earned_amount, old.salary_at_request), (Decimal("3000.00"), Decimal("12000")))
+
+    def test_the_backfill_command(self):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        Advance.objects.create(employee=self.emp, advance_type="term", amount=Decimal("2000"), outstanding=Decimal("2000"))
+        out = StringIO()
+        call_command("fill_advance_earnings", "--dry-run", stdout=out)
+        self.assertIn("1 advance(s)", out.getvalue())
+        call_command("fill_advance_earnings", stdout=out)
+        self.assertFalse(Advance.objects.filter(earned_on__isnull=True).exists())
+
+
+class BankDetailsTests(_AppBase):
+    """The Settlement page's Export Bank File reads the bank details from HR's list (2026-11-26); employees never get
+    them in the list."""
+
+    def test_hr_list_carries_bank_details_employee_list_does_not(self):
+        Employee.objects.filter(pk=self.emp.pk).update(bank_account="123456789", bank_ifsc="HDFC0001234", bank_name="HDFC")
+        Advance.objects.create(employee=self.emp, advance_type="general", amount=Decimal("500"), outstanding=Decimal("500"))
+        hr_row = self.client.get("/api/advances", **self.hr).json()[0]
+        self.assertEqual(
+            (hr_row["bankAccount"], hr_row["bankIfsc"], hr_row["bankName"]), ("123456789", "HDFC0001234", "HDFC")
+        )
+        mine = self.client.get("/api/advances", **self.me).json()[0]
+        self.assertNotIn("bankAccount", mine)

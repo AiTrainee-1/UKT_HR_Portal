@@ -108,7 +108,7 @@ export async function buildSettlementPdf(input: SettlementExportInput): Promise<
     columns: settlementPdfColumns(table),
     rows: settlementPdfRows(table),
     notes: [
-      "Fixed Salary = the monthly fixed salary. Working Days, Working Salary and Earned Amount are for the 1st to the 20th of the month the advance was raised in (blank for production employees).",
+      "Fixed Salary = the monthly fixed salary. Working Days, Earned Salary and Limit are for the 1st to the 20th of the month the advance was raised in; Limit = 50% of the Earned Salary (blank for production employees).",
       "Requested = what was asked for; Approved = what HR approved (active and completed advances only), the amount payroll deducts.",
     ],
     now: input.now,

@@ -158,9 +158,9 @@ export function DecisionDialog({
               </p>
               {earned ? (
                 <p className="text-xs" data-testid="decision-earned">
-                  Earned {earnedPeriodLabel(earned)}: {formatMoney(earned.earnedAmount)} (
-                  {formatDays(earned.workingDays)} working days, fixed salary {formatMoney(earned.fixedSalary)}).
-                  {limit != null && ` Salary Advance limit (${earned.percent}%): ${formatMoney(limit)}.`}
+                  Earned in {earnedPeriodLabel(earned)}: Fixed salary {formatMoney(earned.fixedSalary)} · Working days{" "}
+                  {formatDays(earned.workingDays)} · Earned salary {formatMoney(earned.earnedAmount)}
+                  {limit != null && ` · Limit (${earned.percent}% of earned salary) ${formatMoney(limit)}`}.
                 </p>
               ) : (
                 row?.salaryAtRequest != null &&

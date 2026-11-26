@@ -7,7 +7,8 @@ import { initials } from "./shared";
 
 type IconType = ComponentType<{ size?: number; className?: string }>;
 
-/** One figure above the list, tinted like the stat cards on the other HR pages. */
+/** One figure above the list, tinted like the stat cards on the other HR pages. With `onClick` it is a button (a count
+ *  card that sets the status filter); `active` marks the one the list is filtered by. */
 export function StatCard({
   label,
   value,
@@ -15,6 +16,9 @@ export function StatCard({
   icon: Icon,
   tone,
   testId,
+  onClick,
+  active,
+  title,
 }: {
   label: string;
   value: number | string;
@@ -22,9 +26,12 @@ export function StatCard({
   icon: IconType;
   tone: string;
   testId?: string;
+  onClick?: () => void;
+  active?: boolean;
+  title?: string;
 }) {
-  return (
-    <div className={cn("flex items-start gap-3 rounded-2xl p-4", tone)} data-testid={testId}>
+  const body = (
+    <>
       <div className="mt-0.5 rounded-xl bg-white/60 p-2">
         <Icon size={16} />
       </div>
@@ -35,7 +42,31 @@ export function StatCard({
         </p>
         {sub && <p className="mt-0.5 text-xs leading-snug opacity-60">{sub}</p>}
       </div>
-    </div>
+    </>
+  );
+  if (!onClick) {
+    return (
+      <div className={cn("flex items-start gap-3 rounded-2xl p-4", tone)} data-testid={testId}>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={!!active}
+      title={title}
+      className={cn(
+        "flex w-full items-start gap-3 rounded-2xl p-4 text-left transition-shadow hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400",
+        tone,
+        active && "ring-2 ring-current ring-offset-1",
+      )}
+      data-view-safe
+      data-testid={testId}
+    >
+      {body}
+    </button>
   );
 }
 

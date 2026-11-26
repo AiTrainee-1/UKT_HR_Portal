@@ -12,7 +12,7 @@ import type { SettlementRow } from "./logic";
 // server's refusal shown in the dialog), the requested / approved amounts and the history in the detail sheet, and the
 // 2026-11-26 rules: the salary earned 1st-20th and its 50 % limit in the New dialog, delete only while pending.
 
-const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn() }));
+const h = vi.hoisted(() => ({ fetch: vi.fn(), toast: vi.fn(), excel: vi.fn(), pdf: vi.fn(), bank: vi.fn() }));
 
 vi.mock("@/components/HrLayout", () => ({ default: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/contexts/AuthContext", async (original) => ({
@@ -20,6 +20,13 @@ vi.mock("@/contexts/AuthContext", async (original) => ({
   useAuth: () => ({ user: null }),
 }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: h.toast }), toast: h.toast }));
+// the files themselves are tested in export.test.ts and lib/bankFile.test.ts: here, what the page hands them
+vi.mock("./export", () => ({
+  downloadSettlementExcel: h.excel,
+  downloadSettlementPdf: h.pdf,
+  exportFileName: (t: { fileStem: string }, ext: string) => `${t.fileStem}.${ext}`,
+}));
+vi.mock("@/lib/bankFile", () => ({ downloadBankFile: h.bank }));
 vi.mock("@/lib/api-client/custom-fetch", async (original) => ({
   ...(await original<typeof import("@/lib/api-client/custom-fetch")>()),
   customFetch: h.fetch,
@@ -310,17 +317,51 @@ describe("the Settlement page", () => {
     expect(rowIds()).toEqual(["advance-row-2", "advance-row-1"]); // newest first, pending only
     expect(text(q("settlement-tab-loan"))).toContain("Term Loan");
     expect(text(q("settlement-tab-loan"))).toContain("1");
-    expect(text(q("stat-pending-value"))).toBe("2");
+    expect(text(q("count-pending-value"))).toBe("2");
     expect(q("filter-type")).not.toBeNull(); // only Overview has both types to choose from
   });
 
+  it("opens on this month (raised in it): the counts add up, and All months is one choice away", () => {
+    mount();
+    expect(window.location.search).toBe(""); // a clean address
+    expect(text(q("filter-month"))).toContain("November");
+    expect(text(q("filter-basis"))).toContain("Raised in the month");
+    // November: the two waiting ones (the approved loan was raised in October)
+    const count = (id: string) => Number(text(q(`count-${id}-value`)));
+    expect([count("received"), count("approved"), count("rejected"), count("pending")]).toEqual([2, 0, 0, 2]);
+    expect(text(q("stat-pending-value"))).toBe("₹7,000"); // the money cards follow the same month
+    act(() => root!.unmount());
+    host!.remove();
+    mount("?month=all");
+    expect([count("received"), count("approved"), count("rejected"), count("pending")]).toEqual([3, 1, 0, 2]);
+    expect(count("approved") + count("rejected") + count("pending")).toBe(count("received"));
+    expect(text(q("count-approved"))).toContain("1 active · 0 completed");
+  });
+
+  it("a count card sets the status: Approved = active + completed, Received = all", () => {
+    mount("?month=all");
+    expect(rowIds()).toEqual(["advance-row-2", "advance-row-1"]);
+    click(q("count-approved"));
+    expect(window.location.search).toContain("status=approved_all");
+    expect(rowIds()).toEqual(["advance-row-3"]);
+    expect(q("count-approved")!.getAttribute("aria-pressed")).toBe("true");
+    click(q("count-received"));
+    expect(window.location.search).toContain("status=all");
+    expect(rowIds()).toHaveLength(3);
+    click(q("count-rejected"));
+    expect(rowIds()).toEqual([]);
+    click(q("count-pending"));
+    expect(window.location.search).not.toContain("status="); // pending is the default
+    expect(rowIds()).toEqual(["advance-row-2", "advance-row-1"]);
+  });
+
   it("Term Loan lists only term loans, keeps the tab in the address, and Salary Advance only the others", () => {
-    mount("?status=all");
+    mount("?status=all&month=all");
     click(q("settlement-tab-loan"));
     expect(window.location.search).toContain("tab=loan");
     expect(rowIds()).toEqual(["advance-row-2"]); // a new tab opens on its own filters: pending
     expect(q("filter-type")).toBeNull();
-    expect(text(q("stat-active"))).toContain("Active term loans");
+    expect(text(q("stat-active"))).toContain("active term loans");
     click(q("settlement-tab-advance"));
     expect(window.location.search).toContain("tab=advance");
     expect(rowIds()).toEqual(["advance-row-1"]);
@@ -341,11 +382,11 @@ describe("the Settlement page", () => {
     host!.remove();
     mount("?status=all&month=11&year=2026&basis=applied");
     expect(rowIds()).toEqual(["advance-row-2", "advance-row-1"]);
-    expect(text(q("settlement-figures-scope"))).toContain("Figures for November 2026 (applied)");
+    expect(text(q("settlement-figures-scope"))).toContain("Figures for November 2026 (raised in it)");
   });
 
   it("shows requested and approved apart, and HR's remark, in the list", () => {
-    mount("?status=approved");
+    mount("?status=approved&month=10&year=2026");
     expect(text(q("advance-asked-3"))).toBe("of ₹1,000 asked");
     expect(text(q("advance-row-3"))).toContain("₹700");
     expect(text(q("advance-remark-3"))).toContain("Budget limit this month");
@@ -413,7 +454,7 @@ describe("the Settlement page", () => {
   });
 
   it("the detail sheet shows requested and approved, HR's remark and the history", async () => {
-    mount("?status=approved");
+    mount("?status=approved&month=all");
     click(q("advance-row-3"));
     await flush();
     const sheet = q("advance-detail");
@@ -457,6 +498,9 @@ describe("the Settlement page", () => {
     expect(text(q("advance-earned-fixed"))).toBe("₹26,000");
     expect(text(q("advance-earned-days"))).toBe("14.5");
     expect(text(q("advance-earned-amount"))).toBe("₹16,120");
+    expect(text(q("advance-earnings"))).toContain("Working days14.5");
+    expect(text(q("advance-earnings"))).toContain("Earned salary₹16,120");
+    expect(text(q("advance-earnings"))).toContain("Limit (50% of earned salary)₹8,060");
     expect(text(q("advance-limit"))).toBe("₹8,060");
 
     type(q("advance-amount"), "8060");
@@ -508,7 +552,7 @@ describe("the Settlement page", () => {
   });
 
   it("only a waiting advance has Delete: in the list and in the detail sheet", async () => {
-    mount("?status=all");
+    mount("?status=all&month=all");
     expect(q("advance-delete-1")).not.toBeNull();
     expect(q("advance-card-delete-1")).not.toBeNull();
     expect(q("advance-delete-3")).toBeNull(); // approved
@@ -557,19 +601,119 @@ describe("the Settlement page", () => {
     const earned = text(q("advance-earned"));
     expect(earned).toContain("Earned in 1st–20th November 2026");
     expect(earned).toContain("Fixed salary₹26,000");
-    expect(earned).toContain("Working days (present shifts)14.5");
-    expect(earned).toContain("Working salary (earned amount)₹16,120");
-    expect(earned).toContain("50% limit₹8,060");
+    expect(earned).toContain("Working days14.5");
+    expect(earned).toContain("Earned salary₹16,120");
+    expect(earned).toContain("Limit (50% of earned salary)₹8,060");
+    expect(earned).not.toMatch(/working salary/i);
     expect(text(q("advance-limit-remark"))).toContain("Medical emergency");
 
     click(q("detail-approve"));
-    expect(text(q("decision-earned"))).toContain("Earned 1st–20th November 2026: ₹16,120");
-    expect(text(q("decision-earned"))).toContain("Salary Advance limit (50%): ₹8,060");
+    expect(text(q("decision-earned"))).toBe(
+      "Earned in 1st–20th November 2026: Fixed salary ₹26,000 · Working days 14.5 · Earned salary ₹16,120 · Limit (50% of earned salary) ₹8,060.",
+    );
     expect(text(q("decision-limit-remark"))).toContain("Medical emergency");
     expect(text(q("decision-over-limit"))).toBe(
       "₹9,000 is ₹940 above the earned limit of ₹8,060. You can still approve it.",
     );
     type(q("decision-amount"), "8000");
     expect(q("decision-over-limit")).toBeNull();
+  });
+
+  // ───────────────────── 2026-11-26 (round 2): the report dialog and the bank file ─────────────────────
+
+  const checked = (key: string) => q(`report-column-${key}`)!.getAttribute("data-state") === "checked";
+
+  it("Export opens the report: the page's month and status, the owner's 12 columns ticked, extras not", async () => {
+    window.localStorage.removeItem("uktex.settlement.reportColumns.v2");
+    mount("?status=all&month=all&q=Meena");
+    click(q("settlement-export"));
+    expect(q("report-dialog")).not.toBeNull();
+    expect(text(q("report-summary"))).toContain("1 advance · All types · All statuses · All months · 12 columns");
+    expect(text(q("report-from-page"))).toContain('Search: "Meena"');
+    for (const key of ["sno", "code", "employee", "type", "approved", "remarks"]) expect(checked(key)).toBe(true);
+    for (const key of ["purpose", "branch", "status", "emi", "limitRemark"]) expect(checked(key)).toBe(false);
+
+    // tick two extras: they go after the owner's 12, in the fixed order, and this browser remembers them
+    click(q("report-column-status"));
+    click(q("report-column-purpose"));
+    expect(JSON.parse(window.localStorage.getItem("uktex.settlement.reportColumns.v2")!)).toEqual([
+      "sno",
+      "code",
+      "employee",
+      "department",
+      "type",
+      "fixedSalary",
+      "workingDays",
+      "earned",
+      "requested",
+      "limit",
+      "approved",
+      "remarks",
+      "purpose",
+      "status",
+    ]);
+    click(q("report-xlsx"));
+    await flush();
+    expect(h.excel).toHaveBeenCalledTimes(1);
+    const table = h.excel.mock.calls[0][0].table;
+    expect(table.title).toBe("Settlement - All types - All statuses - All months");
+    expect(table.columns.map((c: { header: string }) => c.header).slice(-3)).toEqual(["Remarks", "Purpose", "Status"]);
+    expect(table.rows).toHaveLength(1);
+    expect(table.rows[0][2]).toBe("Meena Iyer");
+    expect(text(q("report-saved"))).toContain("Settlement_All types_All statuses_All months.xlsx");
+  });
+
+  it("the report remembers the last columns, resets to the default, and keeps at least one", async () => {
+    window.localStorage.setItem("uktex.settlement.reportColumns.v2", JSON.stringify(["employee", "purpose"]));
+    mount("?month=all");
+    click(q("settlement-export"));
+    expect(checked("purpose")).toBe(true);
+    expect(checked("sno")).toBe(false);
+    click(q("report-column-purpose"));
+    expect(checked("employee")).toBe(true);
+    expect((q("report-column-employee") as HTMLButtonElement).disabled).toBe(true); // the last one stays
+    click(q("report-columns-reset"));
+    expect(checked("sno")).toBe(true);
+    expect(checked("purpose")).toBe(false);
+    expect(text(q("report-summary"))).toContain("12 columns");
+    click(q("report-pdf"));
+    await flush();
+    expect(h.pdf).toHaveBeenCalledTimes(1);
+    expect(h.pdf.mock.calls[0][0].table.columns).toHaveLength(12);
+    window.localStorage.removeItem("uktex.settlement.reportColumns.v2");
+  });
+
+  it("the report on the Term Loan tab starts on Term Loan and the page's status", () => {
+    mount("?tab=loan&month=all&status=approved");
+    click(q("settlement-export"));
+    expect(text(q("report-summary"))).toContain("1 term loan · Term Loan · Active · All months");
+    expect(text(q("report-type"))).toContain("Term Loan");
+  });
+
+  it("Export Bank File is off with a reason when the month has nothing approved", () => {
+    mount(); // November: only waiting ones
+    expect((q("settlement-bank-file") as HTMLButtonElement).disabled).toBe(true);
+    expect(text(q("settlement-bank-file-why"))).toBe("No approved advances in November 2026 to pay.");
+  });
+
+  it("the bank file pays the month's approved ones at the approved amount, after a confirm naming who has no bank details", async () => {
+    advances[2].bankAccount = "";
+    advances[2].bankIfsc = "";
+    advances[0].bankAccount = "1234";
+    advances[0].bankIfsc = "SBIN0001";
+    mount("?month=all&status=rejected"); // the status pill does not matter
+    click(q("settlement-bank-file"));
+    expect(text(q("bank-file-summary"))).toContain("1 advance approved (active or completed), ₹700 in all");
+    expect(text(q("bank-file-missing"))).toContain("Meena Iyer (L2): no account number, no IFSC");
+    click(q("bank-file-confirm"));
+    await flush();
+    expect(h.bank).toHaveBeenCalledTimes(1);
+    const [lines, sheet, name] = h.bank.mock.calls[0];
+    expect(lines).toEqual([
+      { employeeCode: "L2", employeeName: "Meena Iyer", bankAccount: "", bankIfsc: "", bankName: "", amount: 700 },
+    ]);
+    expect(sheet).toBe("Overview All months");
+    expect(name).toBe("Settlement_Bank_File_Overview_All_months.xlsx");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Bank file downloaded" }));
   });
 });

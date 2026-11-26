@@ -268,13 +268,13 @@ export default function DetailSheet({
                 </p>
                 <dl className="space-y-1.5 rounded-xl border border-gray-100 bg-white p-3">
                   <Detail label="Fixed salary" value={formatMoney(adv.earnings.fixedSalary)} />
-                  <Detail label="Working days (present shifts)" value={formatDays(adv.earnings.workingDays)} />
-                  <Detail
-                    label="Working salary (earned amount)"
-                    value={formatMoney(adv.earnings.workingSalary ?? adv.earnings.earnedAmount)}
-                  />
+                  <Detail label="Working days" value={formatDays(adv.earnings.workingDays)} />
+                  <Detail label="Earned salary" value={formatMoney(adv.earnings.earnedAmount)} />
                   {adv.earnings.limit != null && (
-                    <Detail label={`${adv.earnings.percent}% limit`} value={formatMoney(adv.earnings.limit)} />
+                    <Detail
+                      label={`Limit (${adv.earnings.percent}% of earned salary)`}
+                      value={formatMoney(adv.earnings.limit)}
+                    />
                   )}
                 </dl>
               </section>

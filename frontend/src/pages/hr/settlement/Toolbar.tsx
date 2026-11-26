@@ -6,10 +6,13 @@ import { Input } from "@/components/ui/input";
 import { PillTabs } from "@/components/ui/pill-tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
+  ALL_MONTHS,
   BASIS_OPTIONS,
   DEFAULT_SORT,
   SORT_OPTIONS,
+  currentPeriod,
   filtersActive,
+  isDefaultPeriod,
   parseSort,
   sortValue,
   statusCounts,
@@ -35,13 +38,12 @@ type Props = {
   years: number[];
   onPeriod: (next: Period) => void;
   onBasis: (next: MonthBasis) => void;
-  /** Clears the filters, the sort and the month. */
+  /** Clears the filters and the sort, and goes back to this month. */
   onClear: () => void;
   shown: number;
 };
 
 const TRIGGER = "h-10";
-const ALL_MONTHS = "all";
 
 /** The month, search, filters and sorting for one tab's list, with how many match. */
 export default function Toolbar({
@@ -73,9 +75,10 @@ export default function Toolbar({
     );
   const departments = departmentsFor(filters.employeeType);
   const problem = rangeProblem(filters.from, filters.to);
-  const active = filtersActive(filters) || period !== null || sortValue(sort) !== sortValue(DEFAULT_SORT);
+  const active =
+    filtersActive(filters) || !isDefaultPeriod(period, basis) || sortValue(sort) !== sortValue(DEFAULT_SORT);
   const overview = tab === "overview";
-  const thisYear = new Date().getFullYear();
+  const thisYear = currentPeriod().year;
 
   return (
     <div className="space-y-3 rounded-2xl border bg-white p-3" data-testid="settlement-toolbar">
@@ -115,7 +118,7 @@ export default function Toolbar({
         </Select>
       </div>
 
-      {/* the month: when the advance was applied, decided or is deducted (any of them by default) */}
+      {/* the month (this month by default): when the advance was raised (the default), decided, deducted, or any of them */}
       <div className="grid grid-cols-2 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,0.7fr)_minmax(0,1.4fr)] xl:max-w-3xl">
         <Select
           value={period ? String(period.month) : ALL_MONTHS}
@@ -269,6 +272,7 @@ export default function Toolbar({
             size="sm"
             items={[
               { value: "pending", label: "Pending approval", count: counts.pending },
+              { value: "approved_all", label: "Approved", count: counts.approved_all, color: "#16a34a" },
               { value: "approved", label: "Active", count: counts.approved },
               { value: "closed", label: "Completed", count: counts.closed },
               { value: "rejected", label: "Rejected", count: counts.rejected, color: "#dc2626" },

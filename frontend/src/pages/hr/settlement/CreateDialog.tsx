@@ -108,19 +108,11 @@ function EarningsPanel({
         {e ? (
           <dl className="space-y-1">
             <Figure label="Fixed salary" value={formatMoney(e.fixedSalary)} testId="advance-earned-fixed" />
-            <Figure
-              label={`Working days (1st–${e.throughDay}th, present shifts)`}
-              value={formatDays(e.workingDays)}
-              testId="advance-earned-days"
-            />
-            <Figure
-              label={`Earned 1st–${e.throughDay}th`}
-              value={formatMoney(e.earnedAmount)}
-              testId="advance-earned-amount"
-            />
+            <Figure label="Working days" value={formatDays(e.workingDays)} testId="advance-earned-days" />
+            <Figure label="Earned salary" value={formatMoney(e.earnedAmount)} testId="advance-earned-amount" />
             {!term && (
               <Figure
-                label={`Salary Advance limit (${e.percent}%)`}
+                label={`Limit (${e.percent}% of earned salary)`}
                 value={formatMoney(e.limit)}
                 testId="advance-limit"
               />

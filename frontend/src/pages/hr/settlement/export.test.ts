@@ -51,7 +51,7 @@ const row = (over: Partial<SettlementRow>): SettlementRow => ({
 const state = (over: Partial<PageState> = {}): PageState => ({
   tab: "loan",
   period: { month: 11, year: 2026 },
-  basis: "any",
+  basis: "applied",
   filters: { ...NO_FILTERS, status: "approved" },
   sort: DEFAULT_SORT,
   ...over,
@@ -92,11 +92,11 @@ describe("the Settlement workbook", () => {
       "Employee",
       "Department",
       "Type",
-      "Requested Amount",
       "Fixed Salary",
-      "Working Salary",
       "Working Days",
-      "Earned Amount",
+      "Earned Salary",
+      "Requested Amount",
+      "Limit",
       "Approved Amount",
       "Remarks",
     ]);
@@ -107,19 +107,22 @@ describe("the Settlement workbook", () => {
     expect(ws.getCell(6, col("Type")).value).toBe("Term Loan");
     expect(ws.getCell(6, col("Requested Amount")).value).toBe(1000);
     expect(ws.getCell(6, col("Fixed Salary")).value).toBe(26000);
-    expect(ws.getCell(6, col("Working Salary")).value).toBe(16120.5);
     expect(ws.getCell(6, col("Working Days")).value).toBe(14.5);
-    expect(ws.getCell(6, col("Earned Amount")).value).toBe(16120.5);
+    expect(ws.getCell(6, col("Earned Salary")).value).toBe(16120.5);
+    expect(ws.getCell(6, col("Limit")).value).toBe(8060);
+    expect(ws.getCell(6, col("Limit")).numFmt).toBe("#,##0.00");
     expect(ws.getCell(6, col("Approved Amount")).value).toBe(700);
     expect(ws.getCell(6, col("Approved Amount")).numFmt).toBe("#,##0.00");
     expect(ws.getCell(6, col("Remarks")).value).toBeNull(); // always empty
     // a production employee: blank salary figures
     expect(ws.getCell(7, col("Fixed Salary")).value).toBeNull();
     expect(ws.getCell(7, col("Working Days")).value).toBeNull();
+    expect(ws.getCell(7, col("Limit")).value).toBeNull();
     expect(ws.getCell(8, col("Employee")).value).toBe("Total (2 term loans)");
     expect(ws.getCell(8, col("Requested Amount")).value).toBe(3000);
     expect(ws.getCell(8, col("Fixed Salary")).value).toBe(26000);
-    expect(ws.getCell(8, col("Earned Amount")).value).toBe(16120.5);
+    expect(ws.getCell(8, col("Earned Salary")).value).toBe(16120.5);
+    expect(ws.getCell(8, col("Limit")).value).toBe(8060);
     expect(ws.getCell(8, col("Approved Amount")).value).toBe(2700);
     expect(ws.getCell(8, col("Employee")).font?.bold).toBe(true);
   });
@@ -131,7 +134,7 @@ describe("the Settlement workbook", () => {
       buildExport([row({})], state({ tab: "overview", period: null, filters: NO_FILTERS }), 1),
       "pdf",
     );
-    expect(all).toMatch(/^Settlement_Overview_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
+    expect(all).toMatch(/^Settlement_All_types_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
   });
 });
 
@@ -158,7 +161,7 @@ describe("the Settlement PDF", () => {
   it("draws the title with the status, the rows, the earned figures and the totals on an A4 landscape page", async () => {
     const doc = await buildSettlementPdf(input([row({})], state({ tab: "overview" })));
     const text = drawn(doc).join(" | ");
-    expect(text).toContain("Settlement - Overview - Active - November 2026");
+    expect(text).toContain("Settlement - All types - Active - November 2026");
     expect(text).toContain("Asha Kumar");
     expect(text).toContain("16,120.5");
     expect(text).not.toContain("Budget limit this"); // HR's decision remark is not a column any more

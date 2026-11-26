@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { hasBothCategories, namedOrgOptions } from "@/lib/departments";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import {
@@ -17,8 +17,28 @@ import {
   approvedOf,
   NO_FILTERS,
   EXPORT_STATUS_OPTIONS,
+  BASIS_OPTIONS,
+  COLUMN_CHOICE_KEY,
+  DEFAULT_COLUMN_KEYS,
+  EXPORT_COLUMNS,
+  EXTRA_COLUMN_KEYS,
   SETTLEMENT_TABS,
   TAB_NOUN,
+  bankFileLines,
+  bankFileName,
+  bankFileRows,
+  bankFileSheet,
+  bankFileTotal,
+  cleanColumnChoice,
+  currentPeriod,
+  isDefaultPeriod,
+  loadColumnChoice,
+  missingBankDetails,
+  periodToUrl,
+  reportDefaults,
+  reportState,
+  saveColumnChoice,
+  statusMatches,
   TYPE_LABEL,
   buildExport,
   canDelete,
@@ -118,7 +138,7 @@ const edit = (over: Partial<ApprovalEdit> = {}): ApprovalEdit => ({
 const page = (over: Partial<PageState> = {}): PageState => ({
   tab: "overview",
   period: null,
-  basis: "any",
+  basis: "applied",
   filters: NO_FILTERS,
   sort: DEFAULT_SORT,
   ...over,
@@ -268,7 +288,7 @@ describe("filters", () => {
 
   it("the status counts follow the other filters but not the status itself", () => {
     const counts = statusCounts(rows, { ...DEFAULT_FILTERS, department: "Stitching" });
-    expect(counts).toEqual({ all: 2, pending: 1, approved: 0, rejected: 0, closed: 1 });
+    expect(counts).toEqual({ all: 2, pending: 1, approved: 0, rejected: 0, closed: 1, approved_all: 1 });
   });
 
   it("knows when a filter is on; the page opens on the pending approvals", () => {
@@ -527,9 +547,9 @@ describe("export and statement", () => {
     expect(at("Approved Amount")).toBe(12000);
     // a production employee: no earned salary figures, so blank cells
     expect(at("Fixed Salary")).toBe("");
-    expect(at("Working Salary")).toBe("");
     expect(at("Working Days")).toBe("");
-    expect(at("Earned Amount")).toBe("");
+    expect(at("Earned Salary")).toBe("");
+    expect(at("Limit")).toBe("");
     expect(at("Remarks")).toBe("");
   });
 
@@ -555,8 +575,9 @@ describe("export and statement", () => {
       [],
     );
     expect(html).toContain("Earned in 1st–20th November 2026");
-    expect(html).toContain("<tr><th>Working days (present shifts)</th><td>14.5</td></tr>");
-    expect(html).toContain("<tr><th>50% limit</th><td>₹8,060</td></tr>");
+    expect(html).toContain("<tr><th>Working days</th><td>14.5</td></tr>");
+    expect(html).toContain("<tr><th>Earned salary</th><td>₹16,120</td></tr>");
+    expect(html).toContain("<tr><th>Limit (50% of earned salary)</th><td>₹8,060</td></tr>");
     expect(html).toContain("<tr><th>Reason for going over the limit</th><td>Medical emergency</td></tr>");
     expect(html).toContain("Salary Advance");
   });
@@ -743,17 +764,46 @@ describe("the month filter", () => {
   });
   const month = (m: number, y = 2026) => ({ month: m, year: y });
 
-  it("reads the month and year from the address; no month is All months", () => {
-    expect(parsePeriod("11", "2026")).toEqual({ month: 11, year: 2026 });
-    expect(parsePeriod("", "2026")).toBeNull();
-    expect(parsePeriod("13", "2026")).toBeNull();
-    expect(parsePeriod("0", "2026")).toBeNull();
-    expect(parsePeriod("3", "", new Date(2027, 0, 5))).toEqual({ month: 3, year: 2027 });
-    expect(parsePeriod("3", "99", new Date(2027, 0, 5))).toEqual({ month: 3, year: 2027 });
+  it("reads the month and year from the address; no month is this month, 'all' is All months", () => {
+    const now = new Date("2026-11-20T10:00:00Z");
+    expect(parsePeriod("11", "2026", now)).toEqual({ month: 11, year: 2026 });
+    expect(parsePeriod("4", "2025", now)).toEqual({ month: 4, year: 2025 }); // a deep link to an earlier month
+    expect(parsePeriod("", "", now)).toEqual({ month: 11, year: 2026 });
+    expect(parsePeriod("13", "2026", now)).toEqual({ month: 11, year: 2026 });
+    expect(parsePeriod("0", "2026", now)).toEqual({ month: 11, year: 2026 });
+    expect(parsePeriod("all", "", now)).toBeNull();
+    expect(parsePeriod("all", "2026", now)).toBeNull();
+    expect(parsePeriod("3", "", new Date(2027, 0, 5, 12))).toEqual({ month: 3, year: 2027 });
+    expect(parsePeriod("3", "99", new Date(2027, 0, 5, 12))).toEqual({ month: 3, year: 2027 });
     expect(periodLabel({ month: 11, year: 2026 })).toBe("November 2026");
     expect(periodLabel(null)).toBe("All months");
+    // the page opens on requests RAISED in the month; the other bases stay
+    expect(parseBasis("")).toBe("applied");
+    expect(parseBasis("x")).toBe("applied");
+    expect(parseBasis("any")).toBe("any");
     expect(parseBasis("deducted")).toBe("deducted");
-    expect(parseBasis("x")).toBe("any");
+    expect(SETTLEMENT_URL_DEFAULTS.month).toBe("");
+    expect(SETTLEMENT_URL_DEFAULTS.basis).toBe("applied");
+    expect(BASIS_OPTIONS[0]).toEqual({ value: "applied", label: "Raised in the month" });
+  });
+
+  it("this month is the factory's (India) month, whatever zone the browser is in", () => {
+    // 30 Nov 20:00 UTC is already 1 Dec 01:30 in India
+    expect(currentPeriod(new Date("2026-11-30T20:00:00Z"))).toEqual({ month: 12, year: 2026 });
+    expect(currentPeriod(new Date("2026-12-31T19:00:00Z"))).toEqual({ month: 1, year: 2027 });
+    expect(currentPeriod(new Date("2026-11-30T17:00:00Z"))).toEqual({ month: 11, year: 2026 });
+  });
+
+  it("writes the month to the address: nothing for this month, 'all' for All months, a deep link otherwise", () => {
+    const now = new Date("2026-11-20T10:00:00Z");
+    expect(periodToUrl({ month: 11, year: 2026 }, now)).toEqual({ month: "", year: "" });
+    expect(periodToUrl(null, now)).toEqual({ month: "all", year: "" });
+    expect(periodToUrl({ month: 10, year: 2026 }, now)).toEqual({ month: "10", year: "2026" });
+    expect(parsePeriod(periodToUrl({ month: 10, year: 2026 }, now).month, "2026", now)).toEqual(month(10));
+    expect(isDefaultPeriod({ month: 11, year: 2026 }, "applied", now)).toBe(true);
+    expect(isDefaultPeriod({ month: 11, year: 2026 }, "any", now)).toBe(false);
+    expect(isDefaultPeriod({ month: 10, year: 2026 }, "applied", now)).toBe(false);
+    expect(isDefaultPeriod(null, "applied", now)).toBe(false);
   });
 
   it("puts an advance in the month it was applied, decided or deducted in, as the basis says", () => {
@@ -1026,11 +1076,11 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
       "Employee",
       "Department",
       "Type",
-      "Requested Amount",
       "Fixed Salary",
-      "Working Salary",
       "Working Days",
-      "Earned Amount",
+      "Earned Salary",
+      "Requested Amount",
+      "Limit",
       "Approved Amount",
       "Remarks",
     ];
@@ -1043,7 +1093,9 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
       exportColumns()
         .filter((c) => c.money)
         .map((c) => c.header),
-    ).toEqual(["Requested Amount", "Fixed Salary", "Working Salary", "Earned Amount", "Approved Amount"]);
+    ).toEqual(["Fixed Salary", "Earned Salary", "Requested Amount", "Limit", "Approved Amount"]);
+    // "Working Salary" (the Earned Salary again) is not offered any more
+    expect(EXPORT_COLUMNS.map((c) => c.header)).not.toContain("Working Salary");
   });
 
   it("numbers the rows, writes the earned figures, leaves missing ones and Remarks blank, and totals the money", () => {
@@ -1056,9 +1108,10 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
     expect(t.rows.map((r) => r[col("S.No")])).toEqual([1, 2, 3, 4]);
     expect(t.rows.map((r) => r[col("Employee Code")])).toEqual(["L1", "L2", "A1", "A2"]);
     expect(t.rows.map((r) => r[col("Type")])).toEqual(["Term Loan", "Term Loan", "Salary Advance", "Salary Advance"]);
-    expect(t.rows[0].slice(5)).toEqual([1000, 26000, 16120, 14.5, 16120, 700, ""]);
-    // waiting: requested and the fixed salary kept at the request, nothing earned yet, nothing approved
-    expect(t.rows[1].slice(5)).toEqual([5000, 18000, "", "", "", "", ""]);
+    // Fixed Salary, Working Days, Earned Salary, Requested Amount, Limit (50 % of earned), Approved Amount, Remarks
+    expect(t.rows[0].slice(5)).toEqual([26000, 14.5, 16120, 1000, 8060, 700, ""]);
+    // waiting: the fixed salary kept at the request and what was asked for; nothing earned yet, no limit, nothing approved
+    expect(t.rows[1].slice(5)).toEqual([18000, "", "", 5000, "", "", ""]);
     // rejected: nothing approved
     expect(t.rows[2][col("Approved Amount")]).toBe("");
     // completed: the approved amount
@@ -1069,8 +1122,8 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
     expect(t.totals[col("Working Days")]).toBe("");
     expect(t.totals[col("Requested Amount")]).toBe(13000);
     expect(t.totals[col("Fixed Salary")]).toBe(74000);
-    expect(t.totals[col("Working Salary")]).toBe(36120);
-    expect(t.totals[col("Earned Amount")]).toBe(36120);
+    expect(t.totals[col("Earned Salary")]).toBe(36120);
+    expect(t.totals[col("Limit")]).toBe(18060);
     expect(t.totals[col("Approved Amount")]).toBe(4700);
     expect(t.totals).toHaveLength(12);
   });
@@ -1078,6 +1131,7 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
   it("puts the status in the title, the subtitle and the file name", () => {
     const loanPage = page({ tab: "loan", period: { month: 11, year: 2026 } });
     const all = buildExport([loanRow, pendingLoan], loanPage, 3);
+    expect(buildExport([loanRow], page(), 1).title).toBe("Settlement - All types - All statuses - All months");
     expect(all.title).toBe("Settlement - Term Loan - All statuses - November 2026");
     expect(all.subtitle).toBe("2 of 3 term loans · Status: All statuses");
     expect(all.fileStem).toBe("Settlement_Term Loan_All statuses_November 2026");
@@ -1090,14 +1144,16 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
     expect(advance.subtitle).toBe("1 of 1 salary advance · Status: Rejected");
   });
 
-  it("offers All, Pending, Active, Completed and Rejected", () => {
+  it("offers All, Pending, Active, Completed, Rejected and Approved (active + completed)", () => {
     expect(EXPORT_STATUS_OPTIONS.map((o) => [o.value, o.label])).toEqual([
       ["all", "All"],
       ["pending", "Pending"],
       ["approved", "Active"],
       ["closed", "Completed"],
       ["rejected", "Rejected"],
+      ["approved_all", "Approved"],
     ]);
+    expect(exportStatusLabel("approved_all")).toBe("Approved");
     expect(exportStatusLabel("all")).toBe("All statuses");
     expect(exportStatusLabel("approved")).toBe("Active");
     expect(exportStatusLabel("closed")).toBe("Completed");
@@ -1257,5 +1313,329 @@ describe("the Salary Advance limit in the New dialog (owner 2026-11-26)", () => 
 
   it("names the days the earned salary covers", () => {
     expect(earnedPeriodLabel({ month: 11, year: 2026, throughDay: 20 })).toBe("1st–20th November 2026");
+  });
+});
+
+// ───────────────────── 2026-11-26 (round 2): month by default, counts, the report, the bank file ─────────────────────
+
+describe("the count cards (owner 2026-11-26)", () => {
+  const rows = [
+    adv({ status: "pending", employeeDepartment: "Stitching" }),
+    adv({ status: "pending", employeeDepartment: "Cutting" }),
+    adv({ status: "approved", employeeDepartment: "Stitching" }),
+    adv({ status: "closed", employeeDepartment: "Stitching" }),
+    adv({ status: "rejected", employeeDepartment: "Stitching" }),
+  ];
+
+  it("received = approved (active + completed) + rejected + pending, whatever the status pill", () => {
+    for (const status of ["all", "pending", "approved", "closed", "rejected", "approved_all"] as const) {
+      const c = statusCounts(rows, { ...NO_FILTERS, status });
+      expect(c).toMatchObject({ all: 5, pending: 2, approved: 1, closed: 1, rejected: 1, approved_all: 2 });
+      expect(c.approved_all + c.rejected + c.pending).toBe(c.all);
+    }
+    // the other filters do narrow them, and they still add up
+    const c = statusCounts(rows, { ...NO_FILTERS, department: "Stitching" });
+    expect(c).toMatchObject({ all: 4, pending: 1, approved_all: 2, rejected: 1 });
+    expect(c.approved_all + c.rejected + c.pending).toBe(c.all);
+  });
+
+  it("Approved lists the active and the completed ones", () => {
+    expect(statusMatches("approved", "approved_all")).toBe(true);
+    expect(statusMatches("closed", "approved_all")).toBe(true);
+    expect(statusMatches("pending", "approved_all")).toBe(false);
+    expect(statusMatches("rejected", "approved_all")).toBe(false);
+    expect(filterRows(rows, { ...NO_FILTERS, status: "approved_all" }).map((a) => a.status)).toEqual([
+      "approved",
+      "closed",
+    ]);
+    expect(filtersFromUrl({ status: "approved_all" }).status).toBe("approved_all");
+    expect(describeScope(page({ filters: { ...NO_FILTERS, status: "approved_all" } }))).toBe(
+      "Status: Approved (active + completed)",
+    );
+  });
+
+  it("the page opens on this month's requests: an earlier one is not in the counts", () => {
+    const now = new Date("2026-11-20T10:00:00Z");
+    const nov = adv({ createdAt: "2026-11-03T05:00:00Z", status: "pending" });
+    const oct = adv({ createdAt: "2026-10-10T05:00:00Z", status: "approved" });
+    const s = page({ period: parsePeriod("", "", now), basis: parseBasis(""), filters: NO_FILTERS });
+    const v = pageView([nov, oct], s);
+    expect(v.periodRows).toEqual([nov]);
+    expect(statusCounts(v.periodRows, v.filters)).toMatchObject({ all: 1, pending: 1, approved_all: 0 });
+    // All months is still there
+    expect(pageView([nov, oct], { ...s, period: parsePeriod("all", "", now) }).periodRows).toHaveLength(2);
+  });
+});
+
+describe("the report dialog (owner 2026-11-26)", () => {
+  it("has the owner's 12 columns ticked by default, then the 15 extras in a fixed order", () => {
+    expect(EXPORT_COLUMNS.map((c) => c.header)).toEqual([
+      "S.No",
+      "Employee Code",
+      "Employee",
+      "Department",
+      "Type",
+      "Fixed Salary",
+      "Working Days",
+      "Earned Salary",
+      "Requested Amount",
+      "Limit",
+      "Approved Amount",
+      "Remarks",
+      "Purpose",
+      "Branch",
+      "Designation",
+      "Status",
+      "EMI",
+      "Months",
+      "Deduction from",
+      "Repaid",
+      "Outstanding",
+      "Decided by",
+      "Decided on",
+      "Decision remark",
+      "Applied on",
+      "Applied by",
+      "Over-limit reason",
+    ]);
+    expect(DEFAULT_COLUMN_KEYS).toHaveLength(12);
+    expect(EXTRA_COLUMN_KEYS).toHaveLength(15);
+    expect(exportColumns().map((c) => c.key)).toEqual(DEFAULT_COLUMN_KEYS);
+  });
+
+  it("writes the chosen columns in the fixed order whatever order they were ticked in, totalling the ticked money", () => {
+    const loan = adv({
+      advanceType: "term",
+      status: "approved",
+      amount: 6000,
+      requestedAmount: 6000,
+      emiAmount: 2000,
+      repaymentMonths: 3,
+      repaymentStartMonth: 12,
+      repaymentStartYear: 2026,
+      totalRepaid: 2000,
+      outstanding: 4000,
+      employeeBranch: "Tiruppur",
+      decisionRemark: "OK",
+      limitRemark: "",
+    });
+    const t = buildExport([loan], page(), 1, ["outstanding", "employee", "emi", "months", "status", "code"]);
+    expect(t.columns.map((c) => c.header)).toEqual([
+      "Employee Code",
+      "Employee",
+      "Status",
+      "EMI",
+      "Months",
+      "Outstanding",
+    ]);
+    expect(t.rows[0]).toEqual(["E001", "Asha Kumar", "Active", 2000, 3, 4000]);
+    expect(t.totals).toEqual(["", "Total (1 advance)", "", 2000, "", 4000]);
+    // without Employee the label goes in the first text column; with no money column there are no sums
+    const narrow = buildExport([loan], page(), 1, ["sno", "purpose"]);
+    expect(narrow.rows[0]).toEqual([1, "Medical"]);
+    expect(narrow.totals).toEqual(["", "Total (1 advance)"]);
+  });
+
+  it("the extras: waiting and rejected ones have nothing repaid, decided or outstanding; HR's reasons are kept", () => {
+    const keys = [
+      "status",
+      "repaid",
+      "outstanding",
+      "decidedBy",
+      "decisionRemark",
+      "appliedBy",
+      "limitRemark",
+      "start",
+    ];
+    const waiting = adv({ status: "pending", decisionRemark: "old", limitRemark: "Medical emergency" });
+    const t = buildExport([waiting], page(), 1, keys);
+    // the fixed order: Status, Deduction from, Repaid, Outstanding, Decided by, Decision remark, Applied by, Over-limit
+    expect(t.columns.map((c) => c.key)).toEqual([
+      "status",
+      "start",
+      "repaid",
+      "outstanding",
+      "decidedBy",
+      "decisionRemark",
+      "appliedBy",
+      "limitRemark",
+    ]);
+    expect(t.rows[0]).toEqual(["Pending approval", "", "", "", "", "", "HR", "Medical emergency"]);
+  });
+
+  it("starts from the page: month, basis, status, type (the tab's), department, branch, Staff / Production", () => {
+    const s = page({
+      tab: "loan",
+      period: { month: 10, year: 2026 },
+      basis: "applied",
+      filters: {
+        ...NO_FILTERS,
+        status: "rejected",
+        type: "general", // Overview's choice: the Term Loan tab ignores it
+        department: "staff|Accounts",
+        branch: "Erode",
+        employeeType: "staff",
+        query: "asha",
+      },
+    });
+    const r = reportDefaults(s, ["sno", "employee"]);
+    expect(r).toEqual({
+      period: { month: 10, year: 2026 },
+      basis: "applied",
+      status: "rejected",
+      type: "term",
+      department: "staff|Accounts",
+      branch: "Erode",
+      employeeType: "staff",
+      columns: ["sno", "employee"],
+    });
+    expect(reportDefaults(page({ tab: "overview", filters: { ...NO_FILTERS, type: "general" } })).type).toBe("general");
+    expect(reportDefaults(page({ tab: "advance" })).columns).toEqual([...DEFAULT_COLUMN_KEYS]);
+  });
+
+  it("the rows follow the dialog's month, status, type and filters, with the page's search text", () => {
+    const rows = [
+      adv({ employeeCode: "N1", advanceType: "term", status: "approved", createdAt: "2026-11-03T05:00:00Z" }),
+      adv({ employeeCode: "N2", advanceType: "general", status: "approved", createdAt: "2026-11-04T05:00:00Z" }),
+      adv({ employeeCode: "O1", advanceType: "term", status: "closed", createdAt: "2026-10-04T05:00:00Z" }),
+      adv({ employeeCode: "N3", advanceType: "term", status: "pending", createdAt: "2026-11-05T05:00:00Z" }),
+      adv({
+        employeeCode: "N4",
+        advanceType: "term",
+        status: "approved",
+        createdAt: "2026-11-06T05:00:00Z",
+        employeeName: "Ravi",
+      }),
+    ];
+    // the page: Overview, November, pending, searching "Asha"
+    const pageState = page({
+      period: { month: 11, year: 2026 },
+      basis: "applied",
+      filters: { ...NO_FILTERS, status: "pending", query: "Asha" },
+    });
+    const r = { ...reportDefaults(pageState), status: "approved_all" as const, type: "term" as const };
+    const st = reportState(pageState, r);
+    expect(st.tab).toBe("loan");
+    expect(st.filters.query).toBe("Asha");
+    expect(pageView(rows, st).shown.map((a) => a.employeeCode)).toEqual(["N1"]); // Ravi is not "Asha"
+    // All months picks up October's completed one too
+    const allMonths = reportState(pageState, { ...r, period: null });
+    expect(
+      pageView(rows, allMonths)
+        .shown.map((a) => a.employeeCode)
+        .sort(),
+    ).toEqual(["N1", "O1"]);
+    const v = pageView(rows, allMonths);
+    const t = buildExport(v.shown, allMonths, v.periodRows.length);
+    expect(t.title).toBe("Settlement - Term Loan - Approved - All months");
+    expect(t.subtitle).toBe('2 of 4 term loans · Status: Approved · Search: "Asha"');
+    expect(t.fileStem).toBe("Settlement_Term Loan_Approved_All months");
+  });
+
+  it("remembers the last column choice in this browser, and works without storage", () => {
+    window.localStorage.removeItem(COLUMN_CHOICE_KEY);
+    expect(loadColumnChoice()).toEqual([...DEFAULT_COLUMN_KEYS]);
+    saveColumnChoice(["purpose", "sno", "employee"]);
+    expect(loadColumnChoice()).toEqual(["sno", "employee", "purpose"]); // the fixed order
+    // a broken or emptied value falls back to the default
+    window.localStorage.setItem(COLUMN_CHOICE_KEY, "{not json");
+    expect(loadColumnChoice()).toEqual([...DEFAULT_COLUMN_KEYS]);
+    window.localStorage.setItem(COLUMN_CHOICE_KEY, JSON.stringify(["nonsense"]));
+    expect(loadColumnChoice()).toEqual([...DEFAULT_COLUMN_KEYS]);
+    expect(cleanColumnChoice("x")).toBeNull();
+    expect(cleanColumnChoice([])).toBeNull();
+    expect(cleanColumnChoice(["remarks", 3, "sno"])).toEqual(["sno", "remarks"]);
+    // storage that throws (a private window): no crash, the default
+    const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(loadColumnChoice()).toEqual([...DEFAULT_COLUMN_KEYS]);
+    expect(() => saveColumnChoice(["sno"])).not.toThrow();
+    get.mockRestore();
+    set.mockRestore();
+    window.localStorage.removeItem(COLUMN_CHOICE_KEY);
+  });
+});
+
+describe("the bank file (owner 2026-11-26)", () => {
+  const bank = { bankAccount: "1234567890", bankIfsc: "sbin0000001", bankName: "SBI" };
+  const rows = [
+    adv({
+      ...bank,
+      employeeCode: "A1",
+      advanceType: "general",
+      status: "approved",
+      amount: 4000,
+      requestedAmount: 5000,
+      createdAt: "2026-11-03T05:00:00Z",
+    }),
+    adv({
+      ...bank,
+      employeeCode: "A2",
+      advanceType: "general",
+      status: "closed",
+      amount: 3000.5,
+      createdAt: "2026-11-04T05:00:00Z",
+      employeeName: "Meena Iyer",
+      bankIfsc: "",
+    }),
+    adv({ ...bank, employeeCode: "A3", advanceType: "general", status: "pending", createdAt: "2026-11-05T05:00:00Z" }),
+    adv({ ...bank, employeeCode: "A4", advanceType: "general", status: "rejected", createdAt: "2026-11-05T05:00:00Z" }),
+    adv({ ...bank, employeeCode: "L1", advanceType: "term", status: "approved", createdAt: "2026-11-06T05:00:00Z" }),
+    adv({ ...bank, employeeCode: "O1", advanceType: "general", status: "approved", createdAt: "2026-10-06T05:00:00Z" }),
+  ];
+  const nov = page({ tab: "advance", period: { month: 11, year: 2026 }, basis: "applied" });
+
+  it("pays the month's approved and completed ones of the tab only, whatever the status pill says", () => {
+    for (const status of ["pending", "rejected", "all"] as const) {
+      const s = { ...nov, filters: { ...NO_FILTERS, status } };
+      expect(bankFileRows(rows, s).map((a) => a.employeeCode)).toEqual(["A2", "A1"]);
+    }
+    // Overview: the Term Loan too
+    expect(
+      bankFileRows(rows, { ...nov, tab: "overview" })
+        .map((a) => a.employeeCode)
+        .sort(),
+    ).toEqual(["A1", "A2", "L1"]);
+    // another month, All months
+    expect(bankFileRows(rows, { ...nov, period: { month: 10, year: 2026 } }).map((a) => a.employeeCode)).toEqual([
+      "O1",
+    ]);
+    expect(bankFileRows(rows, { ...nov, period: null })).toHaveLength(3);
+    // the page's other filters still apply
+    expect(
+      bankFileRows(rows, { ...nov, filters: { ...NO_FILTERS, query: "Meena" } }).map((a) => a.employeeCode),
+    ).toEqual(["A2"]);
+  });
+
+  it("pays the APPROVED amount, flags the missing bank details, and names the file after the tab and month", () => {
+    const pay = bankFileRows(rows, nov);
+    expect(bankFileLines(pay)).toEqual([
+      {
+        employeeCode: "A2",
+        employeeName: "Meena Iyer",
+        bankAccount: "1234567890",
+        bankIfsc: "",
+        bankName: "SBI",
+        amount: 3000.5,
+      },
+      {
+        employeeCode: "A1",
+        employeeName: "Asha Kumar",
+        bankAccount: "1234567890",
+        bankIfsc: "sbin0000001",
+        bankName: "SBI",
+        amount: 4000, // not the 5,000 asked for
+      },
+    ]);
+    expect(bankFileTotal(pay)).toBe(7000.5);
+    expect(missingBankDetails(pay).map((a) => a.employeeCode)).toEqual(["A2"]);
+    expect(missingBankDetails([adv({ bankAccount: null, bankIfsc: "X" })])).toHaveLength(1);
+    expect(bankFileName(nov)).toBe("Settlement_Bank_File_Salary_Advance_November_2026.xlsx");
+    expect(bankFileName({ ...nov, tab: "loan", period: null })).toBe("Settlement_Bank_File_Term_Loan_All_months.xlsx");
+    expect(bankFileSheet(nov)).toBe("Salary Advance Nov 2026");
   });
 });

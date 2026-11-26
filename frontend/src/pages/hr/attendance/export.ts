@@ -337,6 +337,10 @@ export async function renderTablePdf(opts: {
   rows: PdfRow[];
   notes?: string[];
   now: Date;
+  /** Drawn under the last row (the Settlement report's Final Summary and signatures), kept whole: on a page of its own
+   *  when it does not fit under the table. `height` in mm; `draw` gets the document, the top, the left edge and the width
+   *  of the table. */
+  tail?: { height: number; draw: (doc: jsPDF, top: number, left: number, width: number) => void };
 }): Promise<jsPDF> {
   const { jsPDF: JsPdf } = await import("jspdf");
   const doc = new JsPdf({ orientation: "landscape", unit: "mm", format: "a4" });
@@ -432,6 +436,19 @@ export async function renderTablePdf(opts: {
   }
   pages.push(current);
 
+  // the tail stays whole: under the table when it fits, else on one more page
+  const TAIL_GAP = 8;
+  const lastUsed =
+    (pages.length === 1 ? PAGE.top : PAGE.nextTop) + headH + current.reduce((sum, item) => sum + item.height, 0);
+  const tailOwnPage = !!opts.tail && lastUsed + TAIL_GAP + opts.tail.height > PAGE.bottom;
+  const pageCount = pages.length + (tailOwnPage ? 1 : 0);
+  const footer = (p: number) => {
+    font(false, 7);
+    ink(GREY);
+    doc.text(`Generated ${pdfSafe(stamp(opts.now))} - UKTextiles HRMS`, margin, PAGE.footerY);
+    doc.text(`Page ${p + 1} of ${pageCount}`, pageW - margin, PAGE.footerY, { align: "right" });
+  };
+
   pages.forEach((page, p) => {
     if (p > 0) doc.addPage();
     if (p === 0) drawFirstHead();
@@ -476,11 +493,15 @@ export async function renderTablePdf(opts: {
         ny += lines.length * 3.2 + 1;
       }
     }
-    font(false, 7);
-    ink(GREY);
-    doc.text(`Generated ${pdfSafe(stamp(opts.now))} - UKTextiles HRMS`, margin, PAGE.footerY);
-    doc.text(`Page ${p + 1} of ${pages.length}`, pageW - margin, PAGE.footerY, { align: "right" });
+    if (p === pages.length - 1 && opts.tail && !tailOwnPage) opts.tail.draw(doc, y + TAIL_GAP, margin, tableW);
+    footer(p);
   });
+  if (opts.tail && tailOwnPage) {
+    doc.addPage();
+    drawNextHead();
+    opts.tail.draw(doc, PAGE.nextTop, margin, tableW);
+    footer(pages.length);
+  }
   return doc;
 }
 

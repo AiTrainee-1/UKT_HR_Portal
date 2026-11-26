@@ -1,0 +1,1522 @@
+{
+  "payroll": {
+    "name": "Payroll_Staff_October_2026.xlsx",
+    "sheet": "Staff",
+    "sheets": 1,
+    "creator": "UKTextiles HRMS",
+    "columns": [
+      {
+        "key": "A",
+        "width": 18,
+        "numFmt": null
+      },
+      {
+        "key": "B",
+        "width": 22,
+        "numFmt": null
+      },
+      {
+        "key": "C",
+        "width": 16,
+        "numFmt": null
+      },
+      {
+        "key": "D",
+        "width": 24,
+        "numFmt": null
+      },
+      {
+        "key": "E",
+        "width": 14,
+        "numFmt": "#,##0.00"
+      },
+      {
+        "key": "F",
+        "width": 32,
+        "numFmt": null
+      },
+      {
+        "key": "G",
+        "width": 16,
+        "numFmt": null
+      },
+      {
+        "key": "H",
+        "width": 30,
+        "numFmt": null
+      },
+      {
+        "key": "I",
+        "width": 30,
+        "numFmt": null
+      },
+      {
+        "key": "J",
+        "width": 32,
+        "numFmt": null
+      }
+    ],
+    "rows": [
+      {
+        "height": 72,
+        "cells": [
+          {
+            "value": "TXN TYPE\nRTGS-R\nNEFT-N\nHDFC TRF-I\nIMPS - M(1)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENEFICIARY CODE\n(MANDATORY ONLY FOR\nTXN TYPE \"I\")\n(13)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "EMPLOYEE CODE",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE A/C NO\n(25)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "AMOUNT\n(20)",
+            "numFmt": "#,##0.00",
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFF0000"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENEFICIARY NAME\n(35)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "IFSC CODE\n(11)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE BANK NAME\n(40)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE BANK BRANCH NAME\n(40)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE EMAIL ID\n(100)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 18,
+        "cells": [
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M / O",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": "#,##0.00",
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "O",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 16,
+        "cells": [
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "0123",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "38083488840",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": 13482,
+            "numFmt": "#,##0.00",
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "ABIRAMI T",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "SBIN0007921",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "STATE BANK OF INDIA",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 16,
+        "cells": [
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": 20000,
+            "numFmt": "#,##0.00",
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "KARAN S",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          }
+        ]
+      }
+    ]
+  },
+  "skipped": {
+    "name": "Payroll_Production_Weekly_1-7_Nov_2026.xlsx",
+    "sheet": "Production Weekly",
+    "sheets": 1,
+    "creator": "UKTextiles HRMS",
+    "columns": [
+      {
+        "key": "A",
+        "width": 18,
+        "numFmt": null
+      },
+      {
+        "key": "B",
+        "width": 22,
+        "numFmt": null
+      },
+      {
+        "key": "C",
+        "width": 16,
+        "numFmt": null
+      },
+      {
+        "key": "D",
+        "width": 24,
+        "numFmt": null
+      },
+      {
+        "key": "E",
+        "width": 14,
+        "numFmt": "#,##0.00"
+      },
+      {
+        "key": "F",
+        "width": 32,
+        "numFmt": null
+      },
+      {
+        "key": "G",
+        "width": 16,
+        "numFmt": null
+      },
+      {
+        "key": "H",
+        "width": 30,
+        "numFmt": null
+      },
+      {
+        "key": "I",
+        "width": 30,
+        "numFmt": null
+      },
+      {
+        "key": "J",
+        "width": 32,
+        "numFmt": null
+      }
+    ],
+    "rows": [
+      {
+        "height": 72,
+        "cells": [
+          {
+            "value": "TXN TYPE\nRTGS-R\nNEFT-N\nHDFC TRF-I\nIMPS - M(1)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENEFICIARY CODE\n(MANDATORY ONLY FOR\nTXN TYPE \"I\")\n(13)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "EMPLOYEE CODE",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE A/C NO\n(25)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "AMOUNT\n(20)",
+            "numFmt": "#,##0.00",
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFF0000"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENEFICIARY NAME\n(35)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "IFSC CODE\n(11)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE BANK NAME\n(40)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE BANK BRANCH NAME\n(40)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "BENE EMAIL ID\n(100)",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 18,
+        "cells": [
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M / O",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": "#,##0.00",
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "O",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          },
+          {
+            "value": "M",
+            "numFmt": null,
+            "font": {
+              "bold": true,
+              "color": {
+                "argb": "FFFFFFFF"
+              }
+            },
+            "fill": {
+              "type": "pattern",
+              "pattern": "solid",
+              "fgColor": {
+                "argb": "FF5B8C00"
+              }
+            },
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle",
+              "wrapText": true
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 16,
+        "cells": [
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "2671",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "38083488840",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": 9001,
+            "numFmt": "#,##0.00",
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "HELD ONE",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "SBIN0007921",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "STATE BANK OF INDIA",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          }
+        ]
+      },
+      {
+        "height": 16,
+        "cells": [
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "3003",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "38083488840",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": 7778,
+            "numFmt": "#,##0.00",
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "PARKED",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "SBIN0007921",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "STATE BANK OF INDIA",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          },
+          {
+            "value": "",
+            "numFmt": null,
+            "font": null,
+            "fill": null,
+            "alignment": {
+              "horizontal": "center",
+              "vertical": "middle"
+            },
+            "border": null
+          }
+        ]
+      }
+    ]
+  }
+}

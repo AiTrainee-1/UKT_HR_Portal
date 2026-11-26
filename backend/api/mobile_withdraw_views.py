@@ -114,6 +114,15 @@ def withdraw_my_request(request: Request, module: str, pk: int) -> Response:
         if obj is None or obj.employee_id != employee_id:
             # Someone else's request is reported exactly like a missing one.
             return Response({"error": "Request not found.", "code": "not_found"}, status=404)
+        if module == "advance" and obj.applied_by != Advance.APPLIED_BY_EMPLOYEE:
+            # an advance HR recorded is not the employee's application: only HR may remove it
+            return Response(
+                {
+                    "error": "HR recorded this advance, so only HR can remove it. Please contact HR.",
+                    "code": "recorded_by_hr",
+                },
+                status=409,
+            )
         # an advance has a fixed HR-only pipeline (no approval adapter): waiting = status "pending"
         still_waiting = obj.status == "pending" if module == "advance" else approval.is_pending(workflow, obj)
         if not still_waiting:

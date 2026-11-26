@@ -70,7 +70,7 @@ def _auto_create_repayments(adv: Advance) -> None:
             y += 1
 
 
-def advance_json(a: Advance, include_repayments: bool = False) -> dict:
+def advance_json(a: Advance, include_repayments: bool = False, include_bank: bool = False) -> dict:
     emp = a.employee
     data = {
         "id": a.id,
@@ -120,6 +120,11 @@ def advance_json(a: Advance, include_repayments: bool = False) -> dict:
         "earnings": advance_earnings.earnings_json(a),
         "limitRemark": a.limit_remark or "",
     }
+    if include_bank:
+        # HR's list only (2026-11-26): the Settlement page's Export Bank File, same fields as the payroll rows
+        data["bankAccount"] = emp.bank_account or ""
+        data["bankIfsc"] = emp.bank_ifsc or ""
+        data["bankName"] = emp.bank_name or ""
     if include_repayments:
         data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("year", "month", "id")]
         data["history"] = [decision_json(d) for d in a.decisions.all()]
@@ -192,10 +197,13 @@ def advances(request: Request) -> Response:
                 qs = qs.filter(status=adv_status)
         # the salary earned in the 1st-20th (2026-11-26): worked out once for advances that do not have it yet (and again
         # for a waiting one asked for before its month's 20th was over); later reads use what is kept
-        advance_earnings.fill_missing(
-            qs.filter(Q(earned_on__isnull=True) | Q(status="pending"))[: advance_earnings.FILL_PER_READ * 2]
-        )
-        return paginate(request, qs, advance_json)
+        if not token_emp_id:  # HR reads only; a few per read (the deploy runs `manage.py fill_advance_earnings`)
+            advance_earnings.fill_missing(
+                qs.filter(Q(earned_on__isnull=True) | Q(status="pending"))[: advance_earnings.FILL_PER_READ * 4]
+            )
+        if token_emp_id:
+            return paginate(request, qs, advance_json)
+        return paginate(request, qs, lambda a: advance_json(a, include_bank=True))
 
     if not is_hr(request):
         return Response({"error": "HR access required"}, status=403)
