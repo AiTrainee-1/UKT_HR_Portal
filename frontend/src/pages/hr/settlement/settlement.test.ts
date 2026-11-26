@@ -1639,3 +1639,19 @@ describe("the bank file (owner 2026-11-26)", () => {
     expect(bankFileSheet(nov)).toBe("Salary Advance Nov 2026");
   });
 });
+
+describe("Working Days with company holidays (owner 2026-11-26)", () => {
+  it("shows the split when the 1st-20th holds company holidays", async () => {
+    const { workingDaysText } = await import("./logic");
+    expect(workingDaysText({ workingDays: 16.5, presentShifts: 14.5, holidayDays: 2 })).toBe(
+      "16.5 (14.5 worked + 2 holidays)",
+    );
+    expect(workingDaysText({ workingDays: 8, presentShifts: 7, holidayDays: 1 })).toBe("8 (7 worked + 1 holiday)");
+  });
+
+  it("is just the number without holidays or from an older server", async () => {
+    const { workingDaysText } = await import("./logic");
+    expect(workingDaysText({ workingDays: 13.5, presentShifts: 13.5, holidayDays: 0 })).toBe("13.5");
+    expect(workingDaysText({ workingDays: 13.5 })).toBe("13.5");
+  });
+});

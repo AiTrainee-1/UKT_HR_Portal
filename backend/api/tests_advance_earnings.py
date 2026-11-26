@@ -327,3 +327,40 @@ class BankDetailsTests(_AppBase):
         )
         mine = self.client.get("/api/advances", **self.me).json()[0]
         self.assertNotIn("bankAccount", mine)
+
+
+class CompanyHolidaysTests(_AppBase):
+    """Owner 2026-11-26: the company holidays of the 1st-20th are paid working days - in Working Days, in the Earned
+    Salary and so in the 50 % Limit (exactly what payroll pays for them; payroll itself is unchanged)."""
+
+    def test_holidays_in_the_first_20_days_are_working_days_earned_and_raise_the_limit(self):
+        before = advance_earnings.earned_in_month(self.emp, 2, 2026)  # 6 days worked: 6,000 earned, limit 3,000
+        Holiday.objects.create(name="Festival", date=date(2026, 2, 10), holiday_type="national")
+        Holiday.objects.create(name="Company day", date=date(2026, 2, 16), holiday_type="company")
+        Holiday.objects.create(name="After the 20th", date=date(2026, 2, 24), holiday_type="national")
+        Holiday.objects.create(name="On a Sunday", date=date(2026, 2, 15), holiday_type="national")
+        _holiday_dates_for_month.cache_clear()
+        after = advance_earnings.earned_in_month(self.emp, 2, 2026)
+        self.assertEqual((before.paid_days, before.earned, before.limit), (Decimal("6"), Decimal("6000.00"), Decimal("3000")))
+        # +2 (10th and 16th); the 24th is after the 20th and the 15th is a Sunday (not a company day), as in payroll
+        self.assertEqual((after.paid_days, after.earned, after.limit), (Decimal("8"), Decimal("8000.00"), Decimal("4000")))
+        j = after.to_json()
+        self.assertEqual((j["workingDays"], j["presentShifts"], j["holidayDays"]), (8.0, 6.0, 2.0))
+
+        r = self.apply({"advanceType": "general", "amount": 4000, "purpose": "Festival"})
+        self.assertEqual(r.status_code, 201, r.content)
+        e = r.json()["earnings"]
+        self.assertEqual(
+            (e["workingDays"], e["presentShifts"], e["holidayDays"], e["earnedAmount"], e["limit"]),
+            (8.0, 6.0, 2.0, 8000.0, 4000.0),
+        )
+        listed = self.client.get("/api/advances", **self.hr).json()[0]["earnings"]
+        self.assertEqual((listed["workingDays"], listed["earnedAmount"], listed["limit"]), (8.0, 8000.0, 4000.0))
+
+    def test_a_holiday_before_joining_is_not_paid(self):
+        self.emp.join_date = "2026-02-12"
+        self.emp.save()
+        Holiday.objects.create(name="Festival", date=date(2026, 2, 10), holiday_type="national")
+        _holiday_dates_for_month.cache_clear()
+        e = advance_earnings.earned_in_month(self.emp, 2, 2026)
+        self.assertEqual(e.paid_days - e.working_days, Decimal("0"))

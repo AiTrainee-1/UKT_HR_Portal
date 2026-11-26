@@ -24,7 +24,7 @@ import {
   formLimit,
   formOverLimit,
   formPreview,
-  formatDays,
+  workingDaysText,
   overLimitBy,
   overLimitRefusal,
   serverError,
@@ -108,7 +108,7 @@ function EarningsPanel({
         {e ? (
           <dl className="space-y-1">
             <Figure label="Fixed salary" value={formatMoney(e.fixedSalary)} testId="advance-earned-fixed" />
-            <Figure label="Working days" value={formatDays(e.workingDays)} testId="advance-earned-days" />
+            <Figure label="Working days" value={workingDaysText(e)} testId="advance-earned-days" />
             <Figure label="Earned salary" value={formatMoney(e.earnedAmount)} testId="advance-earned-amount" />
             {!term && (
               <Figure

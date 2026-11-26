@@ -91,9 +91,12 @@ export type AdvanceEarnings = {
   fixedSalary: number | null;
   dailyRate?: number;
   companyDays?: number;
-  /** Present shifts on the working days 1st-20th. */
+  /** Working Days: the paid days of the 1st-20th = present shifts + company holidays (owner 2026-11-26). */
   workingDays: number;
-  /** Present shifts + paid holidays. */
+  /** The split of workingDays (servers since 2026-11-26): days worked (a half day 0.5) and company holidays. */
+  presentShifts?: number;
+  holidayDays?: number;
+  /** Present shifts + paid holidays (= workingDays). */
   paidDays: number;
   earnedAmount: number;
   /** = earnedAmount (the kept figures only). */

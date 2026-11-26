@@ -9,7 +9,9 @@ the 20th of the month, worked out exactly as the staff payroll prices a day (pay
   paid days       = present shifts (a Half Day 0.5, quarter shifts as earned) on the working days 1st-20th
                     + days marked Holiday by HR + the declared holidays on/after the joining date (paid like payroll)
   earned          = per-day salary x paid days (rounded to the paisa once, like payroll)
-  working days    = the present shifts alone (what the report's "Working Days" column shows)
+  working days    = the PAID days: present shifts + the company holidays (declared holidays and days HR marked Holiday)
+                    of the 1st-20th (owner 2026-11-26: "company-announced holidays count as paid working days"); the API
+                    also gives the split, presentShifts + holidayDays
 
 Only days already judged count: a day still in progress (day_progress) and days still to come add nothing, so on the
 21st / 22nd the figure is complete. Production employees have no monthly fixed salary: no figures (None).
@@ -45,8 +47,8 @@ class Earnings:
     fixed_salary: Decimal  # the monthly fixed salary
     daily_rate: Decimal  # per-day salary, rounded to the paisa (display only)
     company_days: int
-    working_days: Decimal  # present shifts 1st-20th
-    paid_days: Decimal  # present shifts + paid holidays / HR holiday days
+    working_days: Decimal  # present shifts 1st-20th (kept in Advance.earned_working_days)
+    paid_days: Decimal  # present shifts + paid holidays / HR holiday days: the "Working Days" shown (2026-11-26)
     earned: Decimal  # per-day salary x paid days
 
     @property
@@ -63,7 +65,10 @@ class Earnings:
             "fixedSalary": float(self.fixed_salary),
             "dailyRate": float(self.daily_rate),
             "companyDays": self.company_days,
-            "workingDays": float(self.working_days),
+            # Working Days = the paid days: present shifts + company holidays of the 1st-20th (owner 2026-11-26)
+            "workingDays": float(self.paid_days),
+            "presentShifts": float(self.working_days),
+            "holidayDays": float(self.paid_days - self.working_days),
             "paidDays": float(self.paid_days),
             "earnedAmount": float(self.earned),
             "percent": SALARY_ADVANCE_PERCENT,
@@ -238,13 +243,18 @@ def earnings_json(adv) -> dict | None:
     """The kept figures as the API serves them (null when the advance has none: a production employee, or none yet)."""
     if adv.earned_month is None or adv.earned_amount is None:
         return None
+    present = Decimal(str(adv.earned_working_days or 0))
+    paid = Decimal(str(adv.earned_paid_days)) if adv.earned_paid_days is not None else present
     return {
         "month": adv.earned_month,
         "year": adv.earned_year,
         "throughDay": EARNED_THROUGH_DAY,
         "fixedSalary": float(adv.salary_at_request) if adv.salary_at_request is not None else None,
-        "workingDays": float(adv.earned_working_days or 0),
-        "paidDays": float(adv.earned_paid_days or 0),
+        # Working Days = present shifts + company holidays of the 1st-20th (owner 2026-11-26), the days the salary pays
+        "workingDays": float(paid),
+        "presentShifts": float(present),
+        "holidayDays": float(paid - present),
+        "paidDays": float(paid),
         "earnedAmount": float(adv.earned_amount),
         "workingSalary": float(adv.earned_amount),
         "percent": SALARY_ADVANCE_PERCENT,

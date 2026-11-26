@@ -29,7 +29,7 @@ import {
   describeSchedule,
   earnedLimitOf,
   earnedPeriodLabel,
-  formatDays,
+  workingDaysText,
   overLimitBy,
   rejectionPayload,
   rejectionProblem,
@@ -159,7 +159,7 @@ export function DecisionDialog({
               {earned ? (
                 <p className="text-xs" data-testid="decision-earned">
                   Earned in {earnedPeriodLabel(earned)}: Fixed salary {formatMoney(earned.fixedSalary)} · Working days{" "}
-                  {formatDays(earned.workingDays)} · Earned salary {formatMoney(earned.earnedAmount)}
+                  {workingDaysText(earned)} · Earned salary {formatMoney(earned.earnedAmount)}
                   {limit != null && ` · Limit (${earned.percent}% of earned salary) ${formatMoney(limit)}`}.
                 </p>
               ) : (

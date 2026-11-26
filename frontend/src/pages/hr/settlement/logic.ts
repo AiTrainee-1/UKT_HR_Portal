@@ -238,9 +238,23 @@ export const canDelete = (a: Pick<SettlementRow, "status">): boolean => a.status
 export const earnedPeriodLabel = (e: Pick<AdvanceEarnings, "month" | "year" | "throughDay">): string =>
   `1st–${e.throughDay ?? 20}th ${MONTH_FULL[e.month - 1] ?? "?"} ${e.year}`;
 
-/** "14.5" working days (present shifts; a half day is 0.5). */
+/** "14.5" days (a half day is 0.5). */
 export const formatDays = (n: number | null | undefined): string =>
   n == null ? "-" : n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+
+/**
+ * Working Days with its split when company holidays are in it (owner 2026-11-26: the holidays of the 1st-20th are paid
+ * working days): "16.5 (14.5 worked + 2 holidays)"; just "14.5" without holidays (or from an older server).
+ */
+export const workingDaysText = (
+  e: Pick<AdvanceEarnings, "workingDays"> & { presentShifts?: number | null; holidayDays?: number | null },
+): string => {
+  const holidays = e.holidayDays ?? 0;
+  if (!(holidays > 0) || e.presentShifts == null) return formatDays(e.workingDays);
+  return `${formatDays(e.workingDays)} (${formatDays(e.presentShifts)} worked + ${formatDays(holidays)} ${
+    holidays === 1 ? "holiday" : "holidays"
+  })`;
+};
 
 /** The Salary Advance limit (50 % of the salary earned 1st-20th) of an advance, or null when it has none. */
 export const earnedLimitOf = (a: Pick<SettlementRow, "earnings">): number | null => a.earnings?.limit ?? null;

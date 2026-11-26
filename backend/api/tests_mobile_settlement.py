@@ -213,8 +213,8 @@ class SalaryAdvanceTests(_Base):
         )
         e = r.json()["earnings"]
         self.assertEqual(
-            (e["fixedSalary"], e["workingDays"], e["workingSalary"], e["earnedAmount"], e["limit"]),
-            (30000.0, 18.0, 24000.0, 24000.0, 12000.0),
+            (e["fixedSalary"], e["workingDays"], e["presentShifts"], e["earnedAmount"], e["limit"]),
+            (30000.0, 24.0, 18.0, 24000.0, 12000.0),  # Working Days = 18 worked + 6 holidays (2026-11-26)
         )
 
     def test_nothing_earned_means_no_salary_advance(self):
@@ -489,7 +489,11 @@ class RecordsTests(_Base):
         )
         self.assertEqual((body["salaryAdvance"]["percent"], body["salaryAdvance"]["limitBasis"]), (50, "earned_1_to_20"))
         earned = body["salaryAdvance"]["earned"]
-        self.assertEqual((earned["earnedAmount"], earned["workingDays"], earned["final"]), (24000.0, 18.0, False))
+        # Working Days = present shifts + company holidays (2026-11-26): 18 worked + 6 holiday days = the 24 paid days
+        self.assertEqual(
+            (earned["earnedAmount"], earned["workingDays"], earned["presentShifts"], earned["holidayDays"], earned["final"]),
+            (24000.0, 24.0, 18.0, 6.0, False),
+        )
         self.assertEqual(body["termLoan"]["firstDeductionLabel"], "January 2027")
         self.assertFalse(body["salaryAdvance"]["canApply"])  # the 20th: the window opens on the 21st
         self.assertTrue(body["termLoan"]["canApply"])

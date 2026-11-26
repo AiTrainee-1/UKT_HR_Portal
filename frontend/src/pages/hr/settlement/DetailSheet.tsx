@@ -29,7 +29,7 @@ import {
   decidedAtOf,
   decidedByOf,
   earnedPeriodLabel,
-  formatDays,
+  workingDaysText,
   hasLeft,
   historyText,
   progressPct,
@@ -268,7 +268,7 @@ export default function DetailSheet({
                 </p>
                 <dl className="space-y-1.5 rounded-xl border border-gray-100 bg-white p-3">
                   <Detail label="Fixed salary" value={formatMoney(adv.earnings.fixedSalary)} />
-                  <Detail label="Working days" value={formatDays(adv.earnings.workingDays)} />
+                  <Detail label="Working days" value={workingDaysText(adv.earnings)} />
                   <Detail label="Earned salary" value={formatMoney(adv.earnings.earnedAmount)} />
                   {adv.earnings.limit != null && (
                     <Detail
