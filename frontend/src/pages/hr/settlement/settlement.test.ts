@@ -1620,7 +1620,7 @@ describe("the bank file (owner 2026-11-26)", () => {
         bankAccount: "1234567890",
         bankIfsc: "",
         bankName: "SBI",
-        amount: 3000.5,
+        amount: 3001, // 3,000.50 approved, rounded UP to the rupee like the payroll bank file
       },
       {
         employeeCode: "A1",
@@ -1631,7 +1631,9 @@ describe("the bank file (owner 2026-11-26)", () => {
         amount: 4000, // not the 5,000 asked for
       },
     ]);
-    expect(bankFileTotal(pay)).toBe(7000.5);
+    expect(bankFileTotal(pay)).toBe(7001);
+    // float noise never adds a rupee (round-up-rupee.ts)
+    expect(bankFileLines([adv({ amount: 2000.0000001 })])[0].amount).toBe(2000);
     expect(missingBankDetails(pay).map((a) => a.employeeCode)).toEqual(["A2"]);
     expect(missingBankDetails([adv({ bankAccount: null, bankIfsc: "X" })])).toHaveLength(1);
     expect(bankFileName(nov)).toBe("Settlement_Bank_File_Salary_Advance_November_2026.xlsx");

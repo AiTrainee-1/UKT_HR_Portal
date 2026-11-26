@@ -28,7 +28,7 @@ import { formatMoney } from "./shared";
 /**
  * Before the bank file downloads (owner 2026-11-26): how many approved advances it pays, the total, and who has no bank
  * account or IFSC (still allowed, flagged, so HR can fix them in the bank's portal). The file is the Payroll's bank file
- * format (lib/bankFile.ts), one row per advance, paying the APPROVED amount.
+ * format (lib/bankFile.ts), one row per advance, paying the APPROVED amount rounded up to the rupee (like payroll).
  */
 export default function BankFileDialog({
   rows,
@@ -77,7 +77,8 @@ export default function BankFileDialog({
             <div className="space-y-2 text-sm text-muted-foreground">
               <p data-testid="bank-file-summary">
                 <b className="text-gray-900">{countOf(rows.length, state.tab)}</b> approved (active or completed),{" "}
-                <b className="text-gray-900">{formatMoney(total)}</b> in all: each one's approved amount.
+                <b className="text-gray-900">{formatMoney(total)}</b> in all: each one's approved amount, rounded up to
+                the rupee like payroll.
               </p>
               <p className="text-xs">
                 Same format as the Payroll bank file. Waiting and rejected requests are never in it. File: {name}

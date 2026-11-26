@@ -7,6 +7,7 @@ import { matchesNamedOrgOption } from "@/lib/departments";
 import type { Advance, AdvanceDecisionItem, AdvanceEarnings, AdvanceEarningsPreview } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import { istDay } from "@/lib/date-range";
+import { roundUpRupee } from "@/lib/round-up-rupee";
 import type { Tone } from "@/lib/statusTones";
 import { MONTH_FULL, formatDate, formatMoney, inDayRange, localDay, matchesWords, monthLabel } from "./shared";
 
@@ -1341,7 +1342,8 @@ export function buildExport(
 export const bankFileRows = (all: SettlementRow[], s: PageState): SettlementRow[] =>
   pageView(all, exportState(s, "approved_all")).shown;
 
-/** One bank payment per advance: the APPROVED amount (`amount`), not what was asked for. */
+/** One bank payment per advance: the APPROVED amount (`amount`), not what was asked for, rounded UP to the next whole
+ *  rupee exactly like the payroll bank file pays its NET (owner 2026-11-26; float noise never adds a rupee). */
 export const bankFileLines = (rows: SettlementRow[]) =>
   rows.map((a) => ({
     employeeCode: a.employeeCode,
@@ -1349,15 +1351,16 @@ export const bankFileLines = (rows: SettlementRow[]) =>
     bankAccount: a.bankAccount ?? "",
     bankIfsc: a.bankIfsc ?? "",
     bankName: a.bankName ?? "",
-    amount: a.amount,
+    amount: roundUpRupee(a.amount),
   }));
 
 /** The advances the bank cannot pay as they are: no account number or no IFSC on the employee. */
 export const missingBankDetails = (rows: SettlementRow[]): SettlementRow[] =>
   rows.filter((a) => !(a.bankAccount ?? "").trim() || !(a.bankIfsc ?? "").trim());
 
-/** What the bank file pays in all. */
-export const bankFileTotal = (rows: SettlementRow[]): number => round2(rows.reduce((sum, a) => sum + a.amount, 0));
+/** What the bank file pays in all: the sum of its (rounded-up) lines. */
+export const bankFileTotal = (rows: SettlementRow[]): number =>
+  round2(rows.reduce((sum, a) => sum + roundUpRupee(a.amount), 0));
 
 const fileWord = (text: string) => text.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 

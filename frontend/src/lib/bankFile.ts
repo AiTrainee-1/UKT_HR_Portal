@@ -4,7 +4,7 @@ import { downloadWorkbook, newWorkbook, styleHeaderCell } from "@/lib/exportUtil
 // The bank transfer file (the bank's NEFT / RTGS upload template): ONE writer for every page that pays through the bank,
 // so "the same format as the payroll's bank file" is a fact of the code (2026-11-26). The Payroll pages
 // (payrollExcelExport.ts) hand it the month's NET pay; the Settlement page hands it the approved advances. The callers
-// choose the rows, the amount (payroll rounds its NET up to the rupee, Settlement pays the approved amount) and the file
+// choose the rows, the amount (both round UP to the rupee: payroll its NET, Settlement the approved amount) and the file
 // name; this file only writes them. bankFile.test.ts holds the payroll's file to its golden copy.
 
 /** One payment: who is paid, into which account, and how much (written as given). */
