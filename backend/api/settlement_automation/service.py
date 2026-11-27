@@ -248,6 +248,10 @@ def sync_month(month: int, year: int, advance_type: str | None = None) -> None:
             I.objects.bulk_create([I(batch=open_batch, advance_id=pk) for pk in loose], ignore_conflicts=True)
         if open_batch is not None and not open_batch.items.exists():
             open_batch.delete()
+            open_batch = None
+        # every batch of the month still at HR Review (rounding is HR Review's, frozen at Forward)
+        for batch in B.objects.filter(month=month, year=year, advance_type=advance_type, stage=B.STAGE_HR_REVIEW):
+            _round_open(batch)
 
 
 def batches_of(month: int, year: int, advance_type: str | None = None):
@@ -306,6 +310,70 @@ def requested_of(adv: Advance) -> Decimal:
     return Decimal(adv.requested_amount if adv.requested_amount is not None else adv.amount)
 
 
+# ─────────────────────────── Salary Advance rounding (owner 2026-11-27) ───────────────────────────
+# The amount asked for, capped at the eligible limit, rounded to the nearest ₹500 (₹0-249 -> 0, ₹250-749 -> 500,
+# ₹750-1,249 -> 1,000 ...), and never above the limit (a round-up past it goes down to the ₹500 below). Worked out while
+# the request is at HR Review and frozen at Forward: from then on it is the workflow's "as asked" amount (HR's "keep",
+# the MD's full approval, the ceiling of every decision). The eligibility calculation itself is not touched.
+
+ROUND_STEP = Decimal("500")
+ROUND_HALF = Decimal("250")
+
+
+def nearest_500(amount) -> Decimal:
+    value = Decimal(amount)
+    if value <= 0:
+        return Decimal("0")
+    steps = value // ROUND_STEP
+    rest = value - steps * ROUND_STEP
+    return (steps + (1 if rest >= ROUND_HALF else 0)) * ROUND_STEP
+
+
+def rounded_for(requested, limit) -> Decimal:
+    """The rounded Salary Advance amount for an amount asked for and the eligible limit (None: no limit known)."""
+    requested = Decimal(requested)
+    base = requested if limit is None else min(requested, Decimal(limit))
+    rounded = nearest_500(base)
+    if limit is not None and rounded > Decimal(limit):
+        rounded = max(Decimal("0"), (Decimal(limit) // ROUND_STEP) * ROUND_STEP)
+    return rounded.quantize(Decimal("0.01"))
+
+
+def apply_rounding(item: I) -> bool:
+    """Works out a Salary Advance request's rounded amount from what it asked for and its eligible limit (the
+    request's own `earned_limit`); True when it changed. A Term Loan is not rounded."""
+    adv = item.advance
+    if adv.advance_type != "general":
+        if item.rounded_amount is None and item.rounding_limit is None:
+            return False
+        item.rounded_amount = item.rounding_limit = None
+        return True
+    limit = Decimal(adv.earned_limit) if adv.earned_limit is not None else None
+    rounded = rounded_for(requested_of(adv), limit)
+    if item.rounded_amount is not None and Decimal(item.rounded_amount) == rounded and (
+        (item.rounding_limit is None and limit is None)
+        or (item.rounding_limit is not None and limit is not None and Decimal(item.rounding_limit) == limit)
+    ):
+        return False
+    item.rounded_amount, item.rounding_limit = rounded, limit
+    return True
+
+
+def base_amount(item: I) -> Decimal:
+    """The workflow's "as asked" amount: the rounded amount of a Salary Advance (once worked out), else what was asked."""
+    return Decimal(item.rounded_amount) if item.rounded_amount is not None else requested_of(item.advance)
+
+
+def _round_open(batch: B) -> None:
+    """Keep the rounded amounts of a batch at HR Review up to date (a limit worked out again changes them)."""
+    changed = []
+    for item in batch.items.select_related("advance"):
+        if apply_rounding(item):
+            changed.append(item)
+    if changed:
+        I.objects.bulk_update(changed, ["rounded_amount", "rounding_limit"])
+
+
 # ─────────────────────────── HR Review ───────────────────────────
 
 
@@ -335,12 +403,17 @@ def set_hr_review(item: I, data) -> I:
         if action not in ("keep", "approve", "reduce", "reject"):
             raise WorkflowError("Choose keep, reduce or reject.", "action")
         action = "approve" if action in ("keep", "approve") else action
-        requested = requested_of(item.advance)
+        requested = base_amount(item)
+        asked = "rounded amount" if item.rounded_amount is not None else "amount asked for"
+        if action == "approve" and requested <= 0:
+            raise WorkflowError(
+                "This request rounds to ₹0 (less than ₹250 within the limit): reject it.", "rounds_to_zero"
+            )
         if action == "reduce":
             amount = _money(data.get("amount"), "reduced amount")
             if amount >= requested:
                 raise WorkflowError(
-                    f"A reduced amount must be less than the ₹{requested:,.2f} asked for.", "amount", field="amount"
+                    f"A reduced amount must be less than the ₹{requested:,.2f} {asked}.", "amount", field="amount"
                 )
             if len(item.hr_note) < REMARK_MIN:
                 raise WorkflowError("Write a remark for the reduced amount (at least 3 characters).", "remark")
@@ -381,7 +454,14 @@ def hr_review_bulk(batch: B, item_ids, action, remark) -> tuple[B, list]:
     if action == "reject" and len(remark) < REMARK_MIN:
         raise WorkflowError("Write the reason for rejecting (at least 3 characters).", "remark")
     with transaction.atomic():
-        for item in _items_of(batch, item_ids):
+        items = _items_of(batch, item_ids)
+        if action == "approve":
+            zero = [i for i in items if base_amount(i) <= 0]
+            if zero:
+                raise WorkflowError(
+                    f"{len(zero)} of the chosen requests round to ₹0: reject them instead.", "rounds_to_zero"
+                )
+        for item in items:
             item.hr_action = "reject" if action == "reject" else "approve"
             item.hr_amount = None
             item.rework = ""
@@ -464,8 +544,8 @@ def _accept_md(item: I) -> None:
         item.hr_action, item.hr_amount = "reject", None
         item.hr_note = item.md_remark or item.hr_note
     elif item.md_decision == I.DECISION_APPROVED:
-        amount = Decimal(item.md_amount) if item.md_amount is not None else requested_of(item.advance)
-        if amount < requested_of(item.advance):
+        amount = Decimal(item.md_amount) if item.md_amount is not None else base_amount(item)
+        if amount < base_amount(item):
             item.hr_action, item.hr_amount = "reduce", amount
             item.hr_note = item.md_remark or item.hr_note
         else:
@@ -531,6 +611,7 @@ def forward(batch: B, advance_ids, note, by: str) -> B:
         held = set(batch.items.values_list("advance_id", flat=True))
         if not held:
             raise WorkflowError("There are no requests in this batch to forward.", "empty")
+        _round_open(batch)  # frozen from here on
         seen = {int(x) for x in (advance_ids or []) if str(x).isdigit()}
         if advance_ids is not None and seen != held:
             raise WorkflowError(
@@ -566,7 +647,7 @@ def hr_expected(item: I) -> tuple[str, Decimal | None]:
         return I.DECISION_REJECTED, None
     if item.hr_action == "reduce" and item.hr_amount is not None:
         return I.DECISION_APPROVED, Decimal(item.hr_amount)
-    return I.DECISION_APPROVED, requested_of(item.advance)
+    return I.DECISION_APPROVED, base_amount(item)
 
 
 def md_changed(item: I) -> bool:
@@ -587,19 +668,22 @@ def md_remarked(item: I) -> bool:
 
 
 def md_decide(item: I, decision, amount, remark, by: str) -> I:
-    """The MD's decision on one request (changeable until Confirm & Proceed): approved (the asked amount or less;
-    a smaller amount needs a remark) or rejected (a remark is required). An empty decision clears it."""
+    """The MD's decision on one request (changeable until Confirm & Proceed): approved (the "as asked" amount - a Salary
+    Advance's rounded amount - or less; a smaller amount needs a remark) or rejected (a remark is required). An empty
+    decision clears it."""
     _require_stage(item.batch, B.STAGE_MD_REVIEW)
     decision = str(decision or "").strip()
     remark = _remark(remark)
-    adv = item.advance
-    requested = requested_of(adv)
+    requested = base_amount(item)
+    asked = "rounded amount" if item.rounded_amount is not None else "amount asked for"
     if decision == "":
         item.md_decision, item.md_amount, item.md_remark, item.md_decided_at = "", None, remark, None
     elif decision == I.DECISION_APPROVED:
+        if requested <= 0 and amount in (None, ""):
+            raise WorkflowError("This request rounds to ₹0: reject it.", "rounds_to_zero")
         value = requested if amount in (None, "") else _money(amount, "approved amount")
         if value > requested:
-            raise WorkflowError(f"The approved amount cannot be more than the ₹{requested:,.2f} asked for.", "amount")
+            raise WorkflowError(f"The approved amount cannot be more than the ₹{requested:,.2f} {asked}.", "amount")
         if value < requested and len(remark) < REMARK_MIN:
             raise WorkflowError("Write a remark for the reduced amount (at least 3 characters).", "remark")
         item.md_decision, item.md_amount, item.md_remark, item.md_decided_at = decision, value, remark, _now()
@@ -626,8 +710,11 @@ def md_bulk(batch: B, item_ids, decision, remark, by: str) -> tuple[B, list]:
     skipped: list = []
     with transaction.atomic():
         for item in _items_of(batch, item_ids):
-            requested = requested_of(item.advance)
+            requested = base_amount(item)
             if decision == I.DECISION_APPROVED:
+                if requested <= 0:
+                    skipped.append({"id": item.id, "reason": "It rounds to ₹0: reject it."})
+                    continue
                 amount = item.hr_amount if item.hr_action == "reduce" and item.hr_amount is not None else requested
                 note = remark or (item.hr_note if amount < requested else item.md_remark)
                 if amount < requested and len(note or "") < REMARK_MIN:
@@ -885,7 +972,7 @@ def _apply_item(item: I, request, actor: str, after_commit: list) -> None:
         if adv.advance_type == "term" and item.final_months:
             adv.repayment_months = item.final_months  # the EMI follows the final amount and months
             data["repaymentMonths"] = item.final_months
-        problem = sv._apply_amount_and_start(adv, data, Advance.STATUS_PENDING)
+        problem = sv._apply_amount_and_start(adv, data, Advance.STATUS_PENDING, ceiling=base_amount(item))
         if problem:
             raise WorkflowError(problem, "invalid")
         adv.status = Advance.STATUS_APPROVED
@@ -1617,6 +1704,7 @@ def portal_json(link, batch: B) -> dict:
                 },
                 # with the auditor: pending (not reviewed yet, at the top) | approved | rejected (2026-11-27)
                 "review": review_state(i, batch.stage),
+                "rounding": rounding_json(i),
                 # the earlier rounds on this request (the auditor's earlier change and HR's answer)
                 "trail": [t for t in (i.trail or []) if t.get("role") in ("auditor", "hr_final")],
             }
@@ -1957,6 +2045,23 @@ def review_state(item: I, stage: str) -> str:
     return "approved" if decision == I.DECISION_APPROVED else "pending"
 
 
+def rounding_json(item: I) -> dict | None:
+    if item.rounded_amount is None:
+        return None
+    requested = requested_of(item.advance)
+    rounded = Decimal(item.rounded_amount)
+    limit = Decimal(item.rounding_limit) if item.rounding_limit is not None else None
+    return {
+        "requested": float(requested),
+        "limit": float(limit) if limit is not None else None,
+        "rounded": float(rounded),
+        # the amount asked for was above the limit and was brought down to it first
+        "capped": limit is not None and requested > limit,
+        "direction": "up" if rounded > requested else ("down" if rounded < requested else "same"),
+        "zero": rounded <= 0,
+    }
+
+
 def item_json(item: I, *, include_bank: bool, stage: str | None = None) -> dict:
     from ..settlement_views import advance_json
 
@@ -1977,6 +2082,10 @@ def item_json(item: I, *, include_bank: bool, stage: str | None = None) -> dict:
         },
         # the request with the current stage's reviewer: pending (at the top) | approved | rejected (2026-11-27)
         "review": review_state(item, stage or item.batch.stage),
+        # Salary Advance rounding (2026-11-27): asked for -> capped at the limit -> nearest ₹500, never above the limit;
+        # null for a Term Loan / an older batch. `baseAmount` is the workflow's "as asked" amount.
+        "rounding": rounding_json(item),
+        "baseAmount": float(base_amount(item)),
         # flagged for HR's rework by the MD / the auditor, and not answered yet
         "rework": item.rework or None,
         # the MD's own decision differs from HR's proposal (MD Review: the MD must return the settlement to HR)
@@ -2067,6 +2176,7 @@ def batch_json(batch: B, *, viewer: str) -> dict:
     approved = [i for i in items if outcome(i) == I.DECISION_APPROVED]
     rejected = [i for i in items if outcome(i) == I.DECISION_REJECTED]
     requested = sum((requested_of(i.advance) for i in items), Decimal("0"))
+    rounded_total = sum((base_amount(i) for i in items), Decimal("0"))
     md_total = sum((Decimal(i.md_amount) for i in items if i.md_amount is not None), Decimal("0"))
     final_total = sum(
         (
@@ -2117,6 +2227,8 @@ def batch_json(batch: B, *, viewer: str) -> dict:
         },
         "amounts": {
             "requested": float(requested),
+            # the "as asked" total after the Salary Advance rounding (= requested for a Term Loan / an older batch)
+            "rounded": float(rounded_total),
             "mdApproved": float(md_total),
             "finalApproved": float(final_total),
             # what will be paid: HR's final settlement with the auditor's changes

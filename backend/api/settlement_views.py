@@ -332,7 +332,7 @@ def _int_or_none(value):
         return None
 
 
-def _apply_amount_and_start(adv: Advance, data, previous_status: str) -> str | None:
+def _apply_amount_and_start(adv: Advance, data, previous_status: str, ceiling=None) -> str | None:
     """HR's approval may set a smaller `amount` (the approved amount) and a different first deduction month. Applies them
     to `adv` in memory (the caller saves) and keeps the EMI in line; returns the refusal message, or None when fine.
 
@@ -367,7 +367,14 @@ def _apply_amount_and_start(adv: Advance, data, previous_status: str) -> str | N
         if amount != Decimal(adv.amount):
             if previous_status != Advance.STATUS_PENDING:
                 return "The amount can only be changed while the advance is waiting for approval."
-            if adv.requested_amount is not None and amount > Decimal(adv.requested_amount):
+            # `ceiling`: the Automation Method's rounded Salary Advance amount (owner 2026-11-27: ₹4,800 asked may be
+            # paid as ₹5,000), never above the eligible limit; else what the employee asked for
+            top = Decimal(adv.requested_amount) if adv.requested_amount is not None else None
+            if top is not None and ceiling is not None:
+                top = max(top, Decimal(ceiling))
+            if top is not None and amount > top:
+                if ceiling is not None and Decimal(ceiling) > Decimal(adv.requested_amount):
+                    return f"The approved amount cannot be more than the rounded {inr(top)}."
                 return (
                     f"The approved amount cannot be more than the {inr(adv.requested_amount)} the employee asked for."
                 )

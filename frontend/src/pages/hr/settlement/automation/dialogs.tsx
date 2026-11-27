@@ -40,9 +40,19 @@ import {
   requestsText,
   type FinalEdit,
 } from "./logic";
-import { answerText, auditorAnswerOf, hrProposalProblems, mdRemarkOf, type HrProposalEdit } from "./focus";
+import {
+  answerText,
+  auditorAnswerOf,
+  hrProposalProblems,
+  mdRemarkOf,
+  reduceCeilingText,
+  type HrProposalEdit,
+} from "./focus";
+import { roundingSteps } from "./rounding";
 
 type Refusal = { text: string; code: string | null };
+
+const upper = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 function RefusalBox({ refusal, testId }: { refusal: Refusal | null; testId: string }) {
   if (!refusal) return null;
@@ -330,10 +340,37 @@ export function HrNoteDialog({
 
 // ─── HR Review: HR's proposal on one request (reduce / reject) ──────────────────
 
+/** A Salary Advance's three figures before HR decides (2026-11-27): what was asked for, the eligible limit and the
+ *  rounded amount (the "as asked" amount), with how it was rounded under them. */
+function RoundingFacts({ item }: { item: SettlementBatchItem }) {
+  const r = item.rounding;
+  if (!r) return null;
+  const fact = (label: string, value: string, testId: string, tone?: string) => (
+    <div className="min-w-0">
+      <dt className="text-[11px] text-muted-foreground">{label}</dt>
+      <dd className={cn("text-sm font-semibold tabular-nums text-slate-900", tone)} data-testid={testId}>
+        {value}
+      </dd>
+    </div>
+  );
+  return (
+    <div className="space-y-2 rounded-xl border border-slate-100 bg-slate-50/60 p-3" data-testid="hr-proposal-facts">
+      <dl className="grid grid-cols-3 gap-3">
+        {fact("Requested", formatMoney(r.requested), "hr-proposal-fact-requested")}
+        {fact("Eligible limit", r.limit != null ? formatMoney(r.limit) : "—", "hr-proposal-fact-limit")}
+        {fact("Rounded", formatMoney(r.rounded), "hr-proposal-fact-rounded", r.zero ? "text-red-600" : undefined)}
+      </dl>
+      <p className="text-[11px] leading-snug text-muted-foreground" data-testid="hr-proposal-fact-steps">
+        {roundingSteps(r)}
+      </p>
+    </div>
+  );
+}
+
 /**
- * HR's proposal at HR Review (owner 2026-11-27): Reduce asks for an amount below the one asked for and a remark; Reject
- * asks for the reason. The proposal reaches the MD as the MD's starting decision; nothing is final until the settlement
- * is.
+ * HR's proposal at HR Review (owner 2026-11-27): Reduce asks for an amount below the one asked for (a Salary Advance:
+ * below its rounded amount) and a remark; Reject asks for the reason. The proposal reaches the MD as the MD's starting
+ * decision; nothing is final until the settlement is.
  */
 export function HrProposalDialog({
   target,
@@ -422,6 +459,7 @@ export function HrProposalDialog({
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {item && <RoundingFacts item={item} />}
         {reduce && (
           <div className="space-y-1">
             <Label htmlFor="hr-proposal-amount" className="text-xs">
@@ -441,7 +479,7 @@ export function HrProposalDialog({
               className={cn("text-[11px]", shown(problems.amount) ? "font-medium text-red-600" : "text-gray-500")}
               data-testid={shown(problems.amount) ? "hr-proposal-amount-problem" : undefined}
             >
-              {shown(problems.amount) ?? `Less than the ${formatMoney(item?.requestedAmount)} asked for.`}
+              {shown(problems.amount) ?? (item ? `${upper(reduceCeilingText(item))}.` : "")}
             </p>
           </div>
         )}

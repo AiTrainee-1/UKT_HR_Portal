@@ -24,6 +24,8 @@ import {
   type ReworkAnswer,
 } from "./focus";
 import { auditorChangeText, changesFromMd, effectiveOf, finalEmiText, finalMonthsOf } from "./logic";
+import { RoundedLine } from "./Rounded";
+import { roundingChanged } from "./rounding";
 
 type Col = { key: string; header: string; right?: boolean; render: (item: SettlementBatchItem) => ReactNode };
 
@@ -79,7 +81,13 @@ function columnsOf(kind: FocusKind, batch: SettlementBatch, onLeave: (item: Sett
     key: "requested",
     header: "Requested",
     right: true,
-    render: (i) => <span className="font-semibold tabular-nums">{formatMoney(i.requestedAmount)}</span>,
+    render: (i) => (
+      <span className="block whitespace-nowrap leading-tight">
+        <span className="font-semibold tabular-nums">{formatMoney(i.requestedAmount)}</span>
+        {/* a Salary Advance's rounded amount, with how it was rounded on hover (2026-11-27) */}
+        {roundingChanged(i.rounding) && <RoundedLine rounding={i.rounding} testId={`auto-focus-rounded-${i.id}`} />}
+      </span>
+    ),
   };
   switch (kind) {
     case "hr":

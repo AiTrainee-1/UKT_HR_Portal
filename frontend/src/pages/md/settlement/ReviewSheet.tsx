@@ -175,8 +175,10 @@ export default function ReviewSheet({
                       </p>
                       <p className={cn("text-xs font-bold tabular-nums", GROUP_TONE[r.kind])}>
                         {r.kind === "undecided"
-                          ? `Asked ${money(r.requested)}`
-                          : decisionText(r.kind, r.requested, r.approved)}
+                          ? `Asked ${money(r.requested)}${
+                              Math.abs(r.base - r.requested) >= 0.005 ? ` · rounded ${money(r.base)}` : ""
+                            }`
+                          : decisionText(r.kind, r.base, r.approved)}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">

@@ -17,6 +17,7 @@ import type {
   SettlementAdvance,
   SettlementBatch,
   SettlementItem,
+  SettlementRounding,
   SettlementStage,
   TrailEntry,
 } from "./types";
@@ -103,9 +104,54 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 export const plainAmount = (value: number): string =>
   Math.round(value * 100) % 100 ? value.toFixed(2) : String(value);
 
+// ── the Salary Advance rounding (owner 2026-11-27) ──────────────────────────────────────────────────────────────────
+// What was asked is brought down to the eligible limit when above it, then rounded to the nearest ₹500 (₹250 and up rounds
+// up), never above the limit. The server works it out and sends it (service.rounding_json, `baseAmount`); the rounded
+// amount is the MD's full approval and the most the MD may approve.
+
+type Based = { requestedAmount: number; baseAmount?: number | null; rounding?: SettlementRounding | null };
+
+/** The request's "as asked" amount: a Salary Advance's rounded amount, else what was asked (a Term Loan, an older
+ *  server). */
+export const baseOf = (item: Based): number => item.baseAmount ?? item.rounding?.rounded ?? item.requestedAmount;
+
+/** The rounding changed the amount asked for (worth a line of its own). */
+export const roundingChanged = (r: SettlementRounding | null | undefined): r is SettlementRounding =>
+  !!r && Math.abs(r.rounded - r.requested) >= 0.005;
+
+/** A request that rounds to ₹0: it can only be rejected (the server refuses an approval). */
+export const roundsToZero = (item: { rounding?: SettlementRounding | null }): boolean => !!item.rounding?.zero;
+
+export const ROUNDS_TO_ZERO = "This request rounds to ₹0 (less than ₹250 within the limit): reject it.";
+
+const nearest500 = (amount: number): number => {
+  if (!(amount > 0)) return 0;
+  const steps = Math.floor(amount / 500);
+  return (steps + (amount - steps * 500 >= 250 ? 1 : 0)) * 500;
+};
+
+/** How the rounded amount was worked out (the hover text): "₹15,000 asked → brought down to the ₹11,560 limit →
+ *  rounded to the nearest ₹500 = ₹11,500". */
+export function roundingSteps(r: SettlementRounding): string {
+  const parts = [`${money(r.requested)} asked`];
+  const capped = r.capped && r.limit != null;
+  if (capped) parts.push(`brought down to the ${money(r.limit)} limit`);
+  const nearest = nearest500(capped ? (r.limit as number) : r.requested);
+  if (r.zero) return [...parts, "rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it"].join(" → ");
+  if (r.limit != null && nearest > r.limit && Math.abs(nearest - r.rounded) >= 0.005)
+    return [
+      ...parts,
+      `rounded to ${money(r.rounded)} (the nearest ₹500, ${money(nearest)}, is above the ${money(r.limit)} limit)`,
+    ].join(" → ");
+  parts.push(`rounded to the nearest ₹500 = ${money(r.rounded)}`);
+  const tail = r.limit == null ? " (no eligible limit known)" : capped ? "" : ` (within the ${money(r.limit)} limit)`;
+  return parts.join(" → ") + tail;
+}
+
 // ── a request's decision ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/** approved = the full amount asked; reduced = approved for less; rejected; undecided = no decision yet. */
+/** approved = the full amount asked (a Salary Advance: its rounded amount); reduced = approved for less; rejected;
+ *  undecided = no decision yet. */
 export type DecisionKind = "approved" | "reduced" | "rejected" | "undecided";
 
 type Decided = { decision: "approved" | "rejected" | null; amount: number | null };
@@ -117,12 +163,11 @@ function kindOf(d: Decided, requested: number): DecisionKind {
 }
 
 /** The MD's decision on a request. */
-export const decisionKind = (item: Pick<SettlementItem, "md" | "requestedAmount">): DecisionKind =>
-  kindOf(item.md, item.requestedAmount);
+export const decisionKind = (item: Pick<SettlementItem, "md"> & Based): DecisionKind => kindOf(item.md, baseOf(item));
 
 /** HR's final decision on a request (after the MD confirmed; it starts as a copy of the MD's). */
-export const finalKind = (item: Pick<SettlementItem, "final" | "requestedAmount">): DecisionKind =>
-  kindOf(item.final, item.requestedAmount);
+export const finalKind = (item: Pick<SettlementItem, "final"> & Based): DecisionKind =>
+  kindOf(item.final, baseOf(item));
 
 /** The decision in a few words: "Approved ₹10,000", "Reduced ₹10,000 → ₹6,000", "Rejected", "Not decided". */
 export function decisionText(kind: DecisionKind, requested: number, amount: number | null): string {
@@ -148,7 +193,7 @@ export const REDUCE_REMARK_MESSAGE = `Write a remark for the reduced amount (at 
 export const REJECT_MESSAGE = `Write the reason for rejecting (at least ${REJECT_REMARK_MIN} characters).`;
 
 /** The form as it opens: on `mode` when given, else on the request's current decision, with its amount and remark. */
-export function draftFor(item: Pick<SettlementItem, "md" | "requestedAmount">, mode?: DraftMode): Draft {
+export function draftFor(item: Pick<SettlementItem, "md"> & Based, mode?: DraftMode): Draft {
   const kind = decisionKind(item);
   const current: DraftMode = kind === "reduced" ? "reduce" : kind === "rejected" ? "reject" : "approve";
   return {
@@ -171,16 +216,19 @@ export function parseAmount(text: string): AmountParse {
   return { value };
 }
 
-/** Why the form cannot be saved yet (empty when it can): a reduced amount must be below the amount asked and needs a
- *  remark; a rejection needs a remark; approving the full amount needs nothing. */
-export function draftProblems(draft: Draft, requested: number): DraftProblems {
+/** Why the form cannot be saved yet (empty when it can): a reduced amount must be below the amount asked (`rounded`: a
+ *  Salary Advance's rounded amount, 2026-11-27) and needs a remark; a rejection needs a remark; approving the full amount
+ *  needs nothing. */
+export function draftProblems(draft: Draft, requested: number, rounded = false): DraftProblems {
   const out: DraftProblems = {};
   const remark = cleanRejectRemark(draft.remark);
   if (draft.mode === "reduce") {
     const parsed = parseAmount(draft.amount);
     if (parsed.value === undefined) out.amount = parsed.problem;
     else if (parsed.value >= requested)
-      out.amount = `A reduced amount must be less than the ${money(requested)} asked for. To give the full amount, choose Approve.`;
+      out.amount = `A reduced amount must be less than the ${
+        rounded ? `rounded ${money(requested)}` : `${money(requested)} asked for`
+      }. To give the full amount, choose Approve.`;
     if (remark.length < REJECT_REMARK_MIN) out.remark = REDUCE_REMARK_MESSAGE;
   } else if (draft.mode === "reject" && remark.length < REJECT_REMARK_MIN) {
     out.remark = REJECT_MESSAGE;
@@ -207,6 +255,8 @@ export type ReviewRow = {
   typeLabel: string;
   kind: DecisionKind;
   requested: number;
+  /** The "as asked" amount the MD approves in full or reduces from: a Salary Advance's rounded amount (2026-11-27). */
+  base: number;
   /** What the MD approved (null: rejected or not decided). */
   approved: number | null;
   remark: string;
@@ -274,7 +324,9 @@ export function reviewSummary(items: SettlementItem[]): ReviewSummary {
       s.changedIds.push(item.id);
     } else if (item.mdRemarked) s.remarked += 1;
     const requested = item.requestedAmount;
-    const approved = kind === "approved" || kind === "reduced" ? (item.md.amount ?? requested) : null;
+    // the full approval of a Salary Advance is its rounded amount; a reduction is what is taken off that (2026-11-27)
+    const base = baseOf(item);
+    const approved = kind === "approved" || kind === "reduced" ? (item.md.amount ?? base) : null;
     s.requestedTotal += requested;
     if (kind === "undecided") {
       s.undecided += 1;
@@ -283,7 +335,7 @@ export function reviewSummary(items: SettlementItem[]): ReviewSummary {
     if (kind === "approved") s.approved += 1;
     if (kind === "reduced") {
       s.reduced += 1;
-      s.reducedBy += requested - (approved ?? requested);
+      s.reducedBy += base - (approved ?? base);
     }
     if (kind === "rejected") {
       s.rejected += 1;
@@ -297,6 +349,7 @@ export function reviewSummary(items: SettlementItem[]): ReviewSummary {
       typeLabel: typeLabelOf(item.advance),
       kind,
       requested,
+      base,
       approved,
       remark: kind === "undecided" ? "" : item.md.remark || "",
       leave: item.advance.leaveCheck,
@@ -423,10 +476,10 @@ export function overLimit(item: Pick<SettlementItem, "advance" | "requestedAmoun
 }
 
 /** Confirming HR's pre-filled proposal as the MD's own decision: the same decision, amount and remark, sent again. */
-export function confirmHrBody(item: Pick<SettlementItem, "md" | "requestedAmount">): DecideBody {
+export function confirmHrBody(item: Pick<SettlementItem, "md"> & Based): DecideBody {
   if (item.md.decision === "rejected") return { decision: "rejected", remark: item.md.remark };
   const amount = item.md.amount;
-  return amount != null && amount < item.requestedAmount - 0.004
+  return amount != null && amount < baseOf(item) - 0.004
     ? { decision: "approved", amount, remark: item.md.remark }
     : item.md.remark
       ? { decision: "approved", remark: item.md.remark }
@@ -461,7 +514,7 @@ export const finalized = (stage: SettlementStage): boolean =>
 export type HrProposal = { kind: "none" | "reduce" | "reject"; text: string; remark: string };
 
 /** What HR proposed at HR Review: "HR proposes ₹6,000" (a smaller amount), "HR proposes reject", or no change (HR kept
- *  the amount asked); with HR's remark (the request's HR note). */
+ *  the amount asked: a Salary Advance's rounded amount, 2026-11-27); with HR's remark (the request's HR note). */
 export function hrProposal(item: Pick<SettlementItem, "hr" | "hrNote" | "requestedAmount">): HrProposal {
   const remark = (item.hr?.remark ?? item.hrNote ?? "").trim();
   const action = item.hr?.action ?? null;
@@ -812,11 +865,11 @@ export const mdRoundOf = (b: Pick<SettlementBatch, "flow" | "mdRound">): number 
 type Expected = { decision: MdDecision; amount: number | null };
 
 /** HR's proposal as an MD decision (service.py hr_expected): rejected, approved for HR's smaller amount, or approved for
- *  the full amount asked (HR kept it, or did not review it). */
-export function hrExpected(item: Pick<SettlementItem, "hr" | "requestedAmount">): Expected {
+ *  the full amount asked (HR kept it, or did not review it; a Salary Advance: its rounded amount). */
+export function hrExpected(item: Pick<SettlementItem, "hr"> & Based): Expected {
   if (item.hr?.action === "reject") return { decision: "rejected", amount: null };
   if (item.hr?.action === "reduce" && item.hr.amount != null) return { decision: "approved", amount: item.hr.amount };
-  return { decision: "approved", amount: item.requestedAmount };
+  return { decision: "approved", amount: baseOf(item) };
 }
 
 const sameDecision = (a: Expected, b: Expected) =>
@@ -827,10 +880,7 @@ const sameDecision = (a: Expected, b: Expected) =>
 export function mdChangedOf(item: SettlementItem): boolean {
   if (typeof item.mdChanged === "boolean") return item.mdChanged;
   if (!item.md.decision || item.md.fromHr || !item.md.decidedAt) return false;
-  return !sameDecision(
-    { decision: item.md.decision, amount: item.md.amount ?? item.requestedAmount },
-    hrExpected(item),
-  );
+  return !sameDecision({ decision: item.md.decision, amount: item.md.amount ?? baseOf(item) }, hrExpected(item));
 }
 
 /** A decision in a few words: "₹6,000", "reject". */
@@ -839,7 +889,7 @@ const shortDecision = (e: Expected): string => (e.decision === "rejected" ? "rej
 /** The changed-from-HR chip's hover text: what HR proposed and what the MD decided. */
 export function changeText(item: SettlementItem): string {
   const hr = hrExpected(item);
-  const mine: Expected = { decision: item.md.decision ?? "approved", amount: item.md.amount ?? item.requestedAmount };
+  const mine: Expected = { decision: item.md.decision ?? "approved", amount: item.md.amount ?? baseOf(item) };
   return `HR proposed ${shortDecision(hr)}; you ${mine.decision === "rejected" ? "rejected it" : `set ${money(mine.amount)}`}. Return the settlement to HR for rework; you approve it once HR resubmits.`;
 }
 
@@ -865,7 +915,7 @@ export function trailLine(item: SettlementItem, mdRound: number): TrailLine | nu
   const mine = trail.filter((t) => t.role === "md");
   if (!mine.length) return null;
   const last = mine.reduce((a, b) => (b.round > a.round ? b : a));
-  const then = trailDecision(last, item.requestedAmount);
+  const then = trailDecision(last, baseOf(item));
   const now = hrExpected(item);
   const rounds = [...new Set(trail.filter((t) => t.role === "hr" || t.role === "md").map((t) => t.round))].sort(
     (a, b) => a - b,
@@ -874,7 +924,7 @@ export function trailLine(item: SettlementItem, mdRound: number): TrailLine | nu
     const parts = (["hr", "md"] as const).flatMap((role) => {
       const t = trail.find((x) => x.role === role && x.round === r);
       if (!t) return [];
-      const d = trailDecision(t, item.requestedAmount);
+      const d = trailDecision(t, baseOf(item));
       const what =
         role === "hr"
           ? `HR proposed ${shortDecision(d)}`

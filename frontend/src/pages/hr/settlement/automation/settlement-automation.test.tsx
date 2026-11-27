@@ -10,7 +10,7 @@ import type {
 } from "@/lib/api-client/custom-hooks/settlement-automation";
 import Settlement from "../../Settlement";
 import type { SettlementRow } from "../logic";
-import { actionsFor, batchAt, monthOf, overviewOf, overviewType, trackerFor, withAuditor } from "./test-fixtures";
+import { actionsFor, batchAt, item, monthOf, overviewOf, overviewType, trackerFor, withAuditor } from "./test-fixtures";
 
 // The Loan & Advance pages (the Settlement page renamed 2026-11-27) with Settings -> Loan & Advance's two methods (owner
 // 2026-11-26), against a small fake server: the method decides the pages; the Normal Method's list shows the leave
@@ -1134,6 +1134,7 @@ describe("the Requests table (round 5): every value under its own heading", () =
       "Earned",
       "Requested",
       "Eligible limit",
+      "Rounded",
       "Approved",
       "Leave",
       "Status",
@@ -1141,6 +1142,8 @@ describe("the Requests table (round 5): every value under its own heading", () =
       "Actions",
     ]);
     expect(text(cell(1, "requested"))).toBe("₹8,000");
+    // already a whole ₹500 within the limit: the rounded amount, no note, no line under the ask
+    expect(text(cell(1, "rounded"))).toBe("₹8,000");
     expect(cell(1, "requested")?.className).toContain("text-right");
     expect(text(cell(1, "workingDays"))).toBe("16");
     expect(text(cell(1, "earned"))).toBe("₹16,000");
@@ -1283,7 +1286,7 @@ describe("HR's proposal at HR Review (round 5)", () => {
     await click(q("auto-reduce-1"));
     await type(q("hr-proposal-amount"), "8000");
     await click(q("hr-proposal-confirm"));
-    expect(text(q("hr-proposal-amount-problem"))).toBe("A reduced amount must be less than the ₹8,000 asked for.");
+    expect(text(q("hr-proposal-amount-problem"))).toBe("A reduced amount must be less than the rounded ₹8,000.");
     await type(q("hr-proposal-amount"), "6000");
     await type(q("hr-proposal-remark"), "Above the earned limit");
     await click(q("hr-proposal-confirm"));
@@ -1323,6 +1326,170 @@ describe("HR's proposal at HR Review (round 5)", () => {
     expect(text(q("auto-row-1")?.querySelector('[data-column="approved"]') ?? null)).toContain(
       "HR's proposal (MD to confirm)",
     );
+  });
+});
+
+describe("the Salary Advance rounding at HR Review (owner 2026-11-27)", () => {
+  const cell = (id: number, column: string) => q(`auto-row-${id}`)?.querySelector(`[data-column="${column}"]`) ?? null;
+  const limited = (limit: number) => ({ ...batchAt("hr_review").items[0].advance.earnings!, limit });
+  /** Asha (₹8,000, kept), Ravi (Term Loan), Meena, then three that the rounding changes: ₹15,000 asked over an ₹11,560
+   *  limit (-> ₹11,500, capped), ₹4,800 (-> ₹5,000, rounded up) and ₹200 (-> ₹0: only reject). */
+  function rounded(): SettlementBatch {
+    const b = batchAt("hr_review");
+    b.items = [
+      ...b.items,
+      item(4, {
+        rounding: true,
+        advance: {
+          employeeName: "Karthik Raja",
+          employeeCode: "S104",
+          amount: 15000,
+          requestedAmount: 15000,
+          earnings: limited(11560),
+        },
+      }),
+      item(5, {
+        rounding: true,
+        advance: { employeeName: "Lakshmi N", employeeCode: "S105", amount: 4800, requestedAmount: 4800 },
+      }),
+      item(6, {
+        rounding: true,
+        advance: { employeeName: "Devi Priya", employeeCode: "S106", amount: 200, requestedAmount: 200 },
+      }),
+    ];
+    b.counts = { ...b.counts, total: 6, undecided: 6 };
+    b.amounts = { ...b.amounts, requested: 63000, rounded: 59500 };
+    return b;
+  }
+
+  it("the Rounded column after the limit, with one short note and how it was rounded on hover", async () => {
+    atStage(rounded());
+    await mount();
+    await openTab("Requests");
+    const heads = [...q("auto-requests-table")!.querySelectorAll("th")].map((th) => text(th));
+    expect(heads.slice(heads.indexOf("Eligible limit"), heads.indexOf("Eligible limit") + 3)).toEqual([
+      "Eligible limit",
+      "Rounded",
+      "Approved",
+    ]);
+    // the Rounded column shows from a full-HD screen on; right-aligned like every amount
+    const th = q("auto-requests-table")!.querySelector('th[data-column="rounded"]')!;
+    expect(th.className).toContain("min-[1880px]:table-cell");
+    expect(th.className).toContain("text-right");
+    // Requested keeps what the employee asked for
+    expect(text(q("auto-row-4")?.querySelector('[data-column="requested"] p') ?? null)).toBe("₹15,000");
+    expect(text(cell(4, "limit"))).toBe("₹11,560");
+    expect(text(cell(4, "rounded"))).toBe("₹11,500capped at limit");
+    expect(text(cell(5, "rounded"))).toBe("₹5,000rounded up");
+    expect(text(cell(6, "rounded"))).toBe("₹0rounds to ₹0 — reject");
+    expect(q("auto-rounded-6-note")?.className).toContain("text-red-600");
+    expect(q("auto-rounded-4")?.getAttribute("data-steps")).toBe(
+      "₹15,000 asked → brought down to the ₹11,560 limit → rounded to the nearest ₹500 = ₹11,500",
+    );
+    expect(q("auto-rounded-5")?.getAttribute("data-steps")).toBe(
+      "₹4,800 asked → rounded to the nearest ₹500 = ₹5,000 (within the ₹8,000 limit)",
+    );
+    // below a full-HD screen the rounded amount is a line under the ask (only where the rounding changed it)
+    const line = q("auto-rounded-line-4");
+    expect(text(line)).toBe("rounded ₹11,500");
+    expect(line?.className).toContain("min-[1880px]:hidden");
+    expect(line?.getAttribute("data-steps")).toContain("brought down to the ₹11,560 limit");
+    expect(text(q("auto-rounded-line-6"))).toBe("rounds to ₹0");
+    expect(q("auto-rounded-line-1")).toBeNull();
+    // the hover text is the shared Radix tooltip (drawn in a portal), opened from the keyboard too
+    await act(async () => {
+      (q("auto-rounded-4") as HTMLElement).focus();
+    });
+    await flush();
+    expect(text(q("auto-rounded-4-tip"))).toContain("brought down to the ₹11,560 limit");
+    // a phone's card has the Rounded figure under its own label
+    expect(text(q("auto-card-4"))).toContain("Rounded₹11,500capped at limit");
+    expect(q("auto-card-rounded-line-4")).toBeNull();
+  });
+
+  it("a request that rounds to ₹0 can only be rejected: Keep is off with the reason, Reject stays", async () => {
+    atStage(rounded());
+    await mount();
+    await openTab("Requests");
+    const keep = q("auto-keep-6") as HTMLButtonElement;
+    expect(keep.disabled).toBe(true);
+    expect(keep.getAttribute("aria-label")).toBe("Devi Priya's request rounds to ₹0: it can only be rejected");
+    expect((q("auto-hr-reject-6") as HTMLButtonElement).disabled).toBe(false);
+    // the others keep their rounded amount
+    expect((q("auto-keep-4") as HTMLButtonElement).disabled).toBe(false);
+    await click(q("auto-keep-4"));
+    expect(writes).toEqual([["PATCH", "/api/settlement-automation/items/4", { action: "keep" }]]);
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ description: "Karthik Raja's request goes to the MD at the rounded ₹11,500." }),
+    );
+  });
+
+  it("kept as asked means the rounded amount: the Approved column and the status say so", async () => {
+    const b = rounded();
+    b.items[3] = { ...b.items[3], hr: { action: "approve", amount: null, remark: "" }, review: "approved" };
+    atStage(b);
+    await mount();
+    await openTab("Requests");
+    expect(text(cell(4, "approved"))).toBe("₹11,500kept · rounded");
+    expect(text(q("auto-hr-view-4"))).toBe("HRKept · rounded");
+    // not reviewed yet: nothing proposed
+    expect(text(cell(3, "approved"))).toBe("—");
+  });
+
+  it("Reduce: requested, limit and rounded in the dialog; the ceiling is the rounded amount", async () => {
+    atStage(rounded());
+    await mount();
+    await openTab("Requests");
+    await click(q("auto-reduce-4"));
+    expect(text(q("hr-proposal-fact-requested"))).toBe("₹15,000");
+    expect(text(q("hr-proposal-fact-limit"))).toBe("₹11,560");
+    expect(text(q("hr-proposal-fact-rounded"))).toBe("₹11,500");
+    expect(text(q("hr-proposal-fact-steps"))).toBe(
+      "₹15,000 asked → brought down to the ₹11,560 limit → rounded to the nearest ₹500 = ₹11,500",
+    );
+    expect(text(q("hr-proposal-dialog"))).toContain("Less than the rounded ₹11,500.");
+    await type(q("hr-proposal-amount"), "11500");
+    await type(q("hr-proposal-remark"), "Second advance this year");
+    await click(q("hr-proposal-confirm"));
+    expect(text(q("hr-proposal-amount-problem"))).toBe("A reduced amount must be less than the rounded ₹11,500.");
+    expect(writes).toEqual([]);
+    await type(q("hr-proposal-amount"), "11000");
+    await click(q("hr-proposal-confirm"));
+    expect(writes).toEqual([
+      [
+        "PATCH",
+        "/api/settlement-automation/items/4",
+        { hrNote: "Second advance this year", action: "reduce", amount: 11000 },
+      ],
+    ]);
+  });
+
+  it("the batch's rounded total beside the requested total; bulk Keep warns about a request that rounds to ₹0", async () => {
+    atStage(rounded());
+    await mount();
+    await openTab("Summary");
+    expect(text(q("auto-amount-requested"))).toContain("₹63,000");
+    expect(text(q("auto-amount-requested"))).toContain("Rounded total ₹59,500");
+    await openTab("Requests");
+    await click(q("auto-select-4"));
+    await click(q("auto-select-6"));
+    await click(q("auto-bulk-approve"));
+    expect(text(q("auto-bulk-dialog"))).toContain("a Salary Advance at its rounded amount");
+    expect(text(q("auto-bulk-zero"))).toBe(
+      "One of them rounds to ₹0 and can only be rejected: untick it or propose to reject it.",
+    );
+  });
+
+  it("a Term Loan is not rounded: no Rounded column, no line under the ask, no rounded total", async () => {
+    const b = batchAt("hr_review", { advanceType: "term" });
+    atStage(b);
+    await mount(TERM_LOAN);
+    await openTab("Requests");
+    const heads = [...q("auto-requests-table")!.querySelectorAll("th")].map((th) => text(th));
+    expect(heads).not.toContain("Rounded");
+    expect(document.querySelector('[data-testid^="auto-rounded-"]')).toBeNull();
+    await openTab("Summary");
+    expect(text(q("auto-amount-requested"))).not.toContain("Rounded total");
   });
 });
 

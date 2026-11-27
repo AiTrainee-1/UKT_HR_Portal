@@ -923,3 +923,71 @@ class ReworkTests(_FlowBase):
         bank = SimpleUploadedFile("Bank.xlsx", b"PK", content_type="application/vnd.ms-excel")
         r = self.client.post(f"/api/settlement-automation/batches/{bid}/send-accounts", {"bank": bank}, **self.hr)
         self.assertEqual((r.status_code, r.json()["code"]), (409, "stage"))
+
+
+class RoundingTests(_FlowBase):
+    """Salary Advance rounding (owner 2026-11-27): at HR Review the amount asked for is capped at the eligible limit and
+    rounded to the nearest ₹500 (never above the limit); it is the workflow's "as asked" amount from then on."""
+
+    def test_rounded_amounts_drive_the_workflow_and_a_round_up_is_paid(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        self.automation()
+        capped = self.apply(self.a, "general", 5000)  # the limit is brought down to 3,760 below: -> 3,500
+        rounded_up = self.apply(self.b, "general", 4800)  # limit 5,440: -> 5,000 (more than asked, within the limit)
+        Advance.objects.filter(pk=capped).update(earned_limit=Decimal("3760"))
+        Advance.objects.filter(pk=rounded_up).update(earned_limit=Decimal("5440"))
+        loan = self.apply(self.a, "term", 3000, day=date(2026, 2, 25))
+        batch = self.month()["batches"][0]
+        rows = {i["advance"]["id"]: i for i in batch["items"]}
+        self.assertEqual(
+            rows[capped]["rounding"],
+            {"requested": 5000.0, "limit": 3760.0, "rounded": 3500.0, "capped": True, "direction": "down", "zero": False},
+        )
+        self.assertEqual((rows[rounded_up]["rounding"]["rounded"], rows[rounded_up]["rounding"]["direction"]), (5000.0, "up"))
+        self.assertEqual((rows[capped]["baseAmount"], batch["amounts"]["rounded"]), (3500.0, 8500.0))
+        term = self.month(url="/api/settlement-automation/month?month=2&year=2026&type=term")["batches"][0]
+        self.assertEqual((term["items"][0]["rounding"], term["items"][0]["baseAmount"]), (None, 3000.0))
+        self.assertEqual(term["items"][0]["advance"]["id"], loan)
+        a, b = rows[capped]["id"], rows[rounded_up]["id"]
+        bid = batch["id"]
+        # HR: a reduction must be below the ROUNDED amount
+        r = self.patch_(f"/api/settlement-automation/items/{a}", {"action": "reduce", "amount": 3600, "hrNote": "Lower"})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "amount"))
+        self.post(f"/api/settlement-automation/batches/{bid}/hr-review-bulk", {"itemIds": [a, b], "action": "approve"})
+        self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": [capped, rounded_up]})
+        # frozen at Forward: a limit worked out again later changes nothing
+        Advance.objects.filter(pk=capped).update(earned_limit=Decimal("9000"))
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        self.assertEqual({i["id"]: i["baseAmount"] for i in md["items"]}, {a: 3500.0, b: 5000.0})
+        # the MD: never above the rounded amount; the full approval IS the rounded amount, and is no change from HR
+        r = self.patch_(f"/api/md/settlement/items/{a}", {"decision": "approved", "amount": 4000, "remark": "x y z"}, self.md)
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "amount"))
+        r = self.post(f"/api/md/settlement/batches/{bid}/bulk", {"itemIds": [a, b], "decision": "approved"}, self.md)
+        self.assertEqual({i["id"]: i["md"]["amount"] for i in r.json()["items"]}, {a: 3500.0, b: 5000.0})
+        self.assertEqual(r.json()["counts"]["mdChanges"], 0)
+        r = self.post(f"/api/md/settlement/batches/{bid}/confirm", {"mode": "hr"}, self.md)
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "hr_final"), r.content)
+        self.post(f"/api/settlement-automation/batches/{bid}/finalize", {})
+        pdf = SimpleUploadedFile("r.pdf", b"%PDF", content_type="application/pdf")
+        xlsx = SimpleUploadedFile("r.xlsx", b"PK", content_type="application/vnd.ms-excel")
+        with patch("api.email_service.send_email", side_effect=_sent):
+            self.client.post(f"/api/settlement-automation/batches/{bid}/send-auditor", {"pdf": pdf, "xlsx": xlsx}, **self.hr)
+        r = self.post(f"/api/settlement-automation/batches/{bid}/auditor-done", {})
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "accounts_send"), r.content)
+        first, second = Advance.objects.get(pk=capped), Advance.objects.get(pk=rounded_up)
+        self.assertEqual((first.status, first.amount, first.requested_amount), ("approved", Decimal("3500.00"), Decimal("5000.00")))
+        # rounded up: paid ₹5,000 although ₹4,800 was asked (the owner's rule), the request itself unchanged
+        self.assertEqual((second.status, second.amount, second.requested_amount), ("approved", Decimal("5000.00"), Decimal("4800.00")))
+
+    def test_a_request_that_rounds_to_zero_can_only_be_rejected(self):
+        self.automation()
+        pk = self.apply(self.a, "general", 5000)
+        Advance.objects.filter(pk=pk).update(earned_limit=Decimal("240"))
+        item = self.month()["batches"][0]["items"][0]
+        self.assertEqual((item["rounding"]["rounded"], item["rounding"]["zero"]), (0.0, True))
+        r = self.patch_(f"/api/settlement-automation/items/{item['id']}", {"action": "keep"})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "rounds_to_zero"))
+        r = self.patch_(f"/api/settlement-automation/items/{item['id']}", {"action": "reject", "hrNote": "Below Rs 250"})
+        self.assertEqual(r.status_code, 200, r.content)
+

@@ -129,10 +129,32 @@ export type SettlementAdvance = {
 
 export type MdDecision = "approved" | "rejected";
 
+/** A Salary Advance's rounding (owner 2026-11-27, service.rounding_json): what was asked, brought down to the eligible
+ *  limit when above it, then rounded to the nearest ₹500 (₹250 and up rounds up), never above the limit. Frozen when HR
+ *  forwards the batch. */
+export type SettlementRounding = {
+  requested: number;
+  /** The eligible limit (null: none known). */
+  limit: number | null;
+  /** The rounded amount: the MD's full approval. */
+  rounded: number;
+  /** Asked for more than the limit: brought down to it first. */
+  capped: boolean;
+  direction: "up" | "down" | "same";
+  /** Rounds to ₹0 (less than ₹250 within the limit): it can only be rejected. */
+  zero: boolean;
+};
+
 export type SettlementItem = {
   id: number;
   advance: SettlementAdvance;
+  /** What the employee asked for (never the rounded amount). */
   requestedAmount: number;
+  /** The Salary Advance rounding (2026-11-27); null for a Term Loan / an older batch, absent from an older server. */
+  rounding?: SettlementRounding | null;
+  /** The workflow's "as asked" amount (2026-11-27): a Salary Advance's rounded amount, else what was asked. The MD's
+   *  full approval is this amount, and no approval may be above it. */
+  baseAmount?: number;
   hrNote: string;
   /** HR's review proposal (2026-11-27): reduce (to `amount`) or reject; approve / null = kept as asked; `remark` is
    *  HR's note. */
@@ -242,7 +264,8 @@ export type SettlementBatch = {
     /** Requests waiting for HR's rework answer. */
     rework?: number;
   };
-  amounts: { requested: number; mdApproved: number; finalApproved: number; payable?: number };
+  /** `rounded`: the "as asked" total after the Salary Advance rounding (2026-11-27; = requested for a Term Loan). */
+  amounts: { requested: number; rounded?: number; mdApproved: number; finalApproved: number; payable?: number };
   forwardedAt: string | null;
   forwardedBy: string | null;
   hrNote: string;
@@ -300,7 +323,8 @@ export type MdSettlementWaiting = {
   batches: WaitingBatch[];
 };
 
-/** PATCH /api/md/settlement/items/<id>: an empty decision clears it; no amount = the full amount asked. */
+/** PATCH /api/md/settlement/items/<id>: an empty decision clears it; no amount = the full amount asked (a Salary
+ *  Advance's rounded amount). */
 export type DecideBody = { decision: MdDecision | ""; amount?: number; remark?: string };
 
 /** POST /api/md/settlement/batches/<id>/bulk: several requests at once; the reply is the batch and the requests left out. */

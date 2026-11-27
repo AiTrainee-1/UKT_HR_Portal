@@ -34,6 +34,8 @@ import { useToast } from "@/hooks/use-toast";
 import { groupByReview, reviewGroupLabel, type ReviewState } from "@/lib/reviewOrder";
 import { cn } from "@/lib/utils";
 import { REMARK_MAX, formatDays } from "@/pages/hr/settlement/logic";
+import { RoundedLine } from "@/pages/hr/settlement/automation/Rounded";
+import { roundingChanged } from "@/pages/hr/settlement/automation/rounding";
 import { formatDateTime, formatMoney } from "@/pages/hr/settlement/shared";
 import {
   FIRST,
@@ -133,13 +135,21 @@ type Column = {
   total?: ReactNode;
 };
 
-/** The amount asked for, marked in words and colour when it is more than the limit. */
+/** The amount asked for, marked in words and colour when it is more than the limit; a Salary Advance's rounded amount
+ *  under it when the rounding changed it (owner 2026-11-27), with how it was rounded on hover. */
 function Requested({ item, limit }: { item: PortalItem; limit: number | null | undefined }) {
   const over = limit != null && item.requestedAmount > limit;
   return (
     <span className={cn("tabular-nums", over && "font-semibold text-amber-800")}>
       {formatMoney(item.requestedAmount)}
       {over && <span className="block text-[10.5px] font-semibold text-amber-700">over the limit</span>}
+      {roundingChanged(item.rounding) && (
+        <RoundedLine
+          rounding={item.rounding}
+          className="mt-0 whitespace-nowrap text-[10.5px] font-normal"
+          testId={`portal-rounded-${item.id}`}
+        />
+      )}
     </span>
   );
 }

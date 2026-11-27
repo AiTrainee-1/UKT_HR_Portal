@@ -31,6 +31,7 @@ import { loanAdvancePath } from "../routes";
 import { formatMoney } from "../shared";
 import { monthFromUrl, monthText, monthToUrl, type MonthRef } from "./logic";
 import MonthSwitcher from "./MonthSwitcher";
+import { roundedTotalOf } from "./rounding";
 import { CompactTracker } from "./Tracker";
 
 /** The address: the month ("" = this month in India). Module-level: useUrlParams needs one identity. */
@@ -198,6 +199,11 @@ function TypePanel({ t, period }: { t: SettlementOverviewType; period: MonthRef 
               <div>
                 <dt className="text-slate-500">Requested</dt>
                 <dd className="font-bold text-slate-900">{formatMoney(b.amounts.requested)}</dd>
+                {roundedTotalOf(b) != null && (
+                  <dd className="text-[11px] text-slate-500" data-testid={`overview-rounded-${id}`}>
+                    Rounded total {formatMoney(roundedTotalOf(b))}
+                  </dd>
+                )}
               </div>
               <div>
                 <dt className="text-slate-500">MD approved</dt>

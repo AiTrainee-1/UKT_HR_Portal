@@ -6,7 +6,16 @@ import { ApiError } from "@/lib/api-client/custom-fetch";
 import type { BankFileLine } from "@/lib/bankFile";
 import type { PortalAuditorAction, PortalData } from "./api";
 import AuditorReview from "./AuditorReview";
-import { LEAVE_CALENDAR, TIMECARD, portalData, recount, round2PortalData, termPortalData } from "./fixtures";
+import { roundingFor } from "@/pages/hr/settlement/automation/test-fixtures";
+import {
+  LEAVE_CALENDAR,
+  TIMECARD,
+  portalData,
+  portalItem,
+  recount,
+  round2PortalData,
+  termPortalData,
+} from "./fixtures";
 
 // The Auditor Review Portal (owner 2026-11-27, redesigned the same day) against a small fake server (the browser's fetch
 // is replaced): the link's states (valid, not valid, replaced, expired, answered), one row of three tabs each with its
@@ -610,6 +619,61 @@ const cardOrder = () =>
       : `card:${(el.getAttribute("data-testid") ?? "").slice(12)}`,
   );
 
+describe("the Salary Advance rounding in the Requested cell (owner 2026-11-27)", () => {
+  it("a muted 'rounded' line under the amount asked when the rounding changed it, how on hover; nothing else", async () => {
+    const d = portalData();
+    d.items = [
+      // ₹15,000 asked over the ₹8,000 limit -> ₹8,000; HR approved it
+      portalItem(1, {
+        code: "S101",
+        name: "Asha Kumar",
+        final: "approved",
+        amount: 8000,
+        requested: 15000,
+        rounding: roundingFor(15000, 8000),
+      }),
+      // ₹4,800 -> ₹5,000 (rounded up)
+      portalItem(2, {
+        code: "S102",
+        name: "Ravi Shankar",
+        final: "approved",
+        amount: 5000,
+        requested: 4800,
+        rounding: roundingFor(4800, 8000),
+      }),
+      // already a whole ₹500 within the limit: no line
+      portalItem(3, {
+        code: "S103",
+        name: "Meena Iyer",
+        final: "rejected",
+        amount: null,
+        requested: 5000,
+        rounding: roundingFor(5000, 8000),
+      }),
+    ];
+    portal = recount(d);
+    await mount();
+    expect(cell(1, "requested")).toBe("₹15,000over the limitrounded ₹8,000");
+    expect(q("portal-rounded-1")?.getAttribute("data-steps")).toBe(
+      "₹15,000 asked → brought down to the ₹8,000 limit → rounded to the nearest ₹500 = ₹8,000",
+    );
+    expect(cell(2, "requested")).toBe("₹4,800rounded ₹5,000");
+    expect(q("portal-rounded-2")?.getAttribute("data-steps")).toBe(
+      "₹4,800 asked → rounded to the nearest ₹500 = ₹5,000 (within the ₹8,000 limit)",
+    );
+    expect(cell(3, "requested")).toBe("₹5,000");
+    expect(q("portal-rounded-3")).toBeNull();
+    // nothing else changes: the same columns
+    expect(heads()).not.toContain("Rounded");
+    // the hover text is the shared tooltip, opened from the keyboard too
+    await act(async () => {
+      (q("portal-rounded-1") as HTMLElement).focus();
+    });
+    await flush();
+    expect(text(q("portal-rounded-1-tip"))).toContain("brought down to the ₹8,000 limit");
+  });
+});
+
 describe("the review order and the auditor's answers (owner 2026-11-27)", () => {
   const mixed = () => {
     const base = portalData();
@@ -896,9 +960,7 @@ describe("Approval: the answer", () => {
     );
     expect(q("portal-option-changes")?.getAttribute("data-open")).toBe("true");
     expect(text(q("portal-decide-changes_forward_hr"))).toBe("Return to HR for rework");
-    expect(text(q("portal-option-changes"))).toContain(
-      "1 request you rejected and 2 remarks go back to HR.",
-    );
+    expect(text(q("portal-option-changes"))).toContain("1 request you rejected and 2 remarks go back to HR.");
     expect(text(q("portal-option-changes"))).toContain("nothing reaches Accounts before you approve it");
     // the approvals are closed, so nothing says requests would be approved as HR settled them
     expect(q("portal-pending-note")).toBeNull();

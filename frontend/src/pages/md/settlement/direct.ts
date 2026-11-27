@@ -8,7 +8,7 @@ import type {
   SettlementBatch as HrBatch,
   SettlementBatchItem as HrItem,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
-import { TYPE_LABEL } from "./logic";
+import { TYPE_LABEL, baseOf } from "./logic";
 import type { SettlementBatch, SettlementItem } from "./types";
 
 export type ReportCompany = { company: string; branchLabel: string; logoDataUrl?: string | null };
@@ -17,7 +17,7 @@ export type ReportCompany = { company: string; branchLabel: string; logoDataUrl?
  *  deduction month (and a Term Loan's own months), no auditor change yet. */
 export function finalizedItem(item: SettlementItem): HrItem {
   const approved = item.md.decision === "approved";
-  const amount = approved ? (item.md.amount ?? item.requestedAmount) : null;
+  const amount = approved ? (item.md.amount ?? baseOf(item)) : null;
   const a = item.advance;
   return {
     ...item,

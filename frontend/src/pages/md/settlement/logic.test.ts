@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { historyLabel } from "@/components/settlement-flow/WorkflowFlow";
-import { advance, batch, fourItems, item, leave } from "./fixtures";
+import { advance, batch, fourItems, item, leave, rounded, roundingFor } from "./fixtures";
 import {
+  baseOf,
   bulkResultText,
   changesReason,
   hrExpected,
@@ -48,6 +49,9 @@ import {
   REJECT_MESSAGE,
   reviewGroups,
   reviewSummary,
+  roundingChanged,
+  roundingSteps,
+  roundsToZero,
   termText,
   typeFromQuery,
   typeOptions,
@@ -632,5 +636,71 @@ describe("round 5: HR's proposal, the eligible limit, the status and bulk decisi
     const s = reviewSummary(items);
     expect(s.fromHr).toBe(1);
     expect(s.rows.find((r) => r.id === 12)?.fromHr).toBe(true);
+  });
+});
+
+describe("the Salary Advance rounding (owner 2026-11-27): the rounded amount is the MD's full approval", () => {
+  const limited = (limit: number) => ({ ...advance(0).earnings!, limit });
+  // ₹15,000 asked over an ₹11,560 limit -> ₹11,500; ₹4,800 -> ₹5,000; ₹200 -> ₹0
+  const capped = rounded(item(21, advance(21, { requestedAmount: 15000, amount: 15000, earnings: limited(11560) })));
+  const up = rounded(item(22, advance(22, { requestedAmount: 4800, amount: 4800 })));
+  const zero = rounded(item(23, advance(23, { requestedAmount: 200, amount: 200 })));
+  const on = (it: SettlementItem, amount: number | null) => ({
+    ...it,
+    md: { decision: "approved" as const, amount, remark: "", decidedAt: "2026-11-25T05:00:00+00:00" },
+  });
+
+  it("works out the base amount as the server does, with an older server's fallback", () => {
+    expect(capped.rounding).toMatchObject({ rounded: 11500, capped: true, direction: "down" });
+    expect(baseOf(capped)).toBe(11500);
+    expect(baseOf(up)).toBe(5000);
+    expect(baseOf(fourItems()[0])).toBe(10000); // no rounding sent
+    expect(roundsToZero(zero)).toBe(true);
+    expect(roundingChanged(capped.rounding)).toBe(true);
+    expect(roundingChanged(roundingFor(8000, 10200))).toBe(false);
+  });
+
+  it("approving in full is the rounded amount; less is a reduction from it", () => {
+    expect(decisionKind(on(capped, 11500))).toBe("approved");
+    expect(decisionKind(on(capped, null))).toBe("approved");
+    expect(decisionKind(on(capped, 11000))).toBe("reduced");
+    expect(decisionText("reduced", baseOf(capped), 11000)).toBe("Reduced ₹11,500 → ₹11,000");
+    // rounded up: the full approval is above what was asked
+    expect(decisionKind(on(up, 5000))).toBe("approved");
+    expect(hrExpected(capped)).toEqual({ decision: "approved", amount: 11500 });
+    expect(mdChangedOf({ ...on(capped, 11500), mdChanged: undefined })).toBe(false);
+    expect(mdChangedOf({ ...on(capped, 11000), mdChanged: undefined })).toBe(true);
+    expect(confirmHrBody({ ...on(capped, 11500), md: { ...on(capped, 11500).md, fromHr: true } })).toEqual({
+      decision: "approved",
+    });
+    const s = reviewSummary([on(capped, 11000)]);
+    expect(s.reducedBy).toBe(500);
+    expect(s.requestedTotal).toBe(15000);
+    // the review sheet shows the reduction from the rounded amount
+    expect(s.rows[0]).toMatchObject({ requested: 15000, base: 11500, approved: 11000, kind: "reduced" });
+  });
+
+  it("a reduced amount must be below the rounded amount, in those words", () => {
+    const draft = { mode: "reduce" as const, amount: "11500", remark: "Second advance" };
+    expect(draftProblems(draft, 11500, true).amount).toBe(
+      "A reduced amount must be less than the rounded ₹11,500. To give the full amount, choose Approve.",
+    );
+    expect(draftProblems({ ...draft, amount: "11000" }, 11500, true)).toEqual({});
+    expect(draftProblems(draft, 11500).amount).toMatch(/less than the ₹11,500 asked for/);
+  });
+
+  it("says how it was rounded", () => {
+    expect(roundingSteps(capped.rounding!)).toBe(
+      "₹15,000 asked → brought down to the ₹11,560 limit → rounded to the nearest ₹500 = ₹11,500",
+    );
+    expect(roundingSteps(up.rounding!)).toBe(
+      "₹4,800 asked → rounded to the nearest ₹500 = ₹5,000 (within the ₹10,200 limit)",
+    );
+    expect(roundingSteps(roundingFor(20000, 11760))).toBe(
+      "₹20,000 asked → brought down to the ₹11,760 limit → rounded to ₹11,500 (the nearest ₹500, ₹12,000, is above the ₹11,760 limit)",
+    );
+    expect(roundingSteps(zero.rounding!)).toBe(
+      "₹200 asked → rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it",
+    );
   });
 });

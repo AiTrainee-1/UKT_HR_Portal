@@ -125,10 +125,34 @@ export type SettlementHrReviewInput = {
 /** A bulk step's answer: the batch, and the requests it left out with why (HR final: "The MD rejected it."). */
 export type SettlementBulkReply = SettlementBatch & { skipped?: { id: number; reason: string }[] };
 
+/** A Salary Advance's rounding (owner 2026-11-27, service.rounding_json): the amount asked for, brought down to the
+ *  eligible limit when above it, then rounded to the nearest ₹500 (₹250 and up within a step rounds up), never above
+ *  the limit. Worked out while the batch is at HR Review and frozen at Forward. */
+export type SettlementRounding = {
+  /** What the employee asked for. */
+  requested: number;
+  /** The eligible limit it was capped at (null: no limit known). */
+  limit: number | null;
+  /** The rounded amount: the workflow's "as asked" amount. */
+  rounded: number;
+  /** Asked for more than the limit: brought down to it first. */
+  capped: boolean;
+  /** The rounded amount against what was asked. */
+  direction: "up" | "down" | "same";
+  /** Rounds to ₹0 (less than ₹250 within the limit): it can only be rejected. */
+  zero: boolean;
+};
+
 export type SettlementBatchItem = {
   id: number;
   advance: SettlementAdvance;
+  /** What the employee asked for (the advance's own amount; never the rounded one). */
   requestedAmount: number;
+  /** The Salary Advance rounding (2026-11-27); null for a Term Loan or an older batch, absent from an older server. */
+  rounding?: SettlementRounding | null;
+  /** The workflow's "as asked" amount: a Salary Advance's rounded amount, else what was asked (2026-11-27). Keep as
+   *  asked keeps it, a reduction is below it, the MD approves it or less. */
+  baseAmount?: number;
   /** HR's note to the MD about this request (HR Review). */
   hrNote: string;
   /** HR's proposal (2026-11-27; absent from an older server). */
@@ -313,6 +337,9 @@ export type SettlementBatch = {
   };
   amounts: {
     requested: number;
+    /** The "as asked" total after the Salary Advance rounding (= requested for a Term Loan / an older batch; absent from
+     *  an older server). */
+    rounded?: number;
     mdApproved: number;
     finalApproved: number;
     /** What will be paid: HR's final settlement with the auditor's changes (= finalApproved before finalizing). */

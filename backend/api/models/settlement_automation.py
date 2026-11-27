@@ -160,6 +160,12 @@ class SettlementBatchItem(models.Model):
     hr_action = models.TextField(blank=True, default="", db_default="")
     hr_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
+    # Salary Advance rounding (owner 2026-11-27): the amount asked for, capped at the eligible limit and rounded to the
+    # nearest ₹500 (₹250 and up rounds up), never above the limit. Worked out while the request is at HR Review, frozen
+    # at Forward; it is the workflow's "as asked" amount from then on. Null: a Term Loan, or an older batch.
+    rounded_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    rounding_limit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # the limit it used
+
     md_decision = models.TextField(choices=DECISIONS, blank=True, default="")
     md_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     md_remark = models.TextField(blank=True, default="")

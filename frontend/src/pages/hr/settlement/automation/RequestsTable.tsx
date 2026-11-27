@@ -48,6 +48,8 @@ import {
   type TrailStep,
 } from "./focus";
 import { auditorChanged } from "./logic";
+import { RoundedCell, RoundedLine } from "./Rounded";
+import { baseOf, roundingChanged, roundsToZero } from "./rounding";
 
 /** What this login may do on the requests now: HR Review (proposals), HR Rework (MD Changes) (answers to the MD), HR
  *  Final Settlement (final decisions) or HR Rework (Auditor Changes) (answers to the auditor). */
@@ -83,7 +85,15 @@ const TIER: Record<NonNullable<RequestColumn["from"]>, string> = {
   xl2: "hidden min-[1400px]:table-cell",
   "2xl": FROM["2xl"],
   wide: FROM.wide,
+  full: FROM.full,
 };
+
+/** Where the Rounded column is hidden (below its "full" tier), the rounded amount is a line under the amount asked for. */
+const ROUNDED_LINE = "min-[1880px]:hidden";
+
+/** The employee's width by tier (measured 2026-11-27 with a 23-letter name, the rounding line and five row actions): a
+ *  long name is cut short with an ellipsis rather than pushing the table past its card on a 1280 / 1536 px screen. */
+const PERSON_WIDTH = "max-w-[11rem] min-[1400px]:max-w-[14rem] min-[1800px]:max-w-[15rem]";
 
 const ALIGN: Record<RequestColumn["align"], string> = {
   left: "text-left",
@@ -94,12 +104,24 @@ const ALIGN: Record<RequestColumn["align"], string> = {
 const money = (n: number | null | undefined) => (n == null ? "—" : formatMoney(n));
 
 /** The amount the request stands at now, and from where ("final", "MD", "HR proposes", "after the audit"); in a rework
- *  stage what HR sends back to the reviewer. */
+ *  stage what HR sends back to the reviewer. A request HR kept as asked at HR Review shows what goes to the MD: a Salary
+ *  Advance's rounded amount ("kept · rounded", 2026-11-27). */
 function Approved({ item, batch }: { item: SettlementBatchItem; batch: SettlementBatch }) {
   const s = requestFigures(item, batch.stage).standing;
   if (s.decision === "rejected") return <Figure value="Rejected" tone="red" sub={s.label} />;
-  if (s.decision === null) return muted;
-  const less = s.amount != null && s.amount < item.requestedAmount;
+  if (s.decision === null) {
+    if (item.hr?.action !== "approve") return muted;
+    return (
+      <Figure
+        value={money(s.amount)}
+        strong
+        sub={roundingChanged(item.rounding) ? "kept · rounded" : "kept as asked"}
+      />
+    );
+  }
+  // less than the "as asked" amount (a Salary Advance's rounded amount): a reduction, not the rounding
+  const base = baseOf(item);
+  const less = s.amount != null && s.amount < base - 0.004;
   return (
     <Figure
       value={money(s.amount)}
@@ -108,7 +130,11 @@ function Approved({ item, batch }: { item: SettlementBatchItem; batch: Settlemen
       sub={
         <>
           {s.label}
-          {less && <span className="block font-medium text-amber-700">less than asked</span>}
+          {less && (
+            <span className="block font-medium text-amber-700">
+              {s.amount != null && s.amount < item.requestedAmount ? "less than asked" : "below rounded"}
+            </span>
+          )}
         </>
       }
     />
@@ -300,18 +326,21 @@ function Actions({
 
   if (mode === "hr_review") {
     const kept = proposal === "approve";
+    // a Salary Advance that rounds to ₹0 can only be rejected (2026-11-27; the server refuses a keep)
+    const zero = roundsToZero(item);
+    const rounded = roundingChanged(item.rounding) ? ` (rounded ${money(baseOf(item))})` : "";
     return (
       <RowActions>
         {rework}
         <RowAction
-          label={kept ? "Kept as asked" : "Keep as asked"}
+          label={zero ? "Rounds to ₹0 — reject it" : kept ? `Kept as asked${rounded}` : `Keep as asked${rounded}`}
           icon={<Check size={15} />}
           color="emerald"
           onClick={act("keep")}
-          disabled={wait || kept}
+          disabled={wait || kept || zero}
           busy={spin("keep")}
           pressed={kept}
-          aria={`Keep ${name}'s request as asked`}
+          aria={zero ? `${name}'s request rounds to ₹0: it can only be rejected` : `Keep ${name}'s request as asked`}
           testId={`${prefix}-keep-${item.id}`}
         />
         {hrChoices}
@@ -400,12 +429,32 @@ function Actions({
 function cellOf(
   key: RequestColumnKey,
   item: SettlementBatchItem,
-  ctx: { batch: SettlementBatch; prefix: string; onLeave: Props["onLeave"]; wrap?: boolean },
+  ctx: {
+    batch: SettlementBatch;
+    prefix: string;
+    onLeave: Props["onLeave"];
+    wrap?: boolean;
+    /** The table shows the Rounded column (from its tier on): below it, the rounded amount is a line under the ask. */
+    roundedLine?: boolean;
+  },
 ): ReactNode {
   const f = requestFigures(item, ctx.batch.stage);
   switch (key) {
     case "requested":
-      return <Figure value={money(item.requestedAmount)} strong />;
+      return (
+        <div className="leading-tight">
+          <Figure value={money(item.requestedAmount)} strong />
+          {ctx.roundedLine && roundingChanged(f.rounding) && (
+            <RoundedLine
+              rounding={f.rounding}
+              className={cn("whitespace-nowrap", ROUNDED_LINE)}
+              testId={`${ctx.prefix}-rounded-line-${item.id}`}
+            />
+          )}
+        </div>
+      );
+    case "rounded":
+      return f.rounding ? <RoundedCell rounding={f.rounding} testId={`${ctx.prefix}-rounded-${item.id}`} /> : muted;
     case "fixedSalary":
       return f.fixedSalary != null ? <Figure value={money(f.fixedSalary)} /> : muted;
     case "workingDays":
@@ -454,6 +503,7 @@ function cellOf(
 const CARD_FIGURES: RequestColumnKey[] = [
   "requested",
   "limit",
+  "rounded",
   "approved",
   "fixedSalary",
   "workingDays",
@@ -471,6 +521,10 @@ const person = (item: SettlementBatchItem, size?: number) => (
     size={size}
   />
 );
+
+/** A heading of two short words ("Eligible limit", "Working days") may take two lines where the row is tight (the house
+ *  rule, table-kit HEAD); a one-word heading stays on one line. */
+const headWrap = (header: string) => (header.includes(" ") ? "whitespace-normal" : "whitespace-nowrap");
 
 const GROUP_DOT: Record<ReviewState, string> = {
   pending: "bg-amber-500",
@@ -504,9 +558,17 @@ export default function RequestsTable({
   flashId = null,
 }: Props) {
   const select = mode !== null;
-  const columns = requestColumns(batch.advanceType, { select, actions: mode !== null });
+  // the Rounded column once the batch's requests carry the rounding (a Salary Advance; not a Term Loan, not an older batch)
+  const rounding = batch.advanceType !== "term" && batch.items.some((i) => i.rounding);
+  const columns = requestColumns(batch.advanceType, { select, actions: mode !== null, rounding });
   const ticked = items.filter((i) => selected.has(i.id)).length;
-  const ctx = (prefix: string, wrap?: boolean) => ({ batch, prefix, onLeave, wrap });
+  const ctx = (prefix: string, wrap?: boolean, table = false) => ({
+    batch,
+    prefix,
+    onLeave,
+    wrap,
+    roundedLine: rounding && table,
+  });
   const labelOf = (key: RequestColumnKey) => columns.find((c) => c.key === key)?.header ?? "";
   const last = columns[columns.length - 1]?.key;
   const reviewOf = (item: SettlementBatchItem) => reviewStateOf(item, batch.stage);
@@ -553,8 +615,8 @@ export default function RequestsTable({
             );
           if (c.key === "employee")
             return (
-              <TableCell key={c.key} className={cn("max-w-[15rem] py-3", !select && FIRST)}>
-                {person(item)}
+              <TableCell key={c.key} className={cn("py-3", !select && FIRST)}>
+                <div className={PERSON_WIDTH}>{person(item)}</div>
               </TableCell>
             );
           if (c.key === "actions")
@@ -565,7 +627,7 @@ export default function RequestsTable({
             );
           return (
             <TableCell key={c.key} className={cn(ALIGN[c.align], c.from && TIER[c.from], edge)} data-column={c.key}>
-              {cellOf(c.key, item, ctx("auto"))}
+              {cellOf(c.key, item, ctx("auto", false, true))}
             </TableCell>
           );
         })}
@@ -593,7 +655,8 @@ export default function RequestsTable({
                   <TableHead
                     key={c.key}
                     className={cn(
-                      "whitespace-nowrap",
+                      "h-auto py-2.5 align-bottom leading-tight",
+                      headWrap(c.header),
                       ALIGN[c.align],
                       c.from && TIER[c.from],
                       c.key === "employee" && !select && FIRST,

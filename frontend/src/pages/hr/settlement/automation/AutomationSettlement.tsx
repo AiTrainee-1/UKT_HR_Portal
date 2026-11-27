@@ -78,6 +78,7 @@ import FocusPanel from "./FocusPanel";
 import { monthFromUrl, monthText, monthToUrl, pickBatch, reached, workflowRefusal, type MonthRef } from "./logic";
 import MonthSwitcher from "./MonthSwitcher";
 import RequestsTable, { type RequestsMode, type RowActionKind } from "./RequestsTable";
+import { baseOf, roundedTotalOf, roundingChanged, roundsToZero } from "./rounding";
 import StagePanel from "./StagePanel";
 
 /** The address: the month ("" = this month in India), the batch shown ("" = the month's current one), the top tab
@@ -167,6 +168,8 @@ type Picker = { active: FocusKey | null; onPick: (filter: CardFilter) => void };
 function Headline({ batch, active, onPick }: { batch: SettlementBatch } & Picker) {
   const c = batch.counts;
   const m = batch.amounts;
+  // the "as asked" total after the Salary Advance rounding (2026-11-27)
+  const rounded = roundedTotalOf(batch);
   const card = (filter: CardFilter) => ({
     onClick: () => onPick(filter),
     active: active === filter,
@@ -235,6 +238,7 @@ function Headline({ batch, active, onPick }: { batch: SettlementBatch } & Picker
           testId="auto-amount-requested"
           label="Requested"
           value={formatMoney(m.requested)}
+          sub={rounded != null ? `Rounded total ${formatMoney(rounded)}` : undefined}
           icon={HandCoins}
           tone="bg-slate-50 text-slate-800"
         />
@@ -463,16 +467,19 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
         return setProposal({ item, action });
       case "final":
         return setFinalItem(item);
-      case "keep":
+      case "keep": {
+        // a Salary Advance kept as asked goes at its rounded amount (2026-11-27)
+        const asked = roundingChanged(item.rounding) ? `at the rounded ${formatMoney(baseOf(item))}` : "as asked";
         return void rowStep(
           item,
           action,
           () => hrReview.mutateAsync({ itemId: item.id, body: { action: "keep" } }),
           stage === "md_changes"
-            ? { title: "Kept as asked", description: `${who(item)}: your answer goes to the MD as asked.` }
-            : { title: "Kept as asked", description: `${who(item)}'s request goes to the MD as asked.` },
+            ? { title: "Kept as asked", description: `${who(item)}: your answer goes to the MD ${asked}.` }
+            : { title: "Kept as asked", description: `${who(item)}'s request goes to the MD ${asked}.` },
           "The proposal could not be changed",
         );
+      }
       case "rework":
         return void rowStep(
           item,
@@ -948,12 +955,23 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
           }
           description={
             mode === "hr_review" ? (
-              <p>
-                {bulk === "approve"
-                  ? "Each one goes to the MD as asked (an earlier proposal on it is cleared)."
-                  : "Each one goes to the MD with your proposal to reject it and this reason."}{" "}
-                The MD decides; nothing is final until the settlement is.
-              </p>
+              <>
+                <p>
+                  {bulk === "approve"
+                    ? ticked.some((i) => i.rounding)
+                      ? "Each one goes to the MD as asked, a Salary Advance at its rounded amount (an earlier proposal on it is cleared)."
+                      : "Each one goes to the MD as asked (an earlier proposal on it is cleared)."
+                    : "Each one goes to the MD with your proposal to reject it and this reason."}{" "}
+                  The MD decides; nothing is final until the settlement is.
+                </p>
+                {bulk === "approve" && ticked.some(roundsToZero) && (
+                  <p className="font-medium text-red-700" data-testid="auto-bulk-zero">
+                    {ticked.filter(roundsToZero).length === 1
+                      ? "One of them rounds to ₹0 and can only be rejected: untick it or propose to reject it."
+                      : `${ticked.filter(roundsToZero).length} of them round to ₹0 and can only be rejected: untick them or propose to reject them.`}
+                  </p>
+                )}
+              </>
             ) : (
               <p>
                 {bulk === "approve"

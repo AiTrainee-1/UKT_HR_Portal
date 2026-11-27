@@ -10,6 +10,7 @@ import type {
   SettlementAdvance,
   SettlementBatch,
   SettlementItem,
+  SettlementRounding,
   SettlementStage,
   TrackerStep,
 } from "./types";
@@ -150,6 +151,33 @@ export function advance(id: number, extra: Partial<SettlementAdvance> = {}): Set
   };
 }
 
+/** service.rounded_for + rounding_json (2026-11-27): the amount asked for, capped at the limit, rounded to the nearest
+ *  ₹500 (₹250 and up rounds up), never above the limit. */
+export function roundingFor(requested: number, limit: number | null): SettlementRounding {
+  const base = limit == null ? requested : Math.min(requested, limit);
+  const steps = Math.floor(base / 500);
+  let rounded = base > 0 ? (steps + (base - steps * 500 >= 250 ? 1 : 0)) * 500 : 0;
+  if (limit != null && rounded > limit) rounded = Math.max(0, Math.floor(limit / 500) * 500);
+  return {
+    requested,
+    limit,
+    rounded,
+    capped: limit != null && requested > limit,
+    direction: rounded > requested ? "up" : rounded < requested ? "down" : "same",
+    zero: rounded <= 0,
+  };
+}
+
+/** A Salary Advance with the rounding as the server sends it (worked out from its amount and its earned limit). */
+export function rounded(i: SettlementItem): SettlementItem {
+  if (i.advance.advanceType === "term") return { ...i, rounding: null, baseAmount: i.requestedAmount };
+  const r = roundingFor(i.requestedAmount, i.advance.earnings?.limit ?? null);
+  return { ...i, rounding: r, baseAmount: r.rounded };
+}
+
+/** The "as asked" amount the server works with (service.base_amount). */
+const baseOf = (i: SettlementItem) => i.baseAmount ?? i.requestedAmount;
+
 export function item(id: number, adv: SettlementAdvance, extra: Partial<SettlementItem> = {}): SettlementItem {
   return {
     id,
@@ -214,7 +242,7 @@ export function fourItems(): SettlementItem[] {
 function expected(i: SettlementItem): { decision: "approved" | "rejected"; amount: number | null } {
   if (i.hr?.action === "reject") return { decision: "rejected", amount: null };
   if (i.hr?.action === "reduce" && i.hr.amount != null) return { decision: "approved", amount: i.hr.amount };
-  return { decision: "approved", amount: i.requestedAmount };
+  return { decision: "approved", amount: baseOf(i) };
 }
 
 /** service.py md_changed: the MD's OWN decision differs from HR's proposal (a pre-filled one is no change). */
@@ -299,6 +327,7 @@ export function withTotals(b: SettlementBatch): SettlementBatch {
     },
     amounts: {
       requested: items.reduce((s, i) => s + i.requestedAmount, 0),
+      rounded: items.reduce((s, i) => s + baseOf(i), 0),
       mdApproved: items.reduce((s, i) => s + (i.md.amount ?? 0), 0),
       finalApproved: items.reduce((s, i) => s + (i.final.decision === "approved" ? (i.final.amount ?? 0) : 0), 0),
     },
@@ -458,10 +487,13 @@ export function fakeServer(
         let md: SettlementItem["md"];
         if (!body.decision) md = { decision: null, amount: null, remark, decidedAt: null };
         else if (body.decision === "approved") {
-          const value = body.amount ?? current.requestedAmount;
-          if (value > current.requestedAmount)
+          const asked = baseOf(current);
+          if (asked <= 0 && body.amount == null)
+            return refuse(400, "This request rounds to ₹0: reject it.", "rounds_to_zero");
+          const value = body.amount ?? asked;
+          if (value > asked)
             return refuse(400, "The approved amount cannot be more than the amount asked for.", "amount");
-          if (value < current.requestedAmount && remark.length < 3)
+          if (value < asked && remark.length < 3)
             return refuse(400, "Write a remark for the reduced amount (at least 3 characters).", "remark");
           md = { decision: "approved", amount: value, remark, decidedAt: "2026-11-26T05:00:00+00:00" };
         } else if (body.decision === "rejected") {
@@ -496,9 +528,14 @@ export function fakeServer(
               fromHr: false,
             },
           };
-        const amount = i.hr?.action === "reduce" && i.hr.amount != null ? i.hr.amount : i.requestedAmount;
-        const note = remark || (amount < i.requestedAmount ? (i.hr?.remark ?? "") : i.md.remark);
-        if (amount < i.requestedAmount && note.length < 3) {
+        const asked = baseOf(i);
+        if (asked <= 0) {
+          skipped.push({ id: i.id, reason: "It rounds to ₹0: reject it." });
+          return i;
+        }
+        const amount = i.hr?.action === "reduce" && i.hr.amount != null ? i.hr.amount : asked;
+        const note = remark || (amount < asked ? (i.hr?.remark ?? "") : i.md.remark);
+        if (amount < asked && note.length < 3) {
           skipped.push({ id: i.id, reason: "A reduced amount needs a remark." });
           return i;
         }

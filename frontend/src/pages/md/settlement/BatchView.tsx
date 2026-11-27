@@ -31,6 +31,7 @@ import DecisionDialog, { type DecisionTarget } from "./DecisionDialog";
 import { buildDirectFiles } from "./direct";
 import HistoryView from "./HistoryView";
 import {
+  baseOf,
   batchTitle,
   bulkResultText,
   confirmHrBody,
@@ -48,6 +49,7 @@ import {
   plural,
   REJECT_MESSAGE,
   reviewSummary,
+  roundsToZero,
   toggleAll,
   type DraftMode,
   type ListFilter,
@@ -71,7 +73,8 @@ const STAGE_CHIP: Record<string, string> = {
 const without = (set: ReadonlySet<number>, id: number) => new Set([...set].filter((x) => x !== id));
 
 /** Approve or reject the ticked requests at once (owner 2026-11-27): approve takes HR's proposed amount where HR proposed
- *  a smaller one, else the full amount asked; reject needs one reason for all. */
+ *  a smaller one, else the full amount asked (a Salary Advance: its rounded amount; one that rounds to ₹0 is left out);
+ *  reject needs one reason for all. */
 function BulkDialog({
   decision,
   items,
@@ -95,10 +98,12 @@ function BulkDialog({
   const alerts = items.filter(hasLeaveAlert).length;
   const above = items.filter(overLimit).length;
   const reducedByHr = items.filter((i) => i.hr?.action === "reduce").length;
-  const total = items.reduce(
-    (s, i) => s + (i.hr?.action === "reduce" && i.hr.amount != null ? i.hr.amount : i.requestedAmount),
-    0,
-  );
+  // a Salary Advance that rounds to ₹0 can only be rejected: the server leaves it out of an approval (2026-11-27)
+  const zero = items.filter(roundsToZero).length;
+  const rounded = items.some((i) => i.rounding);
+  const total = items
+    .filter((i) => !roundsToZero(i))
+    .reduce((s, i) => s + (i.hr?.action === "reduce" && i.hr.amount != null ? i.hr.amount : baseOf(i)), 0);
   const send = () => {
     setTried(true);
     if (problem) return;
@@ -116,10 +121,12 @@ function BulkDialog({
               ? "Each ticked request is rejected with the reason below."
               : `Each ticked request is approved for the amount HR proposed${
                   reducedByHr ? ` (${reducedByHr} smaller)` : ""
-                }, else the full amount asked: ${money(total)} in all.`}
+                }, else the full amount asked${rounded ? " (a Salary Advance: its rounded amount)" : ""}: ${money(
+                  total,
+                )} in all.`}
           </DialogDescription>
         </DialogHeader>
-        {(alerts > 0 || above > 0) && !rejecting && (
+        {(alerts > 0 || above > 0 || zero > 0) && !rejecting && (
           <ul
             className="md-panel-sand space-y-1 p-3 text-xs text-md-warning-800"
             data-testid="md-settlement-bulk-warnings"
@@ -134,6 +141,14 @@ function BulkDialog({
               <li className="flex items-start gap-1.5">
                 <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />
                 {plural(above, "of them asks", "of them ask")} for more than the limit.
+              </li>
+            )}
+            {zero > 0 && (
+              <li className="flex items-start gap-1.5 text-md-danger-700" data-testid="md-settlement-bulk-zero">
+                <AlertTriangle size={13} className="mt-px shrink-0" aria-hidden="true" />
+                {zero === 1
+                  ? "1 of them rounds to ₹0 and is left out: reject it instead."
+                  : `${plural(zero, "of them", "of them")} round to ₹0 and are left out: reject them instead.`}
               </li>
             )}
           </ul>
@@ -291,11 +306,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
     onSelect: (id, on) => setSelected((s) => (on ? new Set(s).add(id) : without(s, id))),
     onToggleAll: (ids) => setSelected((s) => toggleAll(s, ids)),
     onApprove: (item) =>
-      void quick(
-        item,
-        { decision: "approved" },
-        `Approved: ${item.advance.employeeName}, ${money(item.requestedAmount)}`,
-      ),
+      void quick(item, { decision: "approved" }, `Approved: ${item.advance.employeeName}, ${money(baseOf(item))}`),
     onConfirmHr: (item) =>
       void quick(item, confirmHrBody(item), `Confirmed HR's proposal: ${item.advance.employeeName}`),
     onOpen: (item: SettlementItem, mode?: DraftMode) => setTarget({ item, mode, round: mdRoundOf(batch) }),

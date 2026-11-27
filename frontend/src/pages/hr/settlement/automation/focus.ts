@@ -7,6 +7,7 @@ import type {
   SettlementBatch,
   SettlementBatchItem,
   SettlementDecision,
+  SettlementRounding,
   SettlementStage,
   SettlementTrackerKey,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
@@ -15,6 +16,7 @@ import { leaveFlagged } from "../leave";
 import { REMARK_MIN, cleanRemark } from "../logic";
 import { formatMoney, monthLabel } from "../shared";
 import { STAGE_ORDER, auditorChanged, effectiveOf, finalMonthsOf, finalStartText, reached, termEmiOf } from "./logic";
+import { baseOf, roundingChanged } from "./rounding";
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -264,12 +266,13 @@ export type Standing = {
   label: string;
 };
 
-/** HR's proposal as a standing: reduced, rejected, or as asked (kept as asked, or not reviewed yet: the same amount). */
+/** HR's proposal as a standing: reduced, rejected, or as asked (kept as asked, or not reviewed yet: the same amount; a
+ *  Salary Advance's "as asked" is its rounded amount, 2026-11-27). */
 function hrStanding(item: SettlementBatchItem, label: string): Standing {
   const hr = item.hr;
   if (hr?.action === "reject") return { decision: "rejected", amount: null, source: "hr", label };
   if (hr?.action === "reduce") return { decision: "approved", amount: hr.amount, source: "hr", label };
-  return { decision: null, amount: item.requestedAmount, source: "asked", label: "as asked" };
+  return { decision: null, amount: baseOf(item), source: "asked", label: "as asked" };
 }
 
 /** The amount a request stands at now: after the auditor's change, else HR's final, else the MD's (pre-filled from
@@ -310,17 +313,19 @@ export function standingOf(item: SettlementBatchItem, stage?: SettlementStage): 
   }
   const hr = item.hr;
   if (hr?.action === "reject" || hr?.action === "reduce") return hrStanding(item, "HR proposes");
-  return { decision: null, amount: item.requestedAmount, source: "asked", label: "as asked" };
+  return { decision: null, amount: baseOf(item), source: "asked", label: "as asked" };
 }
 
 /** HR's proposal in words: "Keep as asked", "Proposes ₹6,000", "Proposes reject"; at HR Review a request HR has not
  *  looked at yet is "Not reviewed yet" (2026-11-27: kept as asked is a review of its own; it goes to the MD as asked
- *  either way). */
-export function hrProposalText(item: SettlementBatchItem, stage?: SettlementStage): string {
+ *  either way). A Salary Advance kept as asked keeps its rounded amount (2026-11-27): "Kept · rounded ₹11,500" (`short`:
+ *  "Kept · rounded", where the amount stands beside it). */
+export function hrProposalText(item: SettlementBatchItem, stage?: SettlementStage, short = false): string {
   const hr = item.hr;
   if (hr?.action === "reject") return "Proposes reject";
   if (hr?.action === "reduce") return `Proposes ${formatMoney(hr.amount)}`;
   if (!hr?.action && stage === "hr_review") return "Not reviewed yet";
+  if (roundingChanged(item.rounding)) return short ? "Kept · rounded" : `Kept · rounded ${formatMoney(baseOf(item))}`;
   return "Keep as asked";
 }
 
@@ -346,7 +351,7 @@ export function trailOf(
   out.push({
     step: "hr",
     who: "HR",
-    text: hrProposalText(item, batch.stage),
+    text: hrProposalText(item, batch.stage, true),
     tone: hr?.action === "reject" ? "danger" : hr?.action === "reduce" || notYet ? "warning" : "neutral",
   });
   if (reached(batch, "md_review")) {
@@ -457,7 +462,7 @@ export function mdDiffers(item: SettlementBatchItem): boolean {
   const expected: SettlementDecision = hr?.action === "reject" ? "rejected" : "approved";
   if (md.decision !== expected) return true;
   if (expected === "rejected") return false;
-  const amount = hr?.action === "reduce" && hr.amount != null ? hr.amount : item.requestedAmount;
+  const amount = hr?.action === "reduce" && hr.amount != null ? hr.amount : baseOf(item);
   return round2(md.amount ?? 0) !== round2(amount);
 }
 
@@ -582,6 +587,7 @@ export type RequestColumnKey =
   | "workingDays"
   | "earned"
   | "limit"
+  | "rounded"
   | "months"
   | "emi"
   | "firstEmi"
@@ -596,8 +602,9 @@ export type RequestColumn = {
   header: string;
   align: "left" | "right" | "center";
   /** Shown only from this screen width on (as All Employees hides Phone and Salary on a laptop), so the table fits its
-   *  card without a sideways scroll; a phone has the cards, which show every value. "xl2": 1400 px. */
-  from?: "xl" | "xl2" | "2xl" | "wide";
+   *  card without a sideways scroll; a phone has the cards, which show every value. "xl2": 1400 px, "wide": 1800 px,
+   *  "full": 1880 px. */
+  from?: "xl" | "xl2" | "2xl" | "wide" | "full";
 };
 
 const COLUMN: Record<RequestColumnKey, RequestColumn> = {
@@ -608,6 +615,9 @@ const COLUMN: Record<RequestColumnKey, RequestColumn> = {
   workingDays: { key: "workingDays", header: "Working days", align: "right", from: "2xl" },
   earned: { key: "earned", header: "Earned", align: "right", from: "xl" },
   limit: { key: "limit", header: "Eligible limit", align: "right" },
+  // the Salary Advance rounding (2026-11-27): its own column on a full-HD screen; below that the rounded amount is a line
+  // under the amount asked for (measured: the column does not fit beside the rest of the row on a laptop)
+  rounded: { key: "rounded", header: "Rounded", align: "right", from: "full" },
   months: { key: "months", header: "Months", align: "right", from: "xl" },
   emi: { key: "emi", header: "Monthly EMI", align: "right", from: "xl" },
   firstEmi: { key: "firstEmi", header: "First EMI", align: "left", from: "2xl" },
@@ -620,16 +630,25 @@ const COLUMN: Record<RequestColumnKey, RequestColumn> = {
 
 /** The table's columns, in order (owner 2026-11-27: every value under its own heading, numbers right-aligned), in the
  *  order of the owner's own report (fixed salary, working days, earned, requested, limit, approved): a Salary Advance
- *  shows the earned figures, a Term Loan its months, EMI and first EMI after the approved amount they follow; the
- *  checkbox and the actions only when this login may act at the stage. */
+ *  shows the earned figures (and, once its requests carry the rounding, the rounded amount after the limit), a Term
+ *  Loan its months, EMI and first EMI after the approved amount they follow; the checkbox and the actions only when this
+ *  login may act at the stage. */
 export function requestColumns(
   type: SettlementBatch["advanceType"],
-  opts: { select: boolean; actions: boolean },
+  opts: { select: boolean; actions: boolean; rounding?: boolean },
 ): RequestColumn[] {
   const figures: RequestColumnKey[] =
     type === "term"
       ? ["fixedSalary", "requested", "limit", "approved", "months", "emi", "firstEmi"]
-      : ["fixedSalary", "workingDays", "earned", "requested", "limit", "approved"];
+      : [
+          "fixedSalary",
+          "workingDays",
+          "earned",
+          "requested",
+          "limit",
+          ...(opts.rounding ? (["rounded"] as const) : []),
+          "approved",
+        ];
   const keys: RequestColumnKey[] = [
     ...(opts.select ? (["select"] as const) : []),
     "employee",
@@ -652,6 +671,8 @@ export type RequestFigures = {
   limit: number | null;
   /** Asked for more than the eligible limit. */
   overLimit: boolean;
+  /** A Salary Advance's rounding (null: a Term Loan, an older batch). */
+  rounding: SettlementRounding | null;
   months: number | null;
   emi: number | null;
   firstEmi: string;
@@ -671,6 +692,7 @@ export function requestFigures(item: SettlementBatchItem, stage?: SettlementStag
     earned: term ? null : (e?.earnedAmount ?? null),
     limit,
     overLimit: limit != null && item.requestedAmount > limit,
+    rounding: term ? null : (item.rounding ?? null),
     months: t.months,
     emi: t.emi,
     firstEmi: t.first,
@@ -684,6 +706,14 @@ export type HrProposalEdit = { action: "reduce" | "reject"; amount: string; rema
 
 const num = (text: string): number => (text.trim() === "" ? NaN : Number(text.replace(/,/g, "").trim()));
 
+/** The most a reduced amount may be, in words: "less than the rounded ₹11,500" (a Salary Advance, 2026-11-27), else
+ *  "less than the ₹8,000 asked for". */
+export function reduceCeilingText(item: SettlementBatchItem): string {
+  return item.rounding
+    ? `less than the rounded ${formatMoney(baseOf(item))}`
+    : `less than the ${formatMoney(baseOf(item))} asked for`;
+}
+
 /** What stops HR's proposal from being kept (the server's own checks: service.set_hr_review). */
 export function hrProposalProblems(
   item: SettlementBatchItem,
@@ -696,8 +726,8 @@ export function hrProposalProblems(
     if (text === "") out.amount = "Enter the reduced amount.";
     else if (!Number.isFinite(amount) || amount <= 0) out.amount = "The amount must be more than ₹0.";
     else if (/\.\d{3,}$/.test(text)) out.amount = "Use at most 2 decimal places.";
-    else if (round2(amount) >= round2(item.requestedAmount))
-      out.amount = `A reduced amount must be less than the ${formatMoney(item.requestedAmount)} asked for.`;
+    else if (round2(amount) >= round2(baseOf(item)))
+      out.amount = `A reduced amount must be ${reduceCeilingText(item)}.`;
   }
   if (cleanRemark(edit.remark).length < REMARK_MIN)
     out.remark =

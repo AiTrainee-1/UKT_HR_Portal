@@ -189,6 +189,17 @@ describe("the Requests table", () => {
     expect(from("term", true)).toMatchObject({ months: "xl2", emi: "xl2", firstEmi: "2xl" });
   });
 
+  it("a Salary Advance with the rounding: the Rounded column after the limit, from a full-HD screen (2026-11-27)", () => {
+    const sa = requestColumns("general", { select: true, actions: true, rounding: true });
+    expect(sa.map((c) => c.key).slice(5, 9)).toEqual(["requested", "limit", "rounded", "approved"]);
+    expect(sa.find((c) => c.key === "rounded")).toMatchObject({ header: "Rounded", align: "right", from: "full" });
+    // a Term Loan is never rounded; an older batch (no rounding) has no column
+    expect(requestColumns("term", { select: true, actions: true, rounding: true }).map((c) => c.key)).not.toContain(
+      "rounded",
+    );
+    expect(requestColumns("general", { select: true, actions: true }).map((c) => c.key)).not.toContain("rounded");
+  });
+
   it("a Salary Advance's earned figures, a Term Loan's limit, months, EMI and first EMI", () => {
     const sa = requestFigures(batchAt("hr_review").items[0]);
     expect(sa).toMatchObject({ fixedSalary: 26000, workingDays: 16, earned: 16000, limit: 8000, overLimit: false });
@@ -245,7 +256,13 @@ describe("HR's proposal at HR Review", () => {
     expect(hrProposalProblems(asha, { action: "reduce", amount: "", remark: "Limit" }).amount).toBe(
       "Enter the reduced amount.",
     );
+    // a Salary Advance: below its rounded amount (2026-11-27; Asha's ₹8,000 is already a whole ₹500 within her limit)
     expect(hrProposalProblems(asha, { action: "reduce", amount: "8000", remark: "Limit" }).amount).toBe(
+      "A reduced amount must be less than the rounded ₹8,000.",
+    );
+    // an older batch (no rounding): below the amount asked for
+    const older = { ...asha, rounding: undefined, baseAmount: undefined };
+    expect(hrProposalProblems(older, { action: "reduce", amount: "8000", remark: "Limit" }).amount).toBe(
       "A reduced amount must be less than the ₹8,000 asked for.",
     );
     expect(hrProposalProblems(asha, { action: "reduce", amount: "6000", remark: "x" }).remark).toBe(
@@ -255,6 +272,23 @@ describe("HR's proposal at HR Review", () => {
       "Write the reason for rejecting (at least 3 characters).",
     );
     expect(hrProposalProblems(asha, { action: "reduce", amount: "6000", remark: "Above the limit" })).toEqual({});
+  });
+
+  it("a rounded Salary Advance: the ceiling is the rounded amount, not what was asked (2026-11-27)", () => {
+    // ₹15,000 asked, ₹11,560 limit -> ₹11,500
+    const capped = item(4, {
+      rounding: true,
+      advance: { amount: 15000, requestedAmount: 15000, earnings: { ...asha.advance.earnings!, limit: 11560 } },
+    });
+    expect(capped.baseAmount).toBe(11500);
+    expect(hrProposalProblems(capped, { action: "reduce", amount: "11500", remark: "Limit" }).amount).toBe(
+      "A reduced amount must be less than the rounded ₹11,500.",
+    );
+    expect(hrProposalProblems(capped, { action: "reduce", amount: "11000", remark: "Limit" })).toEqual({});
+    // ₹4,800 asked rounds UP to ₹5,000: ₹4,900 is a reduction (below the rounded amount, above the ask)
+    const up = item(5, { rounding: true, advance: { amount: 4800, requestedAmount: 4800 } });
+    expect(up.baseAmount).toBe(5000);
+    expect(hrProposalProblems(up, { action: "reduce", amount: "4900", remark: "Limit" })).toEqual({});
   });
 
   it("sends the proposal with its remark", () => {

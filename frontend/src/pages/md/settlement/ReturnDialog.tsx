@@ -13,6 +13,7 @@ import { cleanRejectRemark, REJECT_REMARK_MAX } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
 import { useReturnBatch } from "./api";
 import {
+  baseOf,
   batchTitle,
   changeText,
   hrExpected,
@@ -29,7 +30,7 @@ import type { SettlementBatch, SettlementItem } from "./types";
 function changeLine(item: SettlementItem): string {
   const hr = hrExpected(item);
   const hrText = hr.decision === "rejected" ? "reject" : money(hr.amount);
-  const mine = item.md.decision === "rejected" ? "reject" : money(item.md.amount ?? item.requestedAmount);
+  const mine = item.md.decision === "rejected" ? "reject" : money(item.md.amount ?? baseOf(item));
   return `HR ${hrText} → you ${mine}`;
 }
 

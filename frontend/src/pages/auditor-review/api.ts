@@ -11,6 +11,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LeaveCalendarData } from "@/components/leave-calendar/LeaveCalendar";
 import type { AdvanceEarnings, AdvanceLeaveCheck } from "@/lib/api-client";
 import { ApiError, getApiOrigin } from "@/lib/api-client/custom-fetch";
+import type { SettlementRounding } from "@/lib/api-client/custom-hooks/settlement-automation";
 
 export type PortalDecision = "approved_send_accounts" | "approved_forward_hr" | "changes_forward_hr";
 /** The auditor's answer on one request (2026-11-27: "approve" as HR settled it is explicit; null = not reviewed yet). */
@@ -62,10 +63,17 @@ export type PortalAdvance = {
   bankName?: string | null;
 };
 
+/** A Salary Advance's rounding (owner 2026-11-27): what was asked, capped at the eligible limit, rounded to the nearest
+ *  ₹500, never above the limit; the workflow's "as asked" amount. The HRMS's own shape (service.rounding_json). */
+export type PortalRounding = SettlementRounding;
+
 export type PortalItem = {
   id: number;
   advance: PortalAdvance;
+  /** What the employee asked for (never the rounded amount). */
   requestedAmount: number;
+  /** The Salary Advance rounding (2026-11-27); null for a Term Loan / an older batch, absent from an older server. */
+  rounding?: PortalRounding | null;
   md: { decision: "approved" | "rejected" | null; amount: number | null; remark: string };
   /** HR's final settlement (what the auditor reviews). */
   final: {

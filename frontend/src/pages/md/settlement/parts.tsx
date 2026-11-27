@@ -4,7 +4,7 @@ import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { AlertOctagon, AlertTriangle, CalendarCheck, CalendarClock, ChevronDown, type LucideIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { decisionKind, decisionText, finalKind, leaveChip, type DecisionKind, type LeaveTone } from "./logic";
+import { baseOf, decisionKind, decisionText, finalKind, leaveChip, type DecisionKind, type LeaveTone } from "./logic";
 import type { LeaveCheck, SettlementItem } from "./types";
 
 /**
@@ -89,7 +89,7 @@ export function DecisionChip({ item, final = false }: { item: SettlementItem; fi
       data-testid={final ? "md-settlement-final" : "md-settlement-decision"}
       data-kind={kind}
     >
-      <span className="truncate">{decisionText(kind, item.requestedAmount, amount)}</span>
+      <span className="truncate">{decisionText(kind, baseOf(item), amount)}</span>
     </span>
   );
 }

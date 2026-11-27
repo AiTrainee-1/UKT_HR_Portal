@@ -58,6 +58,7 @@ import {
   requestsText,
   workflowRefusal,
 } from "./logic";
+import { roundedTotalOf } from "./rounding";
 
 const SETTINGS_LINK = "/hr/settings?tab=settlement";
 
@@ -1133,6 +1134,12 @@ export default function StagePanel({
             <p>
               <b className="text-gray-900">{requestsText(batch.items.length)}</b>,{" "}
               <b className="text-gray-900">{formatMoney(batch.amounts.requested)}</b> asked for in all
+              {roundedTotalOf(batch) != null && roundedTotalOf(batch) !== batch.amounts.requested && (
+                <span data-testid="forward-rounded">
+                  {" "}
+                  (rounded total <b className="text-gray-900">{formatMoney(roundedTotalOf(batch))}</b>)
+                </span>
+              )}
               {batch.counts.critical + batch.counts.warning > 0
                 ? `; leave flags: ${batch.counts.critical} critical, ${batch.counts.warning} warning`
                 : ""}

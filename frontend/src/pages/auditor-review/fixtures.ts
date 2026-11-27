@@ -45,6 +45,8 @@ export function portalItem(
     requested: number;
     leave?: { days: number; flag: "ok" | "warning" | "critical" };
     bank?: boolean;
+    /** The Salary Advance rounding as portal_json sends it (2026-11-27); left out = an older server. */
+    rounding?: PortalItem["rounding"];
   },
 ): PortalItem {
   return settle({
@@ -69,6 +71,7 @@ export function portalItem(
         : {}),
     },
     requestedAmount: over.requested,
+    ...(over.rounding !== undefined ? { rounding: over.rounding } : {}),
     md: { decision: over.final, amount: over.amount, remark: "" },
     final: { decision: over.final, amount: over.amount, startMonth: 11, startYear: 2026, remark: "" },
     auditor: { action: null, amount: null, remark: "", at: null },

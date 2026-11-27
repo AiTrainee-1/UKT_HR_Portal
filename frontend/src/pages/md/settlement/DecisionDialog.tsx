@@ -14,6 +14,8 @@ import { REJECT_REMARK_MAX } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
 import { errorCode, useDecideItem } from "./api";
 import {
+  ROUNDS_TO_ZERO,
+  baseOf,
   draftBody,
   draftFor,
   draftProblems,
@@ -24,6 +26,9 @@ import {
   money,
   parseAmount,
   plainAmount,
+  roundingChanged,
+  roundingSteps,
+  roundsToZero,
   trailLine,
   typeLabelOf,
   type Draft,
@@ -49,14 +54,15 @@ const REMARK_LABEL: Record<DraftMode, { text: string; note: string }> = {
 };
 
 /** The form's choice differs from HR's proposal (2026-11-27): saving it means the settlement goes back to HR for rework
- *  before the MD can approve it. A reduce without a valid amount yet is not judged. */
+ *  before the MD can approve it. A reduce without a valid amount yet is not judged. Approving in full is the "as asked"
+ *  amount (a Salary Advance's rounded amount). */
 function differsFromHr(item: SettlementItem, draft: Draft): boolean {
   const hr = hrExpected(item);
   if (draft.mode === "reject") return hr.decision !== "rejected";
   if (hr.decision === "rejected") return true;
-  const amount = draft.mode === "reduce" ? parseAmount(draft.amount).value : item.requestedAmount;
+  const amount = draft.mode === "reduce" ? parseAmount(draft.amount).value : baseOf(item);
   if (amount === undefined) return false;
-  return Math.abs(amount - (hr.amount ?? item.requestedAmount)) > 0.004;
+  return Math.abs(amount - (hr.amount ?? baseOf(item))) > 0.004;
 }
 
 /** What the toast says once the server has the decision. */
@@ -64,8 +70,8 @@ function savedTitle(item: SettlementItem, draft: Draft): string {
   const name = item.advance.employeeName;
   if (draft.mode === "reject") return `Rejected: ${name}'s ${typeLabelOf(item.advance)}`;
   if (draft.mode === "reduce")
-    return `Reduced: ${name}, ${money(item.requestedAmount)} → ${money(parseAmount(draft.amount).value)}`;
-  return `Approved: ${name}, ${money(item.requestedAmount)}`;
+    return `Reduced: ${name}, ${money(baseOf(item))} → ${money(parseAmount(draft.amount).value)}`;
+  return `Approved: ${name}, ${money(baseOf(item))}`;
 }
 
 function DecisionForm({
@@ -79,18 +85,27 @@ function DecisionForm({
   round: number;
   onClose: () => void;
 }) {
-  const [draft, setDraft] = useState<Draft>(() => draftFor(item, mode));
+  // a Salary Advance that rounds to ₹0 can only be rejected (2026-11-27): the form opens on Reject
+  const zero = roundsToZero(item);
+  const [draft, setDraft] = useState<Draft>(() => {
+    const d = draftFor(item, mode);
+    return zero && d.mode !== "reject" ? { ...d, mode: "reject" } : d;
+  });
   const [tried, setTried] = useState(false);
   const [server, setServer] = useState<DraftProblems & { general?: string }>({});
   const decide = useDecideItem();
   const amountId = useId();
   const remarkId = useId();
   const requested = item.requestedAmount;
+  // the full approval and the most the MD may approve: the rounded amount of a Salary Advance, else what was asked
+  const base = baseOf(item);
+  const rounding = item.rounding ?? null;
+  const ceiling = rounding ? `the rounded ${money(base)}` : `the ${money(base)} asked`;
   const eligible = eligibleLimit(item);
   const limit = eligible.amount;
   const hrAmount = item.hr?.action === "reduce" ? (item.hr.amount ?? null) : null;
 
-  const problems = draftProblems(draft, requested);
+  const problems = draftProblems(draft, base, !!rounding);
   const amountProblem = (tried ? problems.amount : undefined) ?? server.amount;
   const remarkProblem = (tried ? problems.remark : undefined) ?? server.remark;
   const label = REMARK_LABEL[draft.mode];
@@ -110,6 +125,10 @@ function DecisionForm({
 
   const save = () => {
     setTried(true);
+    if (zero && draft.mode !== "reject") {
+      setServer({ general: ROUNDS_TO_ZERO });
+      return;
+    }
     if (hasProblems(problems)) return;
     decide.mutate(
       { id: item.id, ...draftBody(draft) },
@@ -122,7 +141,11 @@ function DecisionForm({
           const message = describeMdError(error);
           const code = errorCode(error);
           setServer(
-            code === "remark" ? { remark: message } : code === "amount" ? { amount: message } : { general: message },
+            code === "remark"
+              ? { remark: message }
+              : code === "amount" && draft.mode === "reduce"
+                ? { amount: message }
+                : { general: message },
           );
         },
       },
@@ -134,7 +157,7 @@ function DecisionForm({
       ? "Reject request"
       : draft.mode === "reduce"
         ? `Approve ${parseAmount(draft.amount).value != null ? money(parseAmount(draft.amount).value) : "the smaller amount"}`
-        : `Approve ${money(requested)}`;
+        : `Approve ${money(base)}`;
 
   return (
     <>
@@ -152,7 +175,20 @@ function DecisionForm({
 
       <div className="space-y-4">
         <div className="md-panel grid grid-cols-2 gap-3 p-3 sm:grid-cols-4" data-testid="md-settlement-dialog-facts">
-          <Figure label="Asked">{money(requested)}</Figure>
+          <Figure label="Asked" testId="md-settlement-dialog-asked">
+            {money(requested)}
+            {roundingChanged(rounding) && (
+              <span
+                className={cn(
+                  "block text-[11px] font-semibold",
+                  rounding.zero ? "text-md-danger-700" : "text-md-ink-soft",
+                )}
+                data-testid="md-settlement-dialog-rounded"
+              >
+                rounded {money(rounding.rounded)}
+              </span>
+            )}
+          </Figure>
           <Figure label="Eligible limit">{money(limit)}</Figure>
           <Figure label="HR proposes">
             {hrProposal(item).kind === "none" ? "No change" : hrProposal(item).text.replace(/^HR proposes /, "")}
@@ -173,6 +209,22 @@ function DecisionForm({
           >
             <History size={13} aria-hidden="true" className="shrink-0" />
             {earlier.you} · {earlier.hr}
+          </p>
+        )}
+
+        {roundingChanged(rounding) && (
+          <p
+            className={cn("text-xs leading-snug", zero ? "font-semibold text-md-danger-700" : "text-md-ink-soft")}
+            data-testid="md-settlement-dialog-rounding"
+          >
+            {zero ? (
+              <>Only reject is possible: {roundingSteps(rounding)}.</>
+            ) : (
+              <>
+                <span className="font-bold text-md-ink">Up to the rounded {money(base)}</span>:{" "}
+                {roundingSteps(rounding)}.
+              </>
+            )}
           </p>
         )}
 
@@ -198,8 +250,7 @@ function DecisionForm({
         {draft.mode === "reduce" && (
           <div>
             <label htmlFor={amountId} className="block text-xs font-bold text-md-ink">
-              Approved amount{" "}
-              <span className="font-medium text-md-ink-soft">(less than the {money(requested)} asked)</span>
+              Approved amount <span className="font-medium text-md-ink-soft">(less than {ceiling})</span>
             </label>
             <div className="relative mt-1">
               <span
@@ -225,7 +276,7 @@ function DecisionForm({
                 data-testid="md-settlement-amount"
               />
             </div>
-            {limit != null && limit > 0 && limit < requested && (
+            {limit != null && limit > 0 && limit < base && (
               <button
                 type="button"
                 className={cn("md-btn md-btn-ghost md-btn-sm mt-1.5", GHOST_MOTION)}
@@ -235,7 +286,7 @@ function DecisionForm({
                 Use the limit ({money(limit)})
               </button>
             )}
-            {hrAmount != null && hrAmount < requested && hrAmount !== limit && (
+            {hrAmount != null && hrAmount < base && hrAmount !== limit && (
               <button
                 type="button"
                 className={cn("md-btn md-btn-ghost md-btn-sm mt-1.5", GHOST_MOTION)}

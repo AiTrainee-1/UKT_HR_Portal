@@ -8,7 +8,7 @@ import { monthLabel, parseMonthKey, shiftMonth } from "@/components/md/kit/Month
 import { preloadMdShell } from "@/components/md/shell/loader";
 import MdSettlement from "../MdSettlement";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../testing/renderMdPage";
-import { advance, batch, fakeServer, fourItems, item } from "./fixtures";
+import { advance, batch, fakeServer, fourItems, item, rounded } from "./fixtures";
 import { changesReason, istMonthKey, periodLabel, RETURN_NOTE_MESSAGE } from "./logic";
 import type { SettlementBatch, SettlementItem } from "./types";
 
@@ -780,6 +780,133 @@ describe("rework and re-approval (owner 2026-11-27)", () => {
     expect(text('[data-testid="md-settlement-step-md_review"]')).toContain("round 2");
     expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.cycles).toBe("1");
     expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.state).toBe("done");
+  });
+});
+
+describe("the Salary Advance rounding (owner 2026-11-27)", () => {
+  const limited = (limit: number) => ({ ...advance(0).earnings!, limit });
+  /** Karthik: ₹15,000 asked over an ₹11,560 limit -> ₹11,500; Lakshmi: ₹4,800 -> ₹5,000 (rounded up); Devi: ₹200 -> ₹0
+   *  (only reject); Anita: ₹10,000, already whole within her ₹10,200 limit. */
+  const roundedItems = () =>
+    [
+      item(
+        21,
+        advance(21, { employeeName: "Karthik Raja", requestedAmount: 15000, amount: 15000, earnings: limited(11560) }),
+      ),
+      item(22, advance(22, { employeeName: "Lakshmi N", requestedAmount: 4800, amount: 4800 })),
+      item(23, advance(23, { employeeName: "Devi Priya", requestedAmount: 200, amount: 200 })),
+      item(24, advance(24, { employeeName: "Anita Rao", requestedAmount: 10000, amount: 10000 })),
+    ].map(rounded);
+
+  it("shows the rounded amount under the amount asked for, with how it was rounded on hover", async () => {
+    await open([batch({ month: M, year: Y, items: roundedItems() })]);
+    expect(text(inRow(21, "md-settlement-asked"))).toBe("₹15,000");
+    expect(text(inRow(21, "md-settlement-over-limit"))).toBe("Above the limit");
+    expect(text(inRow(21, "md-settlement-rounded"))).toBe("rounded ₹11,500");
+    expect(el(inRow(21, "md-settlement-rounded"))?.dataset.steps).toBe(
+      "₹15,000 asked → brought down to the ₹11,560 limit → rounded to the nearest ₹500 = ₹11,500",
+    );
+    expect(text(inRow(22, "md-settlement-rounded"))).toBe("rounded ₹5,000");
+    expect(text(inRow(23, "md-settlement-rounded"))).toBe("rounds to ₹0 — reject");
+    expect(el(inRow(24, "md-settlement-rounded"))).toBeNull(); // the rounding changed nothing
+    // no extra column: the MD table keeps its own (the tick box, seven values and the actions)
+    expect(
+      [...document.body.querySelectorAll('[data-testid="md-settlement-table"] thead th')].map((th) => th.textContent),
+    ).toEqual([
+      "",
+      "Employee",
+      "Requested",
+      "Eligible limit",
+      "HR's proposal",
+      "Your decision",
+      "Leave1st–20th",
+      "Remarks",
+      "Actions",
+    ]);
+    // "No change" from HR means the rounded amount
+    expect(text(inRow(21, "md-settlement-hr-proposal"))).toBe("No change proposed");
+  });
+
+  it("approves at once for the rounded amount: no change from HR's proposal", async () => {
+    const server = await open([batch({ month: M, year: Y, items: roundedItems() })]);
+    expect(el(inRow(21, "md-settlement-approve"))?.getAttribute("aria-label")).toBe("Approve ₹11,500 for Karthik Raja");
+    await page!.click(inRow(21, "md-settlement-approve"));
+    expect(server.calls.at(-1)).toEqual({ path: "/api/md/settlement/items/21", body: { decision: "approved" } });
+    expect(text(inRow(21, "md-settlement-decision"))).toBe("Approved ₹11,500");
+    expect(toast).toHaveBeenCalledWith({ title: "Approved: Karthik Raja, ₹11,500" });
+    expect(el(inRow(21, "md-settlement-changed"))).toBeNull();
+    // rounded up: the full approval is above the ask
+    await page!.click(inRow(22, "md-settlement-approve"));
+    expect(text(inRow(22, "md-settlement-decision"))).toBe("Approved ₹5,000");
+  });
+
+  it("a request that rounds to ₹0 can only be rejected", async () => {
+    const server = await open([batch({ month: M, year: Y, items: roundedItems() })]);
+    expect(isDisabled(inRow(23, "md-settlement-approve"))).toBe(true);
+    expect(isDisabled(inRow(23, "md-settlement-reduce"))).toBe(true);
+    expect(isDisabled(inRow(23, "md-settlement-reject"))).toBe(false);
+    expect(el(inRow(23, "md-settlement-approve"))?.getAttribute("aria-label")).toBe(
+      "Devi Priya's request rounds to ₹0: it can only be rejected",
+    );
+    await page!.click(inRow(23, "md-settlement-reject"));
+    expect(text(dialog("md-settlement-dialog-rounding"))).toContain("Only reject is possible");
+    // choosing Approve anyway is stopped before anything is sent
+    await page!.click(dialog("md-settlement-mode-approve"));
+    await page!.click(dialog("md-settlement-save"));
+    expect(text(dialog("md-settlement-dialog-error"))).toBe(
+      "This request rounds to ₹0 (less than ₹250 within the limit): reject it.",
+    );
+    expect(server.calls).toHaveLength(0);
+  });
+
+  it("the decision form: up to the rounded amount, the full approval is the rounded amount", async () => {
+    const server = await open([batch({ month: M, year: Y, items: roundedItems() })]);
+    await page!.click(inRow(21, "md-settlement-reduce"));
+    expect(text(dialog("md-settlement-dialog-asked"))).toBe("Asked₹15,000rounded ₹11,500");
+    expect(text(dialog("md-settlement-dialog-rounding"))).toBe(
+      "Up to the rounded ₹11,500: ₹15,000 asked → brought down to the ₹11,560 limit → rounded to the nearest ₹500 = ₹11,500.",
+    );
+    expect(text('[data-testid="md-settlement-dialog"]')).toContain("Approved amount (less than the rounded ₹11,500)");
+    // the limit is above the rounded amount: it is no reduction
+    expect(el(dialog("md-settlement-use-limit"))).toBeNull();
+    await page!.type(dialog("md-settlement-amount"), "11500");
+    await page!.type(dialog("md-settlement-remark"), "Second advance this year");
+    await page!.click(dialog("md-settlement-save"));
+    expect(text(dialog("md-settlement-amount-problem"))).toBe(
+      "A reduced amount must be less than the rounded ₹11,500. To give the full amount, choose Approve.",
+    );
+    expect(server.calls).toHaveLength(0);
+    // Approve in full = the rounded amount
+    await page!.click(dialog("md-settlement-mode-approve"));
+    expect(text(dialog("md-settlement-save"))).toBe("Approve ₹11,500");
+    await page!.click(dialog("md-settlement-save"));
+    expect(server.calls).toEqual([
+      {
+        path: "/api/md/settlement/items/21",
+        body: { decision: "approved", remark: "Second advance this year" },
+      },
+    ]);
+    expect(text(inRow(21, "md-settlement-decision"))).toBe("Approved ₹11,500");
+  });
+
+  it("bulk approve uses the rounded amounts and leaves out one that rounds to ₹0", async () => {
+    const server = await open([batch({ month: M, year: Y, items: roundedItems() })]);
+    await page!.click(inRow(21, "md-settlement-select"));
+    await page!.click(inRow(23, "md-settlement-select"));
+    await page!.click('[data-testid="md-settlement-bulk-bar"] [data-testid="md-settlement-bulk-approve"]');
+    expect(text('[data-testid="md-settlement-bulk-dialog"]')).toContain(
+      "else the full amount asked (a Salary Advance: its rounded amount): ₹11,500 in all.",
+    );
+    expect(text('[data-testid="md-settlement-bulk-zero"]')).toBe(
+      "1 of them rounds to ₹0 and is left out: reject it instead.",
+    );
+    await page!.click('[data-testid="md-settlement-bulk-send"]');
+    expect(server.calls.at(-1)?.body).toEqual({ itemIds: [21, 23], decision: "approved" });
+    expect(toast).toHaveBeenCalledWith({
+      title: "Approved 1 request, 1 request left out",
+      description: "Devi Priya: It rounds to ₹0: reject it.",
+    });
+    expect(text(inRow(21, "md-settlement-decision"))).toBe("Approved ₹11,500");
   });
 });
 

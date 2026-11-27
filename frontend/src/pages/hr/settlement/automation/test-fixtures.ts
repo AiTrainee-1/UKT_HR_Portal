@@ -9,9 +9,27 @@ import type {
   SettlementMonth,
   SettlementOverview,
   SettlementOverviewType,
+  SettlementRounding,
   SettlementStage,
   SettlementTrackerStep,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
+
+/** service.rounded_for + rounding_json: the amount asked for, capped at the limit, rounded to the nearest ₹500 (₹250 and
+ *  up rounds up), never above the limit. */
+export function roundingFor(requested: number, limit: number | null): SettlementRounding {
+  const base = limit == null ? requested : Math.min(requested, limit);
+  const steps = Math.floor(base / 500);
+  let rounded = base > 0 ? (steps + (base - steps * 500 >= 250 ? 1 : 0)) * 500 : 0;
+  if (limit != null && rounded > limit) rounded = Math.max(0, Math.floor(limit / 500) * 500);
+  return {
+    requested,
+    limit,
+    rounded,
+    capped: limit != null && requested > limit,
+    direction: rounded > requested ? "up" : rounded < requested ? "down" : "same",
+    zero: rounded <= 0,
+  };
+}
 
 export const advance = (over: Partial<SettlementAdvance> = {}): SettlementAdvance => ({
   id: 101,
@@ -74,9 +92,20 @@ export function item(
     mdChanged?: boolean;
     mdRemarked?: boolean;
     trail?: SettlementBatchItem["trail"];
+    /** The Salary Advance rounding (2026-11-27): `true` works it out from the amount asked and the earned limit, as the
+     *  server does; left out = an older server (no rounding, no baseAmount). */
+    rounding?: SettlementRounding | null | true;
+    baseAmount?: number;
   } = {},
 ): SettlementBatchItem {
   const adv = advance({ id: 100 + id, employeeId: id, ...over.advance });
+  const requested = over.requestedAmount ?? adv.requestedAmount ?? adv.amount;
+  const rounding =
+    over.rounding === true
+      ? adv.advanceType === "term"
+        ? null
+        : roundingFor(requested, adv.earnings?.limit ?? null)
+      : over.rounding;
   const final: SettlementBatchItem["final"] = {
     decision: null,
     amount: null,
@@ -90,7 +119,9 @@ export function item(
   return {
     id,
     advance: adv,
-    requestedAmount: over.requestedAmount ?? adv.requestedAmount ?? adv.amount,
+    requestedAmount: requested,
+    ...(rounding !== undefined ? { rounding, baseAmount: over.baseAmount ?? rounding?.rounded ?? requested } : {}),
+    ...(rounding === undefined && over.baseAmount !== undefined ? { baseAmount: over.baseAmount } : {}),
     hrNote: over.hrNote ?? "",
     hr: { action: null, amount: null, remark: over.hrNote ?? "", ...over.hr },
     md: { decision: null, amount: null, remark: "", decidedAt: null, fromHr: false, ...over.md },
@@ -284,7 +315,8 @@ export function actionsFor(
 /** A batch of three requests at `stage`: Asha (Salary Advance 8,000), Ravi (Term Loan 30,000, 3 days of leave) and Meena
  *  (Salary Advance 5,000, 5 days of leave). From the MD's return on, the MD approved Asha in full, Ravi for 25,000 and
  *  rejected Meena; from HR's final settlement on, HR kept the MD's decisions except Asha's, lowered to 6,000. At HR
- *  Rework (MD Changes) the MD's cut on Ravi and rejection of Meena wait for HR's answer (HR proposed nothing). */
+ *  Rework (MD Changes) the MD's cut on Ravi and rejection of Meena wait for HR's answer (HR proposed nothing). The two
+ *  Salary Advances carry the rounding as the server sends it (both already whole ₹500s within their ₹8,000 limit). */
 export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> = {}): SettlementBatch {
   const md = STAGES.indexOf(stage) >= STAGES.indexOf("md_changes");
   const fin = STAGES.indexOf(stage) >= STAGES.indexOf("hr_final");
@@ -294,6 +326,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
   const applied = STAGES.indexOf(stage) >= STAGES.indexOf("accounts_send");
   const items = [
     item(1, {
+      rounding: true,
       hrNote: "Regular, no earlier advance",
       md: md ? { decision: "approved", amount: 8000, remark: "", decidedAt: "2026-11-23T05:00:00Z" } : {},
       final: fin
@@ -327,6 +360,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
       ...(mdChanges ? { rework: "md" as const, mdChanged: true, mdRemarked: true } : {}),
     }),
     item(3, {
+      rounding: true,
       advance: {
         employeeCode: "S103",
         employeeName: "Meena Iyer",
@@ -383,6 +417,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
     },
     amounts: {
       requested: 43000,
+      rounded: 43000,
       mdApproved: md ? 33000 : 0,
       finalApproved: fin ? 31000 : 0,
       payable: fin ? 31000 : 0,

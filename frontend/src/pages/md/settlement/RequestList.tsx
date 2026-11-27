@@ -17,6 +17,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { groupByReview } from "@/lib/reviewOrder";
 import { cn } from "@/lib/utils";
 import {
+  baseOf,
   changeText,
   decisionKind,
   eligibleLimit,
@@ -30,6 +31,9 @@ import {
   pendingLabel,
   requestStatus,
   reviewOf,
+  roundingChanged,
+  roundingSteps,
+  roundsToZero,
   shortMonth,
   shownIds,
   termText,
@@ -161,6 +165,27 @@ function Employee({ item, full }: { item: SettlementItem; full?: boolean }) {
   );
 }
 
+/** A Salary Advance's rounded amount under the amount asked for (owner 2026-11-27): "rounded ₹11,500" (red "rounds to
+ *  ₹0 — reject"), with how it was rounded as the hover text; nothing when the rounding changed nothing. */
+function RoundedLine({ item }: { item: SettlementItem }) {
+  const r = item.rounding;
+  if (!roundingChanged(r)) return null;
+  return (
+    <p className={cn("text-[11px] font-semibold tabular-nums", r.zero ? "text-md-danger-700" : "text-md-ink-soft")}>
+      <Hint label={roundingSteps(r)}>
+        <span
+          tabIndex={0}
+          className="cursor-help rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-md-wine"
+          data-steps={roundingSteps(r)}
+          data-testid="md-settlement-rounded"
+        >
+          {r.zero ? "rounds to ₹0 — reject" : `rounded ${money(r.rounded)}`}
+        </span>
+      </Hint>
+    </p>
+  );
+}
+
 function Requested({ item }: { item: SettlementItem }) {
   const term = termText(item.advance);
   const over = overLimit(item);
@@ -177,6 +202,7 @@ function Requested({ item }: { item: SettlementItem }) {
           Above the limit
         </p>
       )}
+      <RoundedLine item={item} />
       {term && (
         <p className="ml-auto max-w-[8.5rem] whitespace-normal text-[11px] leading-snug text-md-ink-soft" title={term}>
           {/* the months and the EMI (two short lines at most); the first EMI month is the hover text */}
@@ -376,24 +402,36 @@ const REWORK_HR_TIP = "Rework — clear HR's proposal and decide it yourself";
 function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const saving = h.busy.has(item.id);
   const name = who(item);
+  // a Salary Advance that rounds to ₹0 can only be rejected (2026-11-27)
+  const zero = roundsToZero(item);
   if (decisionKind(item) === "undecided") {
     return (
       <div className="flex items-center justify-end gap-0.5" data-testid="md-settlement-actions">
         <IconAction
-          label="Approve"
-          aria={`Approve ${money(item.requestedAmount)} for ${name}`}
+          label={
+            zero
+              ? "Rounds to ₹0 — reject it"
+              : roundingChanged(item.rounding)
+                ? `Approve ${money(baseOf(item))}`
+                : "Approve"
+          }
+          aria={
+            zero
+              ? `${name}'s request rounds to ₹0: it can only be rejected`
+              : `Approve ${money(baseOf(item))} for ${name}`
+          }
           onClick={() => h.onApprove(item)}
-          disabled={false}
+          disabled={zero}
           saving={saving}
           tone="primary"
           icon={<Check size={15} aria-hidden="true" />}
           testId="md-settlement-approve"
         />
         <IconAction
-          label="Approve a smaller amount"
+          label={zero ? "Rounds to ₹0 — reject it" : "Approve a smaller amount"}
           aria={`Approve a smaller amount for ${name}`}
           onClick={() => h.onOpen(item, "reduce")}
-          disabled={saving}
+          disabled={saving || zero}
           saving={false}
           tone="soft"
           tint="warning"
@@ -464,6 +502,7 @@ function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
 function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const saving = h.busy.has(item.id);
   const name = who(item);
+  const zero = roundsToZero(item);
   if (decisionKind(item) === "undecided") {
     return (
       <div className="flex flex-wrap gap-1.5" data-testid="md-settlement-actions">
@@ -471,18 +510,24 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
           type="button"
           className={cn("md-btn md-btn-primary md-btn-sm", BTN_MOTION)}
           onClick={() => h.onApprove(item)}
-          disabled={saving}
+          disabled={saving || zero}
           aria-busy={saving || undefined}
-          aria-label={`Approve ${money(item.requestedAmount)} for ${name}`}
+          aria-label={
+            zero
+              ? `${name}'s request rounds to ₹0: it can only be rejected`
+              : `Approve ${money(baseOf(item))} for ${name}`
+          }
+          title={zero ? "Rounds to ₹0 — reject it" : undefined}
           data-testid="md-settlement-approve"
         >
-          <Check size={14} aria-hidden="true" /> {saving ? "Saving…" : "Approve"}
+          <Check size={14} aria-hidden="true" />{" "}
+          {saving ? "Saving…" : roundingChanged(item.rounding) && !zero ? `Approve ${money(baseOf(item))}` : "Approve"}
         </button>
         <button
           type="button"
           className={cn("md-btn md-btn-soft md-btn-sm", BTN_MOTION, TINT.warning)}
           onClick={() => h.onOpen(item, "reduce")}
-          disabled={saving}
+          disabled={saving || zero}
           aria-label={`Approve a smaller amount for ${name}`}
           data-testid="md-settlement-reduce"
         >
