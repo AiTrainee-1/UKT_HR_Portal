@@ -1,5 +1,14 @@
 import { useId, useMemo, useState } from "react";
-import { AlertTriangle, CheckCheck, CheckCircle2, ClipboardCheck, Search, X } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCheck,
+  CheckCircle2,
+  ClipboardCheck,
+  CornerUpLeft,
+  GitCompareArrows,
+  Search,
+  X,
+} from "lucide-react";
 import { EmptyBlock } from "@/components/md/kit/states";
 import { LeaveCalendarDialog } from "@/components/leave-calendar/LeaveCalendar";
 import {
@@ -17,7 +26,7 @@ import { describeMdError } from "@/lib/api-client/custom-hooks/md";
 import { num } from "@/lib/md/format";
 import { cleanRejectRemark, REJECT_REMARK_MAX, REJECT_REMARK_MIN } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
-import { loadLeaveCalendar, undecidedIds, useBulkDecide, useConfirmBatch, useDecideItem } from "./api";
+import { changedIds, loadLeaveCalendar, undecidedIds, useBulkDecide, useConfirmBatch, useDecideItem } from "./api";
 import DecisionDialog, { type DecisionTarget } from "./DecisionDialog";
 import { buildDirectFiles } from "./direct";
 import HistoryView from "./HistoryView";
@@ -32,6 +41,7 @@ import {
   hasLeaveAlert,
   isListFilter,
   istDateTime,
+  mdRoundOf,
   money,
   overLimit,
   periodLabel,
@@ -44,13 +54,16 @@ import {
   type SettlementView,
 } from "./logic";
 import OverviewView from "./OverviewView";
-import { Quote, SelectField } from "./parts";
+import { BTN_MOTION, GHOST_MOTION, Quote, SelectField } from "./parts";
 import RequestList, { type RowHandlers } from "./RequestList";
+import ReturnDialog from "./ReturnDialog";
 import ReviewSheet from "./ReviewSheet";
+import ReworkState from "./ReworkState";
 import type { ConfirmMode, DecideBody, MdDecision, SettlementBatch, SettlementItem } from "./types";
 
 const STAGE_CHIP: Record<string, string> = {
   md_review: "md-chip md-chip-wine",
+  md_changes: "md-chip md-chip-warning",
   hr_final: "md-chip md-chip-sand",
   completed: "md-chip md-chip-success",
 };
@@ -161,14 +174,20 @@ function BulkDialog({
           </p>
         )}
         <DialogFooter className="gap-2 sm:gap-2">
-          <button type="button" className="md-btn md-btn-ghost" onClick={onClose} disabled={pending}>
+          <button
+            type="button"
+            className={cn("md-btn md-btn-ghost", GHOST_MOTION)}
+            onClick={onClose}
+            disabled={pending}
+          >
             Cancel
           </button>
           <button
             type="button"
-            className={cn("md-btn", rejecting ? "md-btn-danger" : "md-btn-primary")}
+            className={cn("md-btn", rejecting ? "md-btn-danger" : "md-btn-primary", BTN_MOTION)}
             onClick={send}
             disabled={pending || items.length === 0}
+            aria-busy={pending || undefined}
             data-testid="md-settlement-bulk-send"
           >
             {rejecting ? <X size={15} aria-hidden="true" /> : <CheckCheck size={15} aria-hidden="true" />}
@@ -211,11 +230,13 @@ function DirectState({ batch, warning }: { batch: SettlementBatch; warning: stri
 
 /**
  * One forwarded batch, one section at a time (owner 2026-11-27: one row of tabs at the top of the page, each section its
- * own tab, nothing nested): `requests` = the requests (every value under its own header, checkboxes for bulk decisions)
- * with the MD's buttons while the batch is at MD Review, the note and the Review / Confirm & Proceed bar; `overview` = the
- * stages, the headline numbers, HR's note and "Sent back to HR" (OverviewView); `history` (HistoryView). The confirm step
- * offers Forward to HR or Direct to Auditor (the MD finalizes; the report goes with it). The state (selection, filter,
- * search, note) lives here, so it survives a switch of tab.
+ * own tab, nothing nested): `requests` = the requests (grouped: waiting for the MD, approved, rejected; checkboxes for
+ * bulk decisions) with the MD's buttons while the batch is at MD Review, the note and the Review bar; `overview` = the
+ * branching tracker, the headline numbers, HR's note and "Sent back to HR" (OverviewView); `history` (HistoryView).
+ * Without changes from HR's proposals the MD approves: Forward to HR or Direct to Auditor (the MD finalizes; the report
+ * goes with it). With changes (or corrections) the MD returns the settlement to HR for rework (ReturnDialog); HR
+ * resubmits it and the MD reviews the revised settlement (round 2, 3 ...; ReworkState says where it stands). The state
+ * (selection, filter, search, note) lives here, so it survives a switch of tab.
  */
 export default function BatchView({ batch, view }: { batch: SettlementBatch; view: SettlementView }) {
   const summary = useMemo(() => reviewSummary(batch.items), [batch.items]);
@@ -239,6 +260,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
   const [confirmError, setConfirmError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<ConfirmMode | null>(null);
   const [directWarning, setDirectWarning] = useState<string | null>(null);
+  const [returnOpen, setReturnOpen] = useState(false);
   const decide = useDecideItem();
   const bulk = useBulkDecide();
   const confirm = useConfirmBatch();
@@ -261,6 +283,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
 
   const handlers: RowHandlers = {
     stage: batch.stage,
+    mdRound: mdRoundOf(batch),
     canDecide,
     busy,
     highlight,
@@ -275,8 +298,15 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
       ),
     onConfirmHr: (item) =>
       void quick(item, confirmHrBody(item), `Confirmed HR's proposal: ${item.advance.employeeName}`),
-    onOpen: (item: SettlementItem, mode?: DraftMode) => setTarget({ item, mode }),
-    onUndo: (item) => void quick(item, { decision: "" }, `Decision cleared: ${item.advance.employeeName}`),
+    onOpen: (item: SettlementItem, mode?: DraftMode) => setTarget({ item, mode, round: mdRoundOf(batch) }),
+    onRework: (item) =>
+      void quick(
+        item,
+        { decision: "" },
+        item.md.fromHr
+          ? `HR's proposal cleared: ${item.advance.employeeName} waits for your decision`
+          : `Reopened: ${item.advance.employeeName} waits for your decision again`,
+      ),
     onLeave: (item) => setLeaveItem(item),
   };
 
@@ -342,10 +372,37 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
     } catch (error) {
       const ids = undecidedIds(error);
       if (ids.length) setHighlight(new Set(ids));
-      setConfirmError(describeMdError(error));
+      const changed = changedIds(error);
+      // has_changes (409): the page's copy was out of date - the reloaded batch marks the changed requests and offers
+      // Return to HR for rework instead
+      setConfirmError(
+        changed.length
+          ? `${describeMdError(error)} The page has been refreshed: return it to HR for rework.`
+          : describeMdError(error),
+      );
     } finally {
       setConfirming(null);
     }
+  };
+
+  const openReturn = () => {
+    setReviewOpen(false);
+    setReturnOpen(true);
+  };
+
+  const returned = (next: SettlementBatch) => {
+    setReturnOpen(false);
+    setReviewOpen(false);
+    setHighlight(new Set());
+    setSelected(new Set());
+    setNote("");
+    const flagged = next.counts.rework ?? next.items.filter((i) => i.rework).length;
+    toast({
+      title: "Returned to HR for rework",
+      description: `${batchTitle(batch)} of ${period}${
+        flagged ? `: ${plural(flagged, "request")} for HR to answer` : ""
+      }. You approve it once HR resubmits.`,
+    });
   };
 
   const listLabel = `Requests in ${batchTitle(batch)} of ${period}`;
@@ -354,11 +411,13 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
       {batch.stage === "md_review" ? "Waiting for your decision" : batch.stageLabel}
     </span>
   );
+  const changes = summary.changed;
 
   return (
     <div className="space-y-5" data-testid="md-settlement-batch" data-batch={batch.id} data-stage={batch.stage}>
       {view === "overview" && (
         <>
+          <ReworkState batch={batch} />
           <DirectState batch={batch} warning={directWarning} />
           <OverviewView batch={batch} summary={summary} stageChip={stageChip} />
         </>
@@ -368,6 +427,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
 
       {view === "requests" && (
         <>
+          <ReworkState batch={batch} />
           <DirectState batch={batch} warning={directWarning} />
           <section
             className="md-card space-y-4 p-4 @2xl:p-6"
@@ -384,16 +444,18 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                 </div>
                 <p className="mt-0.5 max-w-[42rem] text-xs leading-snug text-md-ink-soft">
                   {canDecide
-                    ? "Approve, reduce or reject each request, or tick several and decide them at once. HR's proposals come pre-filled: confirm or change them. You can change a decision until you confirm."
-                    : showFinal
-                      ? "Your decisions and the final settlement, read-only."
-                      : "Your decisions as you sent them to HR, read-only."}
+                    ? "Approve, reduce or reject each request, or tick several and decide them at once. HR's proposals come pre-filled: confirm or change them. Rework reopens a decision until you approve or return the settlement."
+                    : batch.stage === "md_changes"
+                      ? "Your decisions as you returned them to HR, read-only until HR resubmits."
+                      : showFinal
+                        ? "Your decisions and the final settlement, read-only."
+                        : "Your decisions as you sent them to HR, read-only."}
                 </p>
               </div>
               {canDecide && remaining.length > 1 && (
                 <button
                   type="button"
-                  className="md-btn md-btn-soft md-btn-sm"
+                  className={cn("md-btn md-btn-soft md-btn-sm", BTN_MOTION)}
                   onClick={() => {
                     setSelected(new Set(remaining.map((i) => i.id)));
                     openBulk("approved");
@@ -454,7 +516,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                 </p>
                 <button
                   type="button"
-                  className="md-btn md-btn-primary md-btn-sm"
+                  className={cn("md-btn md-btn-primary md-btn-sm", BTN_MOTION)}
                   onClick={() => openBulk("approved")}
                   data-testid="md-settlement-bulk-approve"
                 >
@@ -462,7 +524,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                 </button>
                 <button
                   type="button"
-                  className="md-btn md-btn-danger md-btn-sm"
+                  className={cn("md-btn md-btn-danger md-btn-sm", BTN_MOTION)}
                   onClick={() => openBulk("rejected")}
                   data-testid="md-settlement-bulk-reject"
                 >
@@ -470,7 +532,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                 </button>
                 <button
                   type="button"
-                  className="md-btn md-btn-ghost md-btn-sm"
+                  className={cn("md-btn md-btn-ghost md-btn-sm", GHOST_MOTION)}
                   onClick={() => setSelected(new Set())}
                   data-testid="md-settlement-bulk-clear"
                 >
@@ -498,11 +560,14 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
             <>
               <section className="md-card space-y-2 p-4 @2xl:p-6" data-testid="md-settlement-instructions">
                 <h3 className="text-[15px] font-extrabold text-md-ink">
-                  <label htmlFor={`md-settlement-note-${batch.id}`}>Your note</label>
+                  <label htmlFor={`md-settlement-note-${batch.id}`}>
+                    {changes > 0 ? "Instructions to HR" : "Your note"}
+                  </label>
                 </h3>
                 <p className="text-xs text-md-ink-soft">
-                  Optional. Instructions for HR when you forward it, or the note on the final settlement when you send
-                  it directly to the auditor (you can still edit it in the review).
+                  {changes > 0
+                    ? "Optional. What HR should look at when you return the settlement for rework (you can still edit it before you send it)."
+                    : "Optional. Instructions for HR when you forward it or return it for corrections, or the note on the final settlement when you send it directly to the auditor (you can still edit it in the review)."}
                 </p>
                 <textarea
                   id={`md-settlement-note-${batch.id}`}
@@ -528,6 +593,16 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                         <span className="font-semibold text-md-warning-800"> · {num(summary.fromHr)} from HR</span>
                       )}
                     </p>
+                    {changes > 0 && (
+                      <p
+                        className="mt-0.5 flex items-center gap-1 text-[11.5px] font-bold text-md-warning-800"
+                        data-testid="md-settlement-bar-changes"
+                      >
+                        <GitCompareArrows size={13} aria-hidden="true" className="shrink-0" />
+                        {plural(changes, "request")} changed from HR's proposal — return it to HR; you approve it once
+                        HR resubmits
+                      </p>
+                    )}
                     <div
                       className="mt-1.5 h-1.5 w-full max-w-sm overflow-hidden rounded-full bg-md-ink/10"
                       role="progressbar"
@@ -545,17 +620,34 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                       Approving {money(summary.approvedTotal)} of {money(summary.requestedTotal)} asked
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    className={cn("md-btn", summary.undecided === 0 ? "md-btn-primary" : "md-btn-ink")}
-                    onClick={() => {
-                      setConfirmError(null);
-                      setReviewOpen(true);
-                    }}
-                    data-testid="md-settlement-review-open"
-                  >
-                    <ClipboardCheck size={15} aria-hidden="true" /> Review decisions
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      className={cn(
+                        "md-btn",
+                        changes > 0 ? "md-btn-soft" : summary.undecided === 0 ? "md-btn-primary" : "md-btn-ink",
+                        BTN_MOTION,
+                      )}
+                      onClick={() => {
+                        setConfirmError(null);
+                        setReviewOpen(true);
+                      }}
+                      data-testid="md-settlement-review-open"
+                    >
+                      <ClipboardCheck size={15} aria-hidden="true" /> Review decisions
+                    </button>
+                    {changes > 0 && (
+                      <button
+                        type="button"
+                        className={cn("md-btn md-btn-primary", BTN_MOTION)}
+                        onClick={openReturn}
+                        disabled={batch.actions.canReturnMd === false}
+                        data-testid="md-settlement-bar-return"
+                      >
+                        <CornerUpLeft size={15} aria-hidden="true" /> Return to HR for rework
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </>
@@ -573,6 +665,7 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
             note={note}
             onNote={setNote}
             onConfirm={(mode) => void doConfirm(mode)}
+            onReturn={openReturn}
             confirming={confirming}
             error={confirmError}
           />
@@ -588,6 +681,16 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
         </>
       )}
 
+      {/* outside the MD Review block: a successful return moves the batch on while the dialog is still open */}
+      <ReturnDialog
+        open={returnOpen && batch.stage === "md_review"}
+        batch={batch}
+        summary={summary}
+        note={note}
+        onNote={setNote}
+        onClose={() => setReturnOpen(false)}
+        onDone={returned}
+      />
       <DecisionDialog target={target} onClose={() => setTarget(null)} />
       <LeaveCalendarDialog
         open={leaveItem !== null}

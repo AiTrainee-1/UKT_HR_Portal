@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import { Check, TrendingDown, X } from "lucide-react";
+import { Check, GitCompareArrows, History, TrendingDown, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -19,19 +19,22 @@ import {
   draftProblems,
   eligibleLimit,
   hasProblems,
+  hrExpected,
   hrProposal,
   money,
   parseAmount,
   plainAmount,
+  trailLine,
   typeLabelOf,
   type Draft,
   type DraftMode,
   type DraftProblems,
 } from "./logic";
-import { Figure, LeaveChip, Segmented } from "./parts";
+import { BTN_MOTION, Figure, GHOST_MOTION, LeaveChip, Segmented } from "./parts";
 import type { SettlementItem } from "./types";
 
-export type DecisionTarget = { item: SettlementItem; mode?: DraftMode };
+/** The request, the mode its button asked for, and the MD's review round (2+: the earlier round is shown). */
+export type DecisionTarget = { item: SettlementItem; mode?: DraftMode; round?: number };
 
 const MODES: { value: DraftMode; label: string }[] = [
   { value: "approve", label: "Approve in full" },
@@ -45,6 +48,17 @@ const REMARK_LABEL: Record<DraftMode, { text: string; note: string }> = {
   reject: { text: "Reason for rejecting (cancelling)", note: "required" },
 };
 
+/** The form's choice differs from HR's proposal (2026-11-27): saving it means the settlement goes back to HR for rework
+ *  before the MD can approve it. A reduce without a valid amount yet is not judged. */
+function differsFromHr(item: SettlementItem, draft: Draft): boolean {
+  const hr = hrExpected(item);
+  if (draft.mode === "reject") return hr.decision !== "rejected";
+  if (hr.decision === "rejected") return true;
+  const amount = draft.mode === "reduce" ? parseAmount(draft.amount).value : item.requestedAmount;
+  if (amount === undefined) return false;
+  return Math.abs(amount - (hr.amount ?? item.requestedAmount)) > 0.004;
+}
+
 /** What the toast says once the server has the decision. */
 function savedTitle(item: SettlementItem, draft: Draft): string {
   const name = item.advance.employeeName;
@@ -54,7 +68,17 @@ function savedTitle(item: SettlementItem, draft: Draft): string {
   return `Approved: ${name}, ${money(item.requestedAmount)}`;
 }
 
-function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: DraftMode; onClose: () => void }) {
+function DecisionForm({
+  item,
+  mode,
+  round,
+  onClose,
+}: {
+  item: SettlementItem;
+  mode?: DraftMode;
+  round: number;
+  onClose: () => void;
+}) {
   const [draft, setDraft] = useState<Draft>(() => draftFor(item, mode));
   const [tried, setTried] = useState(false);
   const [server, setServer] = useState<DraftProblems & { general?: string }>({});
@@ -70,6 +94,8 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
   const amountProblem = (tried ? problems.amount : undefined) ?? server.amount;
   const remarkProblem = (tried ? problems.remark : undefined) ?? server.remark;
   const label = REMARK_LABEL[draft.mode];
+  const earlier = trailLine(item, round);
+  const changes = differsFromHr(item, draft);
 
   const change = (patch: Partial<Draft>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -139,6 +165,17 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
           </div>
         </div>
 
+        {earlier && (
+          <p
+            className="flex flex-wrap items-center gap-x-1.5 text-xs font-semibold text-md-ink-soft"
+            title={earlier.detail.join("\n")}
+            data-testid="md-settlement-dialog-trail"
+          >
+            <History size={13} aria-hidden="true" className="shrink-0" />
+            {earlier.you} · {earlier.hr}
+          </p>
+        )}
+
         <Segmented
           label="Decision"
           value={draft.mode}
@@ -146,6 +183,17 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
           onChange={(m) => change({ mode: m })}
           testId="md-settlement-mode"
         />
+
+        {changes && (
+          <p
+            className="md-panel-sand flex items-start gap-1.5 px-3 py-2 text-xs font-semibold text-md-warning-800"
+            data-testid="md-settlement-dialog-changes"
+          >
+            <GitCompareArrows size={14} aria-hidden="true" className="mt-px shrink-0" />
+            This differs from HR's proposal: the settlement then goes back to HR for rework, and you approve it once HR
+            resubmits.
+          </p>
+        )}
 
         {draft.mode === "reduce" && (
           <div>
@@ -180,7 +228,7 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
             {limit != null && limit > 0 && limit < requested && (
               <button
                 type="button"
-                className="md-btn md-btn-ghost md-btn-sm mt-1.5"
+                className={cn("md-btn md-btn-ghost md-btn-sm mt-1.5", GHOST_MOTION)}
                 onClick={() => change({ amount: plainAmount(limit) })}
                 data-testid="md-settlement-use-limit"
               >
@@ -190,7 +238,7 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
             {hrAmount != null && hrAmount < requested && hrAmount !== limit && (
               <button
                 type="button"
-                className="md-btn md-btn-ghost md-btn-sm mt-1.5"
+                className={cn("md-btn md-btn-ghost md-btn-sm mt-1.5", GHOST_MOTION)}
                 onClick={() => change({ amount: plainAmount(hrAmount) })}
                 data-testid="md-settlement-use-hr"
               >
@@ -258,14 +306,20 @@ function DecisionForm({ item, mode, onClose }: { item: SettlementItem; mode?: Dr
       </div>
 
       <DialogFooter className="gap-2 sm:gap-2">
-        <button type="button" className="md-btn md-btn-ghost" onClick={onClose} disabled={decide.isPending}>
+        <button
+          type="button"
+          className={cn("md-btn md-btn-ghost", GHOST_MOTION)}
+          onClick={onClose}
+          disabled={decide.isPending}
+        >
           Cancel
         </button>
         <button
           type="button"
-          className={cn("md-btn", draft.mode === "reject" ? "md-btn-danger" : "md-btn-primary")}
+          className={cn("md-btn", draft.mode === "reject" ? "md-btn-danger" : "md-btn-primary", BTN_MOTION)}
           onClick={save}
           disabled={decide.isPending}
+          aria-busy={decide.isPending || undefined}
           data-testid="md-settlement-save"
         >
           {draft.mode === "reject" ? (
@@ -293,6 +347,7 @@ export default function DecisionDialog({ target, onClose }: { target: DecisionTa
             key={`${target.item.id}-${target.mode ?? ""}`}
             item={target.item}
             mode={target.mode}
+            round={target.round ?? 1}
             onClose={onClose}
           />
         )}

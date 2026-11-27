@@ -1,9 +1,20 @@
 import { History } from "lucide-react";
 import { EmptyBlock } from "@/components/md/kit/states";
-import { batchTitle, historyText, istDateTime, periodLabel } from "./logic";
+import { historyLabel } from "@/components/settlement-flow/WorkflowFlow";
+import { cn } from "@/lib/utils";
+import { batchTitle, historyFacts, istDateTime, periodLabel } from "./logic";
 import type { SettlementBatch } from "./types";
 
-/** The History tab: what happened to the batch, oldest first, with who did it, when, its figures and its note. */
+/** The step's tone (the shared tracker's words): a return amber, an approval green, a send wine, the rest quiet. */
+const TONE = {
+  good: "bg-md-success-600/15 text-md-success-700",
+  rework: "bg-md-warning-500/20 text-md-warning-800",
+  send: "bg-md-wine/10 text-md-wine",
+  plain: "bg-md-ink/10 text-md-ink-soft",
+} as const;
+
+/** The History tab: what happened to the batch, oldest first, in the tracker's words (returns to HR and resubmissions
+ *  included, with their round), with who did it, when, its figures and its note. */
 export default function HistoryView({ batch }: { batch: SettlementBatch }) {
   const entries = batch.history ?? [];
   return (
@@ -23,17 +34,21 @@ export default function HistoryView({ batch }: { batch: SettlementBatch }) {
       ) : (
         <ol className="space-y-2.5" data-testid="md-settlement-history">
           {entries.map((entry, i) => {
-            const { title, facts } = historyText(entry);
+            const { text, tone } = historyLabel(entry);
+            const facts = historyFacts(entry);
             return (
-              <li key={`${entry.at}-${i}`} className="md-panel flex gap-3 p-3">
+              <li key={`${entry.at}-${i}`} className="md-panel flex gap-3 p-3" data-action={entry.action}>
                 <span
-                  className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-md-wine/10 text-[11px] font-black text-md-wine"
+                  className={cn(
+                    "mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-black",
+                    TONE[tone],
+                  )}
                   aria-hidden="true"
                 >
                   {i + 1}
                 </span>
                 <div className="min-w-0 text-xs">
-                  <p className="font-bold text-md-ink">{title}</p>
+                  <p className="font-bold text-md-ink">{text}</p>
                   <p className="text-md-ink-soft">
                     {[entry.by, istDateTime(entry.at)].filter(Boolean).join(" · ")}
                     {facts && ` · ${facts}`}

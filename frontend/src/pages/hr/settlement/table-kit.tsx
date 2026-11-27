@@ -1,7 +1,10 @@
-import type { ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 import { Avatar } from "@/components/payroll/kit/parts";
 import { Button } from "@/components/ui/button";
+import { TableCell, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ReviewState } from "@/lib/reviewOrder";
 import { TONE, type Tone } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 
@@ -125,26 +128,39 @@ export function Figure({
   );
 }
 
-const PRESSED: Record<"blue" | "emerald" | "amber" | "red", string> = {
+/** A row action's colour: blue (view / remark), emerald (approve), amber (reduce), red (reject / delete), violet
+ *  (Rework: reopen a decision, 2026-11-27). */
+export type ActionColor = "blue" | "emerald" | "amber" | "red" | "violet";
+
+const PRESSED: Record<ActionColor, string> = {
   blue: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
   emerald: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200",
   amber: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
   red: "bg-red-50 text-red-700 ring-1 ring-red-200",
+  violet: "bg-violet-50 text-violet-700 ring-1 ring-violet-200",
 };
-const INK: Record<"blue" | "emerald" | "amber" | "red", string> = {
-  blue: "text-slate-600 hover:text-blue-700",
-  emerald: "text-slate-600 hover:text-emerald-700",
-  amber: "text-slate-600 hover:text-amber-700",
-  red: "text-red-500 hover:text-red-600",
+/** At rest the icon is quiet; on hover it takes its colour on a soft tint of it, lifts a pixel and casts a small shadow;
+ *  pressed it sinks back (owner 2026-11-27: "proper hover effects and visual feedback"). */
+const INK: Record<ActionColor, string> = {
+  blue: "text-slate-600 hover:bg-blue-50 hover:text-blue-700 focus-visible:ring-blue-300",
+  emerald: "text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 focus-visible:ring-emerald-300",
+  amber: "text-slate-600 hover:bg-amber-50 hover:text-amber-700 focus-visible:ring-amber-300",
+  red: "text-red-500 hover:bg-red-50 hover:text-red-600 focus-visible:ring-red-300",
+  violet: "text-slate-600 hover:bg-violet-50 hover:text-violet-700 focus-visible:ring-violet-300",
 };
+const MOTION =
+  "transition-[background-color,color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:shadow-sm " +
+  "active:translate-y-0 active:scale-95 active:shadow-none focus-visible:outline-none focus-visible:ring-2 " +
+  "motion-reduce:transform-none motion-reduce:transition-none disabled:hover:translate-y-0 disabled:hover:shadow-none";
 
 /** The hover label's colour: ActionTooltip's own (components/ui/action-tooltip.tsx), so it reads the same as on All
  *  Employees. */
-const TIP: Record<"blue" | "emerald" | "amber" | "red", string> = {
+const TIP: Record<ActionColor, string> = {
   blue: "#2563eb",
   emerald: "#059669",
   amber: "#d97706",
   red: "#dc2626",
+  violet: "#7c3aed",
 };
 
 /** A row action: a ghost icon button with its hover label (All Employees' Eye / Pencil / Trash). `pressed` marks the
@@ -163,15 +179,18 @@ export function RowAction({
   aria,
   disabled,
   pressed,
+  busy,
 }: {
   label: string;
   icon: ReactNode;
-  color: "blue" | "emerald" | "amber" | "red";
+  color: ActionColor;
   onClick: () => void;
   testId: string;
   aria: string;
   disabled?: boolean;
   pressed?: boolean;
+  /** Saving: a spinner in place of the icon, not clickable. */
+  busy?: boolean;
 }) {
   return (
     <TooltipProvider delayDuration={120} skipDelayDuration={60}>
@@ -181,17 +200,18 @@ export function RowAction({
             <Button
               size="icon"
               variant="ghost"
-              className={cn("h-8 w-8 rounded-lg", pressed ? PRESSED[color] : INK[color])}
+              className={cn("h-8 w-8 rounded-lg", MOTION, INK[color], pressed && PRESSED[color])}
               onClick={(e) => {
                 e.stopPropagation();
                 onClick();
               }}
-              disabled={disabled}
+              disabled={disabled || busy}
               aria-pressed={pressed === undefined ? undefined : pressed}
+              aria-busy={busy || undefined}
               aria-label={aria}
               data-testid={testId}
             >
-              {icon}
+              {busy ? <Loader2 size={15} className="animate-spin" aria-hidden /> : icon}
             </Button>
           </span>
         </TooltipTrigger>
@@ -208,6 +228,66 @@ export function RowAction({
       </Tooltip>
     </TooltipProvider>
   );
+}
+
+const GROUP_DOT: Record<ReviewState, string> = {
+  pending: "bg-amber-500",
+  approved: "bg-emerald-500",
+  rejected: "bg-red-500",
+};
+
+/** A quiet divider row between a review list's groups (owner 2026-11-27: waiting requests at the top, approved below,
+ *  rejected below those): a coloured dot, the group's name and how many. */
+export function GroupRow({
+  state,
+  label,
+  count,
+  colSpan,
+  testId,
+}: {
+  state: ReviewState;
+  label: string;
+  count: number;
+  colSpan: number;
+  testId?: string;
+}) {
+  return (
+    <TableRow className="border-b-0 hover:bg-transparent" data-group={state} data-testid={testId}>
+      <TableCell colSpan={colSpan} className="bg-slate-50/80 py-1.5 pl-4 pr-4">
+        <span className="inline-flex items-center gap-2 text-[11.5px] font-semibold text-slate-600">
+          <span className={cn("h-1.5 w-1.5 rounded-full", GROUP_DOT[state])} aria-hidden />
+          {label}
+          <span className="rounded-full bg-white px-1.5 py-px text-[10.5px] font-bold tabular-nums text-slate-500 ring-1 ring-slate-200">
+            {count}
+          </span>
+        </span>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/** A row that just changed group (approved, rejected, reopened) glows for a moment where it landed, so the eye follows
+ *  it: `flash(id)` after the save; `FLASH` on the row whose id is `flashId`. */
+export const FLASH = "animate-in fade-in-0 slide-in-from-top-1 duration-500 bg-sky-50/80 motion-reduce:animate-none";
+
+export function useFlash(ms = 1600): [number | null, (id: number) => void] {
+  const [id, setId] = useState<number | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    [],
+  );
+  const flash = useCallback(
+    (next: number) => {
+      if (timer.current) clearTimeout(timer.current);
+      setId(next);
+      timer.current = setTimeout(() => setId(null), ms);
+    },
+    [ms],
+  );
+  return [id, flash];
 }
 
 /** The actions of a row, on one line at the right. */

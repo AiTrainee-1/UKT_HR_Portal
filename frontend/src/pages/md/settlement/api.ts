@@ -15,6 +15,7 @@ import type {
   DecideBody,
   MdSettlementMonth,
   MdSettlementWaiting,
+  ReturnBody,
   SettlementBatch,
 } from "./types";
 
@@ -60,6 +61,13 @@ export function undecidedIds(error: unknown): number[] {
   if (!(error instanceof ApiError)) return [];
   const data = error.data as { undecided?: unknown } | null;
   return Array.isArray(data?.undecided) ? data.undecided.filter((x): x is number => typeof x === "number") : [];
+}
+
+/** The ids the server says the MD changed from HR's proposal (Confirm & Proceed's 409 `has_changes`). */
+export function changedIds(error: unknown): number[] {
+  if (errorCode(error) !== "has_changes" || !(error instanceof ApiError)) return [];
+  const data = error.data as { changed?: unknown } | null;
+  return Array.isArray(data?.changed) ? data.changed.filter((x): x is number => typeof x === "number") : [];
 }
 
 /** A refusal that means the page is out of date (the batch moved on, the request is gone): load it again. */
@@ -140,6 +148,29 @@ export function useConfirmBatch() {
     },
     onError: (error) => {
       if (isStale(error) || errorCode(error) === "undecided")
+        void queryClient.invalidateQueries({ predicate: (q) => isSettlementKey(q.queryKey) });
+    },
+  });
+}
+
+/** Return to HR for rework (2026-11-27): the MD changed amounts / rejected requests or asks for corrections. Refused
+ *  400 `no_changes` when there is no change, no remark of the MD's and no note for HR. */
+export function useReturnBatch() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, note }: { id: number } & ReturnBody) =>
+      customFetch<SettlementBatch>(`/api/md/settlement/batches/${id}/return`, {
+        method: "POST",
+        body: JSON.stringify({ note }),
+      }),
+    onMutate: () => queryClient.cancelQueries({ predicate: (q) => isMdKey(q.queryKey, MONTH_PATH) }),
+    onSuccess: (batch) => {
+      putBatch(queryClient, batch);
+      void queryClient.invalidateQueries({ predicate: (q) => isSettlementKey(q.queryKey) });
+    },
+    // no_changes: the page's copy thought there was something to rework - load the batch again
+    onError: (error) => {
+      if (isStale(error) || errorCode(error) === "no_changes")
         void queryClient.invalidateQueries({ predicate: (q) => isSettlementKey(q.queryKey) });
     },
   });

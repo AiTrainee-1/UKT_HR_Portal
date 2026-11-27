@@ -2,7 +2,8 @@
 // Backend: api/settlement_automation/ (views.py, service.py). Settings -> Loan & Advance chooses the Normal Method (the
 // page as it always was) or the Automation Method: a month-wise workflow per batch, HR Review -> MD Review & Approval ->
 // HR Final Settlement -> Send to Auditor -> Auditor Review (HR confirms by hand) -> Send Bank File to Accounts ->
-// Completed. Salary Advance and Term Loan run independent workflows (2026-11-27): each type has its own batches, so a
+// Completed. Re-approval cycles (2026-11-27): the MD's / auditor's changes send a batch back to HR (md_changes /
+// auditor_changes), HR answers every flagged request and resubmits it to the same reviewer for approval. Salary Advance and Term Loan run independent workflows (2026-11-27): each type has its own batches, so a
 // month is read per type (?type=general|term) and the Overview reads both types side by side. Every write answers the
 // updated batch, which is put straight into its month's cache.
 //
@@ -21,15 +22,20 @@ export type SettlementAdvanceType = Advance["advanceType"];
 export type SettlementStage =
   | "hr_review"
   | "md_review"
+  /** HR Rework (MD Changes) (2026-11-27): the MD changed / rejected requests or asked for corrections; HR answers each
+   *  flagged request and resubmits to the MD. */
+  | "md_changes"
   | "hr_final"
   | "auditor_send"
   | "auditor_review"
-  /** HR Review of Auditor Changes (2026-11-27): the auditor reduced or rejected requests in the review portal. */
+  /** HR Rework (Auditor Changes) (2026-11-27): the auditor reduced / rejected requests or asked for corrections; HR
+   *  answers each flagged request and resubmits to the auditor (a new review link goes out). */
   | "auditor_changes"
   | "accounts_send"
   | "completed";
 
-/** The tracker's nine stages: the stages plus "received" (Employee Requests Received). */
+/** The tracker's ten stages: the stages plus "received" (Employee Requests Received). Two are rework LOOPS (md_changes
+ *  under md_review, auditor_changes under auditor_review), drawn as branches by the workflow tracker. */
 export type SettlementTrackerKey = "received" | SettlementStage;
 
 export type SettlementTrackerStep = {
@@ -44,6 +50,46 @@ export type SettlementTrackerStep = {
   detail?: string | null;
   /** What has to happen to move on (the current stage only). */
   action: string | null;
+  /** A rework loop stage (md_changes / auditor_changes; absent from an older server). */
+  loop?: boolean;
+  /** A loop: how many times the batch went round it. */
+  cycles?: number | null;
+  /** md_review / auditor_review: the review round (2+ = a revised settlement). */
+  round?: number | null;
+};
+
+/** The branching tracker's facts (service.flow_json, 2026-11-27). */
+export type SettlementFlow = {
+  /** The MD's / auditor's review round (1 = the first). */
+  mdRound: number;
+  auditorRound: number;
+  /** How many times the MD / the auditor returned the batch to HR for rework. */
+  mdCycles: number;
+  auditorCycles: number;
+  /** The path the MD approved it on: to HR Final Settlement, or directly to the auditor; null before. */
+  mdPath: "hr" | "direct" | null;
+  /** Who sent the bank file to Accounts. */
+  accountsVia: "hr" | "auditor" | null;
+  /** The MD's latest Return to HR for rework, with their instructions. */
+  mdReturn: { at: string; by: string | null; note: string } | null;
+};
+
+/** Where a request stands with the current stage's reviewer: waiting ones sort to the top, then approved, then
+ *  rejected (owner 2026-11-27). */
+export type SettlementReviewState = "pending" | "approved" | "rejected";
+
+/** One earlier decision on a request, kept when a rework round replaced it. */
+export type SettlementTrailEntry = {
+  at: string;
+  by: string;
+  /** hr = HR's proposal, md = the MD's decision, hr_final = HR's final settlement, auditor = the auditor's answer. */
+  role: "hr" | "md" | "hr_final" | "auditor";
+  round: number;
+  /** hr: approve | reduce | reject; md / hr_final: approved | rejected; auditor: approve | reduce | reject | "" (a
+   *  remark alone). */
+  action: string;
+  amount: number | null;
+  remark: string;
 };
 
 export type SettlementDecision = "approved" | "rejected";
@@ -59,15 +105,17 @@ export type SettlementAdvance = Advance & {
   appliedBy?: "hr" | "employee" | null;
 };
 
-/** HR's proposal on one request at HR Review (2026-11-27): keep it as asked (action null), reduce it (an amount below
- *  the one asked for) or reject it; the remark is the request's hrNote. Forward copies it into the MD's decision. */
+/** HR's proposal on one request at HR Review (2026-11-27): not reviewed yet (action null; kept as asked), kept as asked
+ *  ("approve"), reduced (an amount below the one asked for) or rejected; the remark is the request's hrNote. Forward
+ *  copies a reduce / reject into the MD's decision. */
 export type SettlementHrProposal = {
-  action: "reduce" | "reject" | null;
+  action: "approve" | "reduce" | "reject" | null;
   amount: number | null;
   remark: string;
 };
 
-/** HR Review's proposal input (PATCH items/<id>): a remark alone, or with a proposal ("" / "keep" = as asked). */
+/** HR Review's proposal input (PATCH items/<id>): a remark alone, or with a proposal ("keep" = as asked; "" reopens it:
+ *  Rework). Also HR's answer to the MD in HR Rework (MD Changes). */
 export type SettlementHrReviewInput = {
   hrNote?: string;
   action?: "" | "keep" | "reduce" | "reject";
@@ -85,6 +133,16 @@ export type SettlementBatchItem = {
   hrNote: string;
   /** HR's proposal (2026-11-27; absent from an older server). */
   hr?: SettlementHrProposal;
+  /** Where the request stands with the current stage's reviewer (2026-11-27; the list sorts by it). */
+  review?: SettlementReviewState;
+  /** Flagged for HR's rework by the MD / the auditor and not answered yet. */
+  rework?: "md" | "auditor" | null;
+  /** The MD's own decision differs from HR's proposal (the MD must return the settlement to HR). */
+  mdChanged?: boolean;
+  /** The MD wrote their own remark on it (a correction for HR to look at). */
+  mdRemarked?: boolean;
+  /** The earlier rounds' decisions on this request. */
+  trail?: SettlementTrailEntry[];
   md: {
     decision: SettlementDecision | null;
     amount: number | null;
@@ -113,10 +171,10 @@ export type SettlementBatchItem = {
   applied: boolean;
 };
 
-/** What the auditor did to one request: "reduce" (a smaller amount), "reject", or nothing (null; a remark alone is not a
- *  change). */
+/** What the auditor did to one request: "approve" (as HR settled it), "reduce" (a smaller amount), "reject", or not
+ *  reviewed yet (null; a remark alone is not a change). */
 export type SettlementAuditorChange = {
-  action: "reduce" | "reject" | null;
+  action: "approve" | "reduce" | "reject" | null;
   amount: number | null;
   remark: string;
   at: string | null;
@@ -175,8 +233,11 @@ export type SettlementHistoryEntry = {
   total?: number;
   to?: string[];
   cc?: string[];
-  /** auditor_changes: how many requests the auditor changed. */
+  /** auditor_changes / md_returned: how many requests the reviewer changed (and remarked on). */
   changes?: number;
+  remarks?: number;
+  /** md_returned / md_resubmitted / auditor_changes / auditor_resubmitted: the review round it belongs to. */
+  round?: number;
   /** auditor_approved: the auditor's decision; accounts_sent: "hr" | "auditor"; finalized: "md" (Direct to Auditor). */
   via?: string;
   /** md_confirmed: the MD finalized it directly (Direct to Auditor). */
@@ -188,15 +249,24 @@ export type SettlementHistoryEntry = {
 export type SettlementBatchActions = {
   canEditHrNotes: boolean;
   canForward: boolean;
+  /** Rework: reopen a request HR decided, in HR Review / HR Rework (MD) / HR Final / HR Rework (Auditor). */
+  canRework?: boolean;
   canDecideMd: boolean;
+  /** The MD approves (to HR or directly to the auditor): every request decided AND no change from HR's proposals. */
   canConfirmMd: boolean;
+  /** The MD returns the settlement to HR for rework (changes or corrections). */
+  canReturnMd?: boolean;
+  /** HR Rework (MD Changes): answer the MD (accept / keep / change), then Resubmit to the MD. */
+  canResolveMd?: boolean;
+  canResubmitMd?: boolean;
   canEditFinal: boolean;
   canFinalize: boolean;
   canSendAuditor: boolean;
   canResendAuditor: boolean;
   canConfirmAuditor: boolean;
-  /** HR Review of Auditor Changes: Accept changes & finalize. */
-  canAcceptAuditorChanges: boolean;
+  /** HR Rework (Auditor Changes): answer the auditor, then Resubmit to the auditor. */
+  canResolveAuditor?: boolean;
+  canResubmitAuditor?: boolean;
   canSendAccounts: boolean;
   canCompleteWithoutBankFile: boolean;
   canResendAccounts: boolean;
@@ -219,6 +289,11 @@ export type SettlementBatch = {
   stageLabel: string;
   nextAction: string;
   tracker: SettlementTrackerStep[];
+  /** The branching tracker's facts (2026-11-27; absent from an older server). */
+  flow?: SettlementFlow;
+  /** The MD's / auditor's review round. */
+  mdRound?: number;
+  auditorRound?: number;
   counts: {
     total: number;
     mdDecided: number;
@@ -227,6 +302,14 @@ export type SettlementBatch = {
     undecided: number;
     warning: number;
     critical: number;
+    /** With the current stage's reviewer (2026-11-27). */
+    pending?: number;
+    reviewedApproved?: number;
+    reviewedRejected?: number;
+    /** The MD's decisions that differ from HR's proposals. */
+    mdChanges?: number;
+    /** Requests waiting for HR's rework answer. */
+    rework?: number;
   };
   amounts: {
     requested: number;
@@ -302,6 +385,8 @@ export type SettlementMonth = {
   /** The batch the page opens on: the first one not completed, else the last. */
   currentBatchId: number | null;
   tracker: SettlementTrackerStep[];
+  /** The tracker's batch's flow facts (2026-11-27). */
+  flow?: SettlementFlow;
   /** Oldest first. */
   batches: SettlementBatch[];
   /** A branch login: it sees its branch's requests and cannot move a batch. */
@@ -326,6 +411,7 @@ export type SettlementOverviewType = {
   /** The first batch not completed, else the last; null when the month has none. */
   currentBatch: SettlementBatchSummary | null;
   tracker: SettlementTrackerStep[];
+  flow?: SettlementFlow;
 };
 
 /** The Loan & Advance main page with the Automation Method: both types' month side by side. */
@@ -630,12 +716,47 @@ export const useSettlementAuditorDone = () =>
     true,
   );
 
-/** HR Review of Auditor Changes -> Send Bank File to Accounts: HR accepts the auditor's changes and the revised
- *  settlement is written to the advances. */
-export const useSettlementAcceptAuditorChanges = () =>
+/** Rework (2026-11-27): HR reopens a request it decided in its current stage; it waits again, at the top of the list. */
+export const useSettlementRework = () =>
+  useBatchWrite(
+    ({ itemId }: { itemId: number }) =>
+      customFetch<SettlementBatch>(`${ROOT}/items/${itemId}/rework`, json("POST", {})),
+    false,
+  );
+
+/** HR's answer to the MD's / auditor's change on one request in a rework stage: "accept" (take the reviewer's decision)
+ *  or "keep" (stand by HR's own; the reviewer sees it again on resubmission). */
+export type SettlementResolveHow = "accept" | "keep";
+
+export const useSettlementResolve = () =>
+  useBatchWrite(
+    ({ itemId, how }: { itemId: number; how: SettlementResolveHow }) =>
+      customFetch<SettlementBatch>(`${ROOT}/items/${itemId}/resolve`, json("POST", { how })),
+    false,
+  );
+
+/** The same answer on several requests (requests with nothing to accept come back in `skipped`). */
+export const useSettlementResolveBulk = () =>
+  useBatchWrite(
+    ({ batchId, itemIds, how }: { batchId: number; itemIds: number[]; how: SettlementResolveHow }) =>
+      customFetch<SettlementBulkReply>(`${ROOT}/batches/${batchId}/resolve-bulk`, json("POST", { itemIds, how })),
+    false,
+  );
+
+/** HR Rework (MD Changes) -> MD Review, the next round (every flagged request answered). */
+export const useSettlementResubmitMd = () =>
   useBatchWrite(
     ({ batchId, note }: { batchId: number; note: string }) =>
-      customFetch<SettlementBatch>(`${ROOT}/batches/${batchId}/accept-auditor-changes`, json("POST", { note })),
+      customFetch<SettlementBatch>(`${ROOT}/batches/${batchId}/resubmit-md`, json("POST", { note })),
+    true,
+  );
+
+/** HR Rework (Auditor Changes) -> Send to Auditor, the next round: the revised settlement and a new review link go out
+ *  next (useSettlementSendAuditor). Nothing reaches Accounts before the auditor approves it. */
+export const useSettlementResubmitAuditor = () =>
+  useBatchWrite(
+    ({ batchId, note }: { batchId: number; note: string }) =>
+      customFetch<SettlementBatch>(`${ROOT}/batches/${batchId}/resubmit-auditor`, json("POST", { note })),
     true,
   );
 

@@ -12,7 +12,9 @@ import {
   Hourglass,
   Landmark,
   Link2,
+  ListChecks,
   Loader2,
+  Lock,
   Mail,
   RotateCcw,
   Send,
@@ -23,11 +25,12 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
   getSettlementMonthQueryKey,
-  useSettlementAcceptAuditorChanges,
   useSettlementAuditorDone,
   useSettlementComplete,
   useSettlementFinalize,
   useSettlementForward,
+  useSettlementResubmitAuditor,
+  useSettlementResubmitMd,
   useSettlementSendAccounts,
   useSettlementSendAuditor,
   type SettlementAuditorLink,
@@ -41,6 +44,7 @@ import { Chip } from "../parts";
 import { formatDateTime, formatMoney } from "../shared";
 import { AuditorChangesReview, FinalizeReview, NoteActionDialog } from "./dialogs";
 import { buildAuditorFiles, buildBatchBankFile, saveFile } from "./files";
+import { reworkProgress } from "./focus";
 import {
   AUDITOR_DECISION_LABEL,
   STAGE_TITLE,
@@ -69,6 +73,8 @@ type Props = {
   /** Finalize decides the advances: it needs the approval rights of every type in the batch. */
   finalizeBlocked?: string | null;
   company: ExportCompany;
+  /** Opens the Requests tab (where HR answers the reviewer request by request). */
+  onOpenRequests?: () => void;
 };
 
 function Recipients({ to, cc, testId }: { to: string[]; cc: string[]; testId: string }) {
@@ -192,7 +198,7 @@ function LinkStatus({ link }: { link: SettlementAuditorLink | null }) {
   return (
     <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50/70 p-3" data-testid="auto-link-status">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-500">
+        <p className="flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-500">
           <Link2 size={12} aria-hidden /> Review link
         </p>
         <span data-testid="auto-link-state">
@@ -237,17 +243,47 @@ function LinkStatus({ link }: { link: SettlementAuditorLink | null }) {
   );
 }
 
+/** The MD's / the auditor's review round (1 = the first; 2 and on = a revised settlement after HR's rework). */
+const mdRoundOf = (batch: SettlementBatch) => batch.mdRound ?? batch.flow?.mdRound ?? 1;
+const auditorRoundOf = (batch: SettlementBatch) => batch.auditorRound ?? batch.flow?.auditorRound ?? 1;
+
 /** How the audit ended, for the stages after it. */
 function auditOutcomeText(batch: SettlementBatch): string {
   const a = batch.auditor;
+  const round = auditorRoundOf(batch);
+  const revised = round > 1 ? ` (the revised settlement, round ${round})` : "";
   if (a.outcome === "approved")
-    return `Approved by the auditor${a.submittedAt ? ` on ${formatDateTime(a.submittedAt)}` : ""}`;
+    return `Approved by the auditor${revised}${a.submittedAt ? ` on ${formatDateTime(a.submittedAt)}` : ""}`;
   if (a.outcome === "changes")
-    return `Changed by the auditor; HR accepted the changes${
-      a.changesAcceptedAt ? ` ${stamp(a.changesAcceptedAt, a.changesAcceptedBy)}` : ""
-    }`;
+    return `Returned to HR for rework by the auditor${a.submittedAt ? ` on ${formatDateTime(a.submittedAt)}` : ""}`;
   if (a.outcome === "confirmed_by_hr") return `Confirmed by HR by hand ${stamp(a.confirmedAt, a.confirmedBy)}`;
   return stamp(a.confirmedAt, a.confirmedBy);
+}
+
+/** A line that says the review is a later round (a revised settlement after HR's rework). */
+function RoundNote({ text, testId }: { text: string; testId: string }) {
+  return (
+    <p
+      className="flex items-start gap-2 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[13px] font-medium text-violet-900"
+      data-testid={testId}
+    >
+      <RotateCcw size={14} className="mt-0.5 shrink-0" aria-hidden />
+      {text}
+    </p>
+  );
+}
+
+/** The reviewer's words to HR at a rework stage: the MD's instructions / the auditor's note. */
+function ReviewerNote({ title, note, empty, testId }: { title: string; note: string; empty: string; testId: string }) {
+  return (
+    <div
+      className="rounded-xl border border-amber-200 bg-amber-50/80 px-3 py-2 text-[13px] text-amber-950"
+      data-testid={testId}
+    >
+      <p className="text-[11.5px] font-semibold text-amber-800">{title}</p>
+      <p className={cn(!note && "text-amber-800/80")}>{note || empty}</p>
+    </div>
+  );
 }
 
 /**
@@ -255,18 +291,29 @@ function auditOutcomeText(batch: SettlementBatch): string {
  * buttons, driven by the batch's `actions` flags. Every step is HR's own click; nothing moves on by itself, and a step
  * that sends an e-mail moves on only when the e-mail was sent.
  */
-export default function StagePanel({ batch, recipients, may, mayNotReason, finalizeBlocked, company }: Props) {
+export default function StagePanel({
+  batch,
+  recipients,
+  may,
+  mayNotReason,
+  finalizeBlocked,
+  company,
+  onOpenRequests,
+}: Props) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const forward = useSettlementForward();
   const finalize = useSettlementFinalize();
   const sendAuditor = useSettlementSendAuditor();
   const auditorDone = useSettlementAuditorDone();
-  const acceptChanges = useSettlementAcceptAuditorChanges();
+  const resubmitMd = useSettlementResubmitMd();
+  const resubmitAuditor = useSettlementResubmitAuditor();
   const sendAccounts = useSettlementSendAccounts();
   const complete = useSettlementComplete();
 
-  const [dialog, setDialog] = useState<"forward" | "finalize" | "proceed" | "accept" | "complete" | null>(null);
+  const [dialog, setDialog] = useState<
+    "forward" | "finalize" | "proceed" | "resubmit_md" | "resubmit_auditor" | "complete" | null
+  >(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Refusal | null>(null);
   const [preparing, setPreparing] = useState<string | null>(null);
@@ -377,7 +424,14 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
   };
 
   const doProceed = async (note: string) => {
-    await auditorDone.mutateAsync({ batchId: batch.id, note });
+    try {
+      await auditorDone.mutateAsync({ batchId: batch.id, note });
+    } catch (err) {
+      // the auditor marked changes in the portal meanwhile (409 auditor_changes_open): the dialog shows the server's
+      // words, and the month is read again so the page shows where the batch stands
+      if (serverError(err, "").code === "auditor_changes_open") void refetchMonth();
+      throw err;
+    }
     setDialog(null);
     toast({
       title: "Auditor review confirmed by hand",
@@ -386,14 +440,62 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
     });
   };
 
-  const doAccept = async (note: string) => {
-    await acceptChanges.mutateAsync({ batchId: batch.id, note });
+  // ── HR Rework (MD Changes) -> MD Review, the next round ──
+  const doResubmitMd = async (note: string) => {
+    try {
+      await resubmitMd.mutateAsync({ batchId: batch.id, note });
+    } catch (err) {
+      if (serverError(err, "").code === "rework_open") void refetchMonth();
+      throw err;
+    }
     setDialog(null);
-    const r = auditorReview(batch);
     toast({
-      title: "Auditor's changes accepted",
-      description: `The revised settlement is applied: ${r.approved} approved (${formatMoney(r.payable)}), ${r.rejected} rejected. The employees are told. Next: send the bank file to Accounts.`,
+      title: "Resubmitted to the MD",
+      description: `The MD reviews the revised settlement of ${period} now (round ${mdRoundOf(batch) + 1}).`,
     });
+  };
+
+  // ── HR Rework (Auditor Changes) -> Send to Auditor -> Auditor Review, in one go: the revised settlement goes back to
+  // the auditor with the revised report (PDF + Excel, built here exactly as Send to Auditor does) and a new review link.
+  // A refused resubmission keeps the dialog open with the server's words; when only the e-mail fails the batch waits at
+  // Send to Auditor, whose own button sends it again ──
+  const doResubmitAuditor = async (note: string) => {
+    setRefusal(null);
+    setProgress("Resubmitting the revised settlement…");
+    let revised: SettlementBatch;
+    try {
+      revised = await resubmitAuditor.mutateAsync({ batchId: batch.id, note });
+    } catch (err) {
+      setProgress(null);
+      if (serverError(err, "").code === "rework_open") void refetchMonth();
+      throw err;
+    }
+    const round = auditorRoundOf(revised);
+    try {
+      setProgress("Building the revised report (PDF and Excel)…");
+      const files = await buildAuditorFiles(revised, company);
+      setProgress(`E-mailing a new review link to the auditor (${recipients.auditor.join(", ")})…`);
+      const sent = await sendAuditor.mutateAsync({ batchId: batch.id, ...files });
+      setDialog(null);
+      const until = sent?.auditor?.link?.expiresAt;
+      toast({
+        title: `Revised settlement sent to the auditor (round ${round})`,
+        description: `The auditor reviews it in the Auditor Review Portal${
+          until ? `; the link works until ${formatDateTime(until)}` : ""
+        }. ${files.pdf.name} and ${files.xlsx.name} are attached. Nothing goes to Accounts until the auditor approves it.`,
+      });
+    } catch (err) {
+      setDialog(null);
+      setRefusal(workflowRefusal(err, "The revised report could not be sent."));
+      void refetchMonth();
+      toast({
+        title: "Resubmitted, but not sent to the auditor yet",
+        description: "The revised settlement waits at Send to Auditor: send it from there once the problem is fixed.",
+        variant: "destructive",
+      });
+    } finally {
+      setProgress(null);
+    }
   };
 
   const doComplete = async (note: string) => {
@@ -419,14 +521,26 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
   const missing = batchMissingBank(batch);
   const noAuditor = recipients.auditor.length === 0;
   const noAccounts = recipients.accounts.length === 0;
+  const rework = stage === "md_changes" || stage === "auditor_changes";
+  const answers = rework ? reworkProgress(batch) : { waiting: 0, flagged: 0 };
+  const answeredText = `${answers.flagged - answers.waiting} of ${requestsText(answers.flagged)} answered${
+    answers.waiting > 0 ? ` · ${answers.waiting} still ${answers.waiting === 1 ? "waits" : "wait"} for you` : ""
+  }`;
+  const waitingReason = (who: string) =>
+    `${requestsText(answers.waiting)} still ${answers.waiting === 1 ? "waits" : "wait"} for your answer: accept ${who}, keep yours or change it first.`;
+  const mdRound = mdRoundOf(batch);
+  const auditorRound = auditorRoundOf(batch);
+  const lastResubmit = [...(batch.history ?? [])].reverse().find((h) => h.action === "md_resubmitted");
   const Icon =
     stage === "completed"
       ? CheckCircle2
-      : stage === "md_review"
-        ? Hourglass
-        : stage === "auditor_review" || stage === "auditor_changes"
-          ? Stamp
-          : Send;
+      : rework
+        ? RotateCcw
+        : stage === "md_review"
+          ? Hourglass
+          : stage === "auditor_review"
+            ? Stamp
+            : Send;
 
   const downloads = (kinds: ("pdf" | "xlsx" | "bank")[]) => (
     <span data-view-safe className="contents">
@@ -472,7 +586,11 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
     <section
       className={cn(
         "space-y-3 rounded-2xl border p-4 sm:p-5",
-        stage === "completed" ? "border-emerald-200 bg-emerald-50/50" : "border-indigo-100 bg-white",
+        stage === "completed"
+          ? "border-emerald-200 bg-emerald-50/50"
+          : rework
+            ? "border-amber-200 bg-white"
+            : "border-indigo-100 bg-white",
       )}
       aria-label="What to do now"
       data-testid="auto-stage-panel"
@@ -482,14 +600,18 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
         <span
           className={cn(
             "flex h-10 w-10 shrink-0 items-center justify-center rounded-xl",
-            stage === "completed" ? "bg-emerald-100 text-emerald-700" : "bg-indigo-50 text-indigo-700",
+            stage === "completed"
+              ? "bg-emerald-100 text-emerald-700"
+              : rework
+                ? "bg-amber-100 text-amber-700"
+                : "bg-indigo-50 text-indigo-700",
           )}
           aria-hidden
         >
           <Icon size={18} />
         </span>
         <div className="min-w-0">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+          <p className="text-[11.5px] font-semibold text-slate-400">
             {period} · {stage === "completed" ? "Done" : "Current stage"}
           </p>
           <h3 className="text-lg font-black leading-tight text-slate-900" data-testid="auto-stage-title">
@@ -526,16 +648,85 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
       {/* ── MD Review ── */}
       {stage === "md_review" && (
         <div className="space-y-2" data-testid="auto-waiting-md">
+          {mdRound > 1 && (
+            <RoundNote text={`Round ${mdRound} — the MD is reviewing the revised settlement.`} testId="auto-md-round" />
+          )}
           <p className="text-sm text-slate-600">
-            The MD approves, reduces or rejects each request and then confirms. Nothing to do here until then.
+            The MD approves, reduces or rejects each request. With no changes the MD approves the settlement (to you for
+            the final settlement, or directly to the auditor); with changes or corrections it comes back to you for
+            rework. Nothing to do here until then.
           </p>
           <Facts>
             <Fact label="Forwarded" value={stamp(batch.forwardedAt, batch.forwardedBy)} />
+            {mdRound > 1 && lastResubmit && (
+              <Fact label="Resubmitted" value={stamp(lastResubmit.at, lastResubmit.by)} />
+            )}
             <Fact label="MD's progress" value={`${batch.counts.mdDecided} of ${batch.counts.total} decided so far`} />
           </Facts>
-          {batch.hrNote && (
+          {mdRound > 1 && lastResubmit?.note ? (
             <p className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
-              <b>Your note to the MD:</b> {batch.hrNote}
+              <b>Your note with the revised settlement:</b> {lastResubmit.note}
+            </p>
+          ) : (
+            batch.hrNote && (
+              <p className="rounded-xl bg-slate-50 px-3 py-2 text-[12px] text-slate-700">
+                <b>Your note to the MD:</b> {batch.hrNote}
+              </p>
+            )
+          )}
+        </div>
+      )}
+
+      {/* ── HR Rework (MD Changes): answer the MD, then resubmit ── */}
+      {stage === "md_changes" && (
+        <div className="space-y-3" data-testid="auto-md-changes">
+          <Facts>
+            <Fact
+              label="Returned by the MD"
+              value={stamp(batch.flow?.mdReturn?.at ?? null, batch.flow?.mdReturn?.by ?? null)}
+            />
+            <Fact label="Review round" value={`Round ${mdRound}`} />
+            <Fact label="Your answers" value={<span data-testid="auto-rework-progress">{answeredText}</span>} />
+          </Facts>
+          <ReviewerNote
+            title="The MD's instructions"
+            note={batch.flow?.mdReturn?.note ?? ""}
+            empty="The MD left no note for the whole batch: see the MD's remark on each flagged request."
+            testId="auto-md-return-note"
+          />
+          <p className="text-sm text-slate-600">
+            The MD changed amounts, rejected requests or asked for corrections, so the settlement is back with you. On
+            the Requests tab, answer every request the MD flagged: accept the MD&apos;s decision, keep your proposal, or
+            change it. Then resubmit it: the MD reviews the revised settlement (round {mdRound + 1}) and approves it, to
+            you for the final settlement or directly to the auditor.
+          </p>
+          {blockedNote}
+          {may && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                className="h-10 gap-2"
+                onClick={() => setDialog("resubmit_md")}
+                disabled={!act.canResubmitMd}
+                data-testid="auto-resubmit-md"
+              >
+                <Send size={15} /> Resubmit to the MD
+              </Button>
+              {onOpenRequests && (
+                <Button
+                  variant="outline"
+                  className="h-10 gap-2"
+                  onClick={onOpenRequests}
+                  data-view-safe
+                  data-testid="auto-open-requests"
+                >
+                  <ListChecks size={15} /> Answer on the Requests tab
+                </Button>
+              )}
+            </div>
+          )}
+          {may && !act.canResubmitMd && (
+            <p className="text-xs font-medium text-amber-800" data-testid="auto-resubmit-md-blocked">
+              {answers.waiting > 0 ? waitingReason("the MD's decision") : "Resubmitting is not open for this batch."}
             </p>
           )}
         </div>
@@ -557,7 +748,7 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
             className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-[13px] text-indigo-900"
             data-testid="auto-md-note"
           >
-            <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-500">MD&apos;s instructions</p>
+            <p className="text-[11.5px] font-semibold text-indigo-500">MD&apos;s instructions</p>
             <p>{batch.mdNote || "The MD left no instructions for this batch."}</p>
           </div>
           <p className="text-sm text-slate-600">
@@ -610,6 +801,12 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
               value={`${review.approved} approved (${formatMoney(review.finalApproved)}) · ${review.rejected} rejected`}
             />
           </Facts>
+          {auditorRound > 1 && (
+            <RoundNote
+              text={`Send the revised settlement (round ${auditorRound}): your answers to the auditor's changes are in it. Only the auditor's approval of it opens the way to Accounts.`}
+              testId="auto-auditor-round"
+            />
+          )}
           <p className="text-sm text-slate-600" data-testid="auto-send-auditor-explain">
             Send to Auditor e-mails the auditor a secure link to the <b>Auditor Review Portal</b>, with the finalized
             report attached as a PDF and an Excel file. In the portal the auditor checks each request and the
@@ -618,7 +815,7 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
             Settings and stops working once answered. The stage moves on only when the e-mail is sent.
           </p>
           <div className="rounded-xl bg-slate-50 p-3">
-            <p className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            <p className="mb-1 flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-400">
               <Mail size={12} aria-hidden /> Auditor
             </p>
             {noAuditor ? (
@@ -638,7 +835,8 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
                 disabled={busy || noAuditor}
                 data-testid="auto-send-auditor"
               >
-                {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Send to Auditor
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}{" "}
+                {auditorRound > 1 ? `Send the revised settlement (round ${auditorRound})` : "Send to Auditor"}
               </Button>
             )}
             {downloads(["pdf", "xlsx"])}
@@ -654,11 +852,17 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
               {finalizedText(batch)}
             </p>
           )}
+          {auditorRound > 1 && (
+            <RoundNote
+              text={`Round ${auditorRound} — the auditor is reviewing the revised settlement.`}
+              testId="auto-auditor-round"
+            />
+          )}
           <p className="text-sm text-slate-600">
             The auditor reviews the settlement in the Auditor Review Portal through the link e-mailed to them. When they
             approve, the settlement is applied (and the bank file goes to Accounts if they send it); when they change
-            something, it comes back to you for review. Resend the link if it expired or got lost: a new link replaces
-            the old one.
+            something or ask for corrections, it comes back to you for rework. Resend the link if it expired or got
+            lost: a new link replaces the old one.
           </p>
           <LinkStatus link={batch.auditor.link ?? null} />
           <Progress text={progress} testId="auto-progress" />
@@ -684,7 +888,8 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
             >
               <p className="max-w-xl text-xs text-slate-600">
                 <b className="text-slate-800">Auditor confirmed another way?</b> Confirming by hand applies HR&apos;s
-                final settlement exactly as finalized (no auditor changes) and closes the review link.
+                final settlement exactly as finalized (no auditor changes) and closes the review link. It is refused
+                while the auditor has changes marked in the portal.
               </p>
               <Button
                 variant="ghost"
@@ -701,40 +906,72 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
         </div>
       )}
 
-      {/* ── HR Review of Auditor Changes ── */}
+      {/* ── HR Rework (Auditor Changes): answer the auditor, then resubmit the revised settlement ── */}
       {stage === "auditor_changes" && (
-        <div className="space-y-3">
+        <div className="space-y-3" data-testid="auto-auditor-changes">
           <Facts>
             <Fact
               label="The auditor answered"
               value={batch.auditor.submittedAt ? formatDateTime(batch.auditor.submittedAt) : "-"}
             />
+            <Fact label="Review round" value={`Round ${auditorRound}`} />
             <Fact
               label="Changes"
               value={`${audit.changes} ${audit.changes === 1 ? "request" : "requests"} reduced or rejected · ${audit.remarks} with a remark`}
             />
+            <Fact label="Your answers" value={<span data-testid="auto-rework-progress">{answeredText}</span>} />
           </Facts>
           <p className="text-sm text-slate-600">
-            The auditor changed the settlement. Check every change below. Accepting applies the revised settlement (the
-            auditor&apos;s reduced amounts and rejections on top of your final decisions) to the advances and tells the
-            employees; then send the bank file to Accounts.
+            The auditor returned the settlement to you for rework. On the Requests tab, answer every request the auditor
+            flagged: accept the auditor&apos;s change, keep your settlement, or change the final decision (within the
+            MD&apos;s). Then resubmit it: the revised report and a new review link go to the auditor in one step.
+          </p>
+          <p
+            className="flex items-start gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-[13px] font-medium text-sky-900"
+            data-testid="auto-no-accounts-yet"
+          >
+            <Lock size={14} className="mt-0.5 shrink-0" aria-hidden />
+            Nothing goes to Accounts until the auditor approves the revised settlement.
           </p>
           <AuditorChangesReview batch={batch} testId="auto-auditor-changes-review" />
+          {noAuditor && <NoRecipients who="auditor" testId="auto-no-auditor" />}
+          <Progress text={progress} testId="auto-progress" />
+          <RefusalNote refusal={refusal} testId="auto-send-error" />
           {blockedNote}
           {may && finalizeBlocked && (
-            <p className="text-xs font-medium text-red-700" data-testid="auto-accept-blocked">
-              {finalizeBlocked.replace("Finalize decides", "Accepting decides")}
+            <p className="text-xs font-medium text-red-700" data-testid="auto-resubmit-blocked">
+              {finalizeBlocked.replace("Finalize decides the advances", "Resubmitting needs the approval right")}
             </p>
           )}
-          {may && act.canAcceptAuditorChanges && (
-            <Button
-              className="h-10 gap-2"
-              onClick={() => setDialog("accept")}
-              disabled={!!finalizeBlocked}
-              data-testid="auto-accept-changes"
-            >
-              <ShieldCheck size={15} /> Accept changes &amp; finalize
-            </Button>
+          {may && (
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                className="h-10 gap-2"
+                onClick={() => setDialog("resubmit_auditor")}
+                disabled={!act.canResubmitAuditor || busy || noAuditor || !!finalizeBlocked}
+                data-testid="auto-resubmit-auditor"
+              >
+                {busy ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />} Resubmit to the auditor
+              </Button>
+              {onOpenRequests && (
+                <Button
+                  variant="outline"
+                  className="h-10 gap-2"
+                  onClick={onOpenRequests}
+                  data-view-safe
+                  data-testid="auto-open-requests"
+                >
+                  <ListChecks size={15} /> Answer on the Requests tab
+                </Button>
+              )}
+            </div>
+          )}
+          {may && !act.canResubmitAuditor && (
+            <p className="text-xs font-medium text-amber-800" data-testid="auto-resubmit-auditor-blocked">
+              {answers.waiting > 0
+                ? waitingReason("the auditor's change")
+                : "Every request needs a final decision before you resubmit."}
+            </p>
           )}
         </div>
       )}
@@ -803,7 +1040,7 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
                 </div>
               )}
               <div className="rounded-xl bg-slate-50 p-3">
-                <p className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                <p className="mb-1 flex items-center gap-1.5 text-[11.5px] font-semibold text-slate-400">
                   <Landmark size={12} aria-hidden /> Accounts
                 </p>
                 {noAccounts ? (
@@ -966,25 +1203,49 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
       />
 
       <NoteActionDialog
-        open={dialog === "accept"}
-        wide
-        title={`Accept the auditor's changes to ${period}?`}
+        open={dialog === "resubmit_md"}
+        title={`Resubmit the revised settlement of ${period} to the MD?`}
         description={
-          <p>
-            The revised settlement below is applied now: every request is decided as the auditor left it (their reduced
-            amounts and rejections on top of your final decisions), with the deduction schedules, the decision history
-            and the employees&apos; notices. This cannot be undone.
-          </p>
+          <>
+            <p>
+              Your answers to the MD go with it ({answeredText}). The MD reviews the revised settlement in round{" "}
+              {mdRound + 1}: a request whose proposal is now the MD&apos;s own decision keeps it; one you kept or
+              changed waits for the MD&apos;s decision again.
+            </p>
+            <p>With no further changes the MD approves it; with changes it comes back to you once more.</p>
+          </>
         }
-        notePlaceholder="e.g. Checked with the auditor"
-        confirmLabel="Accept changes & finalize"
-        busyLabel="Applying…"
-        onConfirm={doAccept}
+        noteLabel="Note to the MD (optional)"
+        notePlaceholder="e.g. Accepted your cuts; kept Ravi's amount, see the remark"
+        confirmLabel="Resubmit to the MD"
+        busyLabel="Resubmitting…"
+        onConfirm={doResubmitMd}
         onCancel={() => setDialog(null)}
-        testId="accept-dialog"
-        confirmDisabled={!!finalizeBlocked}
+        testId="resubmit-md-dialog"
+      />
+
+      <NoteActionDialog
+        open={dialog === "resubmit_auditor"}
+        title={`Resubmit the revised settlement of ${period} to the auditor?`}
+        description={
+          <>
+            <p>
+              In one step: your answers are kept as the revised final settlement (round {auditorRound + 1}), the revised
+              report is built as a PDF and an Excel file, and the auditor gets a new review link with it (the old link
+              stops working). The auditor&apos;s changes of this round stay in each request&apos;s history.
+            </p>
+            <p>Nothing goes to Accounts until the auditor approves the revised settlement.</p>
+          </>
+        }
+        noteLabel="Note to the auditor (optional)"
+        notePlaceholder="e.g. Accepted both cuts; kept Asha's amount, see the remark"
+        confirmLabel="Resubmit and send"
+        busyLabel="Working…"
+        onConfirm={doResubmitAuditor}
+        onCancel={() => setDialog(null)}
+        testId="resubmit-auditor-dialog"
       >
-        <AuditorChangesReview batch={batch} testId="accept-review" />
+        <Progress text={dialog === "resubmit_auditor" ? progress : null} testId="resubmit-auditor-progress" />
       </NoteActionDialog>
 
       <NoteActionDialog
@@ -1004,7 +1265,7 @@ export default function StagePanel({ batch, recipients, may, mayNotReason, final
 function Summary({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl bg-white px-3 py-2 ring-1 ring-emerald-100">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-400">{label}</p>
+      <p className="text-[11px] font-semibold text-slate-400">{label}</p>
       <p className="text-sm font-bold text-slate-900">{value}</p>
     </div>
   );

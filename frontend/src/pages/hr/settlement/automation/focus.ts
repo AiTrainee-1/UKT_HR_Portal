@@ -7,8 +7,10 @@ import type {
   SettlementBatch,
   SettlementBatchItem,
   SettlementDecision,
+  SettlementStage,
   SettlementTrackerKey,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
+import type { ReviewState } from "@/lib/reviewOrder";
 import { leaveFlagged } from "../leave";
 import { REMARK_MIN, cleanRemark } from "../logic";
 import { formatMoney, monthLabel } from "../shared";
@@ -79,8 +81,8 @@ export const FILTER_LABEL: Record<CardFilter, string> = {
   leave: "Leave flags",
 };
 
-/** Which details a focus list shows for each request. */
-export type FocusKind = "requests" | "hr" | "md" | "final" | "auditor" | "bank";
+/** Which details a focus list shows for each request ("md_changes": HR's proposal, the MD's change and HR's answer). */
+export type FocusKind = "requests" | "hr" | "md" | "md_changes" | "final" | "auditor" | "bank";
 
 export type FocusView = {
   key: FocusKey;
@@ -148,6 +150,22 @@ export function focusView(batch: SettlementBatch, key: FocusKey): FocusView {
         empty: blocked ?? "No request in this batch.",
       };
     }
+    case "md_changes": {
+      const flagged = items.filter(flaggedByMd);
+      const returned = batch.stage === "md_changes" || (batch.flow?.mdCycles ?? 0) > 0 || flagged.length > 0;
+      return {
+        key,
+        title: "HR Rework (MD Changes): the requests the MD flagged",
+        hint: "Each request the MD changed (another amount, a rejection) or wrote a correction on, the MD's remark, and your answer: accept the MD's decision, keep yours or change it.",
+        kind: "md_changes",
+        items: returned ? flagged : [],
+        empty: returned
+          ? "The MD flagged no request: only their note for the whole batch."
+          : reached(batch, "hr_final")
+            ? "The MD approved it without returning it to HR: no rework was needed."
+            : "The MD has not returned this batch to HR.",
+      };
+    }
     case "hr_final": {
       const blocked = not("hr_final", "The MD has not confirmed the decisions yet.");
       return {
@@ -180,13 +198,31 @@ export function focusView(batch: SettlementBatch, key: FocusKey): FocusView {
     }
     case "auditor_review":
     case "auditor_changes": {
-      const blocked = not("auditor_review", "Not sent to the auditor yet.");
-      const answered = !!batch.auditor.submittedAt || reached(batch, "auditor_changes");
-      const changed = items.filter((i) => auditorChanged(i) || !!(i.auditor?.remark ?? "").trim());
+      const rework = key === "auditor_changes";
+      // the auditor's changes stay on the requests until HR resubmits; a later round keeps them in the request's trail
+      const returned = batch.stage === "auditor_changes" || (batch.flow?.auditorCycles ?? 0) > 0;
+      const blocked = rework
+        ? returned
+          ? null
+          : reached(batch, "accounts_send")
+            ? "The auditor approved it without returning it to HR: no rework was needed."
+            : "The auditor has not returned this batch to HR."
+        : not("auditor_review", "Not sent to the auditor yet.");
+      const answered = !!batch.auditor.submittedAt || batch.stage === "auditor_changes";
+      const changed = items.filter(
+        (i) =>
+          auditorChanged(i) ||
+          !!(i.auditor?.remark ?? "").trim() ||
+          (rework && (i.rework === "auditor" || (i.trail ?? []).some((t) => t.role === "auditor"))),
+      );
       return {
         key,
-        title: key === "auditor_changes" ? "HR Review of Auditor Changes" : "Auditor Review: the auditor's changes",
-        hint: "Every request the auditor reduced, rejected or wrote a remark on, and what is paid after it.",
+        title: rework
+          ? "HR Rework (Auditor Changes): the requests the auditor flagged"
+          : "Auditor Review: the auditor's changes",
+        hint: rework
+          ? "Each request the auditor reduced, rejected or wrote a correction on, and your answer: accept the auditor's change, keep your settlement or change it."
+          : "Every request the auditor reduced, rejected or wrote a remark on, and what is paid after it.",
         kind: "auditor",
         items: blocked ? [] : changed,
         empty:
@@ -228,9 +264,32 @@ export type Standing = {
   label: string;
 };
 
+/** HR's proposal as a standing: reduced, rejected, or as asked (kept as asked, or not reviewed yet: the same amount). */
+function hrStanding(item: SettlementBatchItem, label: string): Standing {
+  const hr = item.hr;
+  if (hr?.action === "reject") return { decision: "rejected", amount: null, source: "hr", label };
+  if (hr?.action === "reduce") return { decision: "approved", amount: hr.amount, source: "hr", label };
+  return { decision: null, amount: item.requestedAmount, source: "asked", label: "as asked" };
+}
+
 /** The amount a request stands at now: after the auditor's change, else HR's final, else the MD's (pre-filled from
- *  HR), else HR's proposal at HR Review; as asked when HR keeps it. */
-export function standingOf(item: SettlementBatchItem): Standing {
+ *  HR), else HR's proposal at HR Review; as asked when HR keeps it. In a rework stage (2026-11-27) it is what HR sends
+ *  back to the reviewer: HR's proposal in HR Rework (MD Changes), HR's final settlement in HR Rework (Auditor Changes);
+ *  the reviewer's change is in the Status column beside it. */
+export function standingOf(item: SettlementBatchItem, stage?: SettlementStage): Standing {
+  if (stage === "md_changes") {
+    // as asked (kept, or not reviewed) goes back as a full approval
+    const s = hrStanding(item, "HR's proposal");
+    return s.source === "asked" ? { ...s, decision: "approved", label: "HR's proposal" } : s;
+  }
+  if (stage === "auditor_changes" && item.final.decision) {
+    return {
+      decision: item.final.decision,
+      amount: item.final.decision === "approved" ? item.final.amount : null,
+      source: "final",
+      label: "HR's final",
+    };
+  }
   if (item.final.decision) {
     const eff = effectiveOf(item);
     const audited = auditorChanged(item);
@@ -250,16 +309,18 @@ export function standingOf(item: SettlementBatchItem): Standing {
     };
   }
   const hr = item.hr;
-  if (hr?.action === "reject") return { decision: "rejected", amount: null, source: "hr", label: "HR proposes" };
-  if (hr?.action === "reduce") return { decision: "approved", amount: hr.amount, source: "hr", label: "HR proposes" };
+  if (hr?.action === "reject" || hr?.action === "reduce") return hrStanding(item, "HR proposes");
   return { decision: null, amount: item.requestedAmount, source: "asked", label: "as asked" };
 }
 
-/** HR's proposal in words: "Keep as asked", "Proposes ₹6,000", "Proposes reject". */
-export function hrProposalText(item: SettlementBatchItem): string {
+/** HR's proposal in words: "Keep as asked", "Proposes ₹6,000", "Proposes reject"; at HR Review a request HR has not
+ *  looked at yet is "Not reviewed yet" (2026-11-27: kept as asked is a review of its own; it goes to the MD as asked
+ *  either way). */
+export function hrProposalText(item: SettlementBatchItem, stage?: SettlementStage): string {
   const hr = item.hr;
   if (hr?.action === "reject") return "Proposes reject";
   if (hr?.action === "reduce") return `Proposes ${formatMoney(hr.amount)}`;
+  if (!hr?.action && stage === "hr_review") return "Not reviewed yet";
   return "Keep as asked";
 }
 
@@ -281,11 +342,12 @@ export function trailOf(
 ): TrailStep[] {
   const out: TrailStep[] = [];
   const hr = item.hr;
+  const notYet = !hr?.action && batch.stage === "hr_review";
   out.push({
     step: "hr",
     who: "HR",
-    text: hrProposalText(item),
-    tone: hr?.action === "reject" ? "danger" : hr?.action === "reduce" ? "warning" : "neutral",
+    text: hrProposalText(item, batch.stage),
+    tone: hr?.action === "reject" ? "danger" : hr?.action === "reduce" || notYet ? "warning" : "neutral",
   });
   if (reached(batch, "md_review")) {
     const md = item.md;
@@ -330,12 +392,153 @@ export function trailOf(
             ? "Rejected by the auditor"
             : "No change",
       tone: a?.action === "reduce" ? "warning" : a?.action === "reject" ? "danger" : "neutral",
-      note: auditorChanged(item)
-        ? `pays ${eff.decision === "approved" ? formatMoney(eff.amount) : "nothing"}`
-        : undefined,
+      // in HR's rework the change is a question to HR, not yet what is paid (HR may keep its own settlement)
+      note:
+        auditorChanged(item) && batch.stage !== "auditor_changes"
+          ? `pays ${eff.decision === "approved" ? formatMoney(eff.amount) : "nothing"}`
+          : undefined,
     });
   }
   return out;
+}
+
+// ─── The rework rounds (2026-11-27): where a request stands with the stage's reviewer, and HR's answers ──────────
+
+/** Where a request stands with the reviewer of the batch's current stage (service.review_state): the server sends it as
+ *  `review`; this works it out the same way for an older server that does not. */
+export function reviewStateOf(item: SettlementBatchItem, stage: SettlementStage): ReviewState {
+  if (item.review) return item.review;
+  const as = (decision: SettlementDecision | null | undefined): ReviewState =>
+    decision === "rejected" ? "rejected" : decision === "approved" ? "approved" : "pending";
+  switch (stage) {
+    case "hr_review":
+      return !item.hr?.action ? "pending" : item.hr.action === "reject" ? "rejected" : "approved";
+    case "md_review":
+      return !item.md.decision || !item.md.decidedAt ? "pending" : as(item.md.decision);
+    case "md_changes":
+      return item.rework ? "pending" : item.hr?.action === "reject" ? "rejected" : "approved";
+    case "hr_final":
+    case "auditor_changes":
+      return item.rework || !item.final.decision ? "pending" : as(item.final.decision);
+    case "auditor_review":
+      if (item.final.decision === "rejected" || item.auditor?.action === "reject") return "rejected";
+      return item.auditor?.action === "approve" || item.auditor?.action === "reduce" ? "approved" : "pending";
+    default:
+      return as(effectiveOf(item).decision);
+  }
+}
+
+/** The heading of the waiting group of a stage's list (the approved and rejected groups are named alike everywhere). */
+export function pendingGroupLabel(stage: SettlementStage): string {
+  switch (stage) {
+    case "hr_review":
+      return "Waiting for your review";
+    case "md_review":
+      return "Waiting for the MD";
+    case "md_changes":
+      return "Waiting for your answer to the MD";
+    case "hr_final":
+      return "Waiting for your final decision";
+    case "auditor_review":
+      return "Waiting for the auditor";
+    case "auditor_changes":
+      return "Waiting for your answer to the auditor";
+    default:
+      return "Not decided";
+  }
+}
+
+/** The MD's own decision differs from HR's proposal (service.md_changed; the server sends it as `mdChanged`). */
+export function mdDiffers(item: SettlementBatchItem): boolean {
+  if (typeof item.mdChanged === "boolean") return item.mdChanged;
+  const md = item.md;
+  if (!md.decision || !md.decidedAt) return false;
+  const hr = item.hr;
+  const expected: SettlementDecision = hr?.action === "reject" ? "rejected" : "approved";
+  if (md.decision !== expected) return true;
+  if (expected === "rejected") return false;
+  const amount = hr?.action === "reduce" && hr.amount != null ? hr.amount : item.requestedAmount;
+  return round2(md.amount ?? 0) !== round2(amount);
+}
+
+const oneSpace = (text: string) => text.trim().split(/\s+/).join(" ");
+
+/** The MD's own remark on the request (not HR's carried over): a correction for HR; "" when none. */
+export function mdRemarkOf(item: SettlementBatchItem): string {
+  const mine = oneSpace(item.md.remark ?? "");
+  if (!mine || !item.md.decidedAt) return "";
+  if (typeof item.mdRemarked === "boolean") return item.mdRemarked || mdDiffers(item) ? mine : "";
+  return mine === oneSpace(item.hrNote ?? "") ? "" : mine;
+}
+
+/** The MD flagged the request in some round (a change or their own remark), or it waits for HR's answer to the MD. */
+export function flaggedByMd(item: SettlementBatchItem): boolean {
+  return item.rework === "md" || (item.trail ?? []).some((t) => t.role === "md");
+}
+
+/** HR's answer on a request: waiting (flagged and not answered), "accepted" (the reviewer's decision is HR's now),
+ *  "kept" (HR stands by its own, which still differs) or null (nothing to answer). */
+export type ReworkAnswer = "waiting" | "accepted" | "kept" | null;
+
+/** HR's answer to the MD (HR Rework (MD Changes)). */
+export function mdAnswerOf(item: SettlementBatchItem): ReworkAnswer {
+  if (item.rework === "md") return "waiting";
+  if (!item.md.decision || !item.md.decidedAt || item.md.fromHr) return null;
+  if (mdDiffers(item)) return "kept";
+  return mdRemarkOf(item) ? "accepted" : null;
+}
+
+/** HR's answer to the auditor (HR Rework (Auditor Changes)). */
+export function auditorAnswerOf(item: SettlementBatchItem): ReworkAnswer {
+  if (item.rework === "auditor") return "waiting";
+  const a = item.auditor;
+  if (!auditorChanged(item)) return (a?.remark ?? "").trim() && item.final.decision ? "accepted" : null;
+  if (a.action === "reject") return item.final.decision === "rejected" ? "accepted" : "kept";
+  return item.final.decision === "approved" && round2(item.final.amount ?? 0) === round2(a.amount ?? 0)
+    ? "accepted"
+    : "kept";
+}
+
+/** The answer in words, for the row and the focus list. */
+export function answerText(answer: ReworkAnswer, who: "md" | "auditor"): string {
+  if (answer === "waiting") return "Waiting for your answer";
+  if (answer === "accepted")
+    return who === "md" ? "You accepted the MD's decision" : "You accepted the auditor's change";
+  if (answer === "kept") return who === "md" ? "You kept your proposal" : "You kept your settlement";
+  return "";
+}
+
+/** What the reviewer flagged on a request, as the pill on its row: "MD changed this" / "MD's remark"; null when it does
+ *  not wait for HR's answer. A request HR reopened itself (Rework) is "Reopened". */
+export function reworkFlag(
+  item: SettlementBatchItem,
+  stage: SettlementStage,
+): { text: string; tone: "caution" | "info" | "accent" } | null {
+  if (stage === "md_changes" && item.rework === "md") {
+    if (mdDiffers(item)) return { text: "MD changed this", tone: "caution" };
+    if (mdRemarkOf(item)) return { text: "MD's remark", tone: "info" };
+    return { text: "Reopened", tone: "accent" };
+  }
+  if (stage === "auditor_changes" && item.rework === "auditor") {
+    if (auditorChanged(item)) return { text: "Auditor changed this", tone: "caution" };
+    if ((item.auditor?.remark ?? "").trim()) return { text: "Auditor's remark", tone: "info" };
+    return { text: "Reopened", tone: "accent" };
+  }
+  return null;
+}
+
+/** In a rework stage: how many requests still wait for HR's answer, and how many the reviewer flagged (with the ones HR
+ *  reopened itself). */
+export function reworkProgress(batch: Pick<SettlementBatch, "items" | "stage" | "counts">): {
+  waiting: number;
+  flagged: number;
+} {
+  const md = batch.stage === "md_changes";
+  const waiting = batch.counts.rework ?? batch.items.filter((i) => i.rework === (md ? "md" : "auditor")).length;
+  const flagged = batch.items.filter((i) =>
+    md ? !!mdAnswerOf(i) : auditorChanged(i) || !!(i.auditor?.remark ?? "").trim() || i.rework === "auditor",
+  ).length;
+  return { waiting, flagged: Math.max(flagged, waiting) };
 }
 
 export type RemarkLine = { who: "HR" | "MD" | "Final" | "Auditor"; text: string };
@@ -393,8 +596,8 @@ export type RequestColumn = {
   header: string;
   align: "left" | "right" | "center";
   /** Shown only from this screen width on (as All Employees hides Phone and Salary on a laptop), so the table fits its
-   *  card without a sideways scroll; a phone has the cards, which show every value. */
-  from?: "xl" | "2xl" | "wide";
+   *  card without a sideways scroll; a phone has the cards, which show every value. "xl2": 1400 px. */
+  from?: "xl" | "xl2" | "2xl" | "wide";
 };
 
 const COLUMN: Record<RequestColumnKey, RequestColumn> = {
@@ -436,7 +639,9 @@ export function requestColumns(
     "remarks",
     ...(opts.actions ? (["actions"] as const) : []),
   ];
-  return keys.map((k) => COLUMN[k]);
+  // with the row actions (up to five icons since Rework, 2026-11-27) the xl columns show from 1400 px on, so the table
+  // stays inside its card on a 1280 px laptop
+  return keys.map((k) => (opts.actions && COLUMN[k].from === "xl" ? { ...COLUMN[k], from: "xl2" } : COLUMN[k]));
 }
 
 export type RequestFigures = {
@@ -453,8 +658,8 @@ export type RequestFigures = {
   standing: Standing;
 };
 
-/** Every figure of a request's row. */
-export function requestFigures(item: SettlementBatchItem): RequestFigures {
+/** Every figure of a request's row (`stage`: a rework stage shows what HR sends back, see standingOf). */
+export function requestFigures(item: SettlementBatchItem, stage?: SettlementStage): RequestFigures {
   const a = item.advance;
   const e = a.earnings ?? null;
   const term = a.advanceType === "term";
@@ -469,7 +674,7 @@ export function requestFigures(item: SettlementBatchItem): RequestFigures {
     months: t.months,
     emi: t.emi,
     firstEmi: t.first,
-    standing: standingOf(item),
+    standing: standingOf(item, stage),
   };
 }
 

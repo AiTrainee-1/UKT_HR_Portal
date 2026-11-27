@@ -1,17 +1,47 @@
-import type { ReactNode } from "react";
-import { Check, MessageSquareText, MinusCircle, PencilLine, XCircle } from "lucide-react";
+import { Fragment, type ReactNode } from "react";
+import {
+  Check,
+  CheckCheck,
+  MessageSquareText,
+  MinusCircle,
+  PencilLine,
+  RotateCcw,
+  UserCheck,
+  XCircle,
+} from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { SettlementBatch, SettlementBatchItem } from "@/lib/api-client/custom-hooks/settlement-automation";
+import { groupByReview, reviewGroupLabel, type ReviewState } from "@/lib/reviewOrder";
 import { cn } from "@/lib/utils";
 import { allState, SelectBox } from "../bulk";
 import { LeaveButton } from "../LeaveCalendarButton";
 import { formatDays } from "../logic";
 import { formatMoney } from "../shared";
-import { CardField, FIRST, FROM, Figure, LAST, PersonCell, Pill, RowAction, RowActions, muted } from "../table-kit";
 import {
+  CardField,
+  FIRST,
+  FLASH,
+  FROM,
+  Figure,
+  GroupRow,
+  LAST,
+  PersonCell,
+  Pill,
+  RowAction,
+  RowActions,
+  muted,
+} from "../table-kit";
+import {
+  answerText,
+  auditorAnswerOf,
+  mdAnswerOf,
+  mdRemarkOf,
+  pendingGroupLabel,
   remarksOf,
   requestColumns,
   requestFigures,
+  reviewStateOf,
+  reworkFlag,
   trailOf,
   type RequestColumn,
   type RequestColumnKey,
@@ -19,10 +49,13 @@ import {
 } from "./focus";
 import { auditorChanged } from "./logic";
 
-/** What this login may do on the requests now: HR Review (proposals) or HR Final Settlement (final decisions). */
-export type RequestsMode = "hr_review" | "hr_final" | null;
+/** What this login may do on the requests now: HR Review (proposals), HR Rework (MD Changes) (answers to the MD), HR
+ *  Final Settlement (final decisions) or HR Rework (Auditor Changes) (answers to the auditor). */
+export type RequestsMode = "hr_review" | "md_changes" | "hr_final" | "auditor_changes" | null;
 
-export type HrAction = "keep" | "reduce" | "reject" | "remark";
+/** A row's actions: HR Review's keep / reduce / reject / remark, the final decision, Rework (reopen a decision HR made in
+ *  this stage), and in a rework stage the answer to the reviewer: accept their change, or keep HR's own ("keepOwn"). */
+export type RowActionKind = "keep" | "reduce" | "reject" | "remark" | "final" | "rework" | "accept" | "keepOwn";
 
 type Props = {
   batch: SettlementBatch;
@@ -34,11 +67,22 @@ type Props = {
   onToggle: (id: number, on: boolean) => void;
   /** Ticks (or clears) every request shown. */
   onToggleAll: (on: boolean) => void;
-  onHrAction: (item: SettlementBatchItem, action: HrAction) => void;
-  onEditFinal: (item: SettlementBatchItem) => void;
+  onAction: (item: SettlementBatchItem, action: RowActionKind) => void;
   onLeave: (item: SettlementBatchItem) => void;
-  /** The request whose change is being saved: its buttons wait. */
-  busyId?: number | null;
+  /** The request (and the action) being saved: that button spins, the row's others wait. */
+  busy?: { id: number; action: RowActionKind } | null;
+  /** Rework is open in this stage (the batch's `canRework`). */
+  canRework?: boolean;
+  /** The request that just moved between the groups: it glows for a moment where it landed. */
+  flashId?: number | null;
+};
+
+/** The column tiers: the shared ones, and 1400 px for the xl columns of a table with row actions. */
+const TIER: Record<NonNullable<RequestColumn["from"]>, string> = {
+  xl: FROM.xl,
+  xl2: "hidden min-[1400px]:table-cell",
+  "2xl": FROM["2xl"],
+  wide: FROM.wide,
 };
 
 const ALIGN: Record<RequestColumn["align"], string> = {
@@ -49,9 +93,10 @@ const ALIGN: Record<RequestColumn["align"], string> = {
 
 const money = (n: number | null | undefined) => (n == null ? "—" : formatMoney(n));
 
-/** The amount the request stands at now, and from where ("final", "MD", "HR proposes", "after the audit"). */
-function Approved({ item }: { item: SettlementBatchItem }) {
-  const s = requestFigures(item).standing;
+/** The amount the request stands at now, and from where ("final", "MD", "HR proposes", "after the audit"); in a rework
+ *  stage what HR sends back to the reviewer. */
+function Approved({ item, batch }: { item: SettlementBatchItem; batch: SettlementBatch }) {
+  const s = requestFigures(item, batch.stage).standing;
   if (s.decision === "rejected") return <Figure value="Rejected" tone="red" sub={s.label} />;
   if (s.decision === null) return muted;
   const less = s.amount != null && s.amount < item.requestedAmount;
@@ -78,31 +123,62 @@ const STEP_INK: Record<TrailStep["tone"], string> = {
   info: "text-blue-700",
 };
 
-/** The decisions so far, one line per stage reached (HR, MD, Final, Auditor); the latest is the status pill. */
+/** The decisions so far, one line per stage reached (HR, MD, Final, Auditor); the latest is the status pill. In a rework
+ *  stage (2026-11-27): what the reviewer flagged as a pill on top, the reviewer's own remark under their decision, and
+ *  HR's answer once given; HR Rework (Auditor Changes) shows HR's final and the auditor's change only. */
 function Status({ item, batch, prefix }: { item: SettlementBatchItem; batch: SettlementBatch; prefix: string }) {
-  const steps = trailOf(item, batch);
+  const stage = batch.stage;
+  const all = trailOf(item, batch);
+  const steps = stage === "auditor_changes" ? all.filter((t) => t.step === "final" || t.step === "auditor") : all;
+  const flag = reworkFlag(item, stage);
+  const reviewer = stage === "md_changes" ? "md" : stage === "auditor_changes" ? "auditor" : null;
+  const remark =
+    reviewer === "md" ? mdRemarkOf(item) : reviewer === "auditor" ? (item.auditor?.remark ?? "").trim() : "";
+  const answer = reviewer === "md" ? mdAnswerOf(item) : reviewer === "auditor" ? auditorAnswerOf(item) : null;
   return (
-    <ul className="space-y-1" aria-label="Decisions so far">
-      {steps.map((t, i) => {
-        const latest = i === steps.length - 1;
-        return (
-          <li
-            key={t.step}
-            className="flex items-center gap-1.5 whitespace-nowrap"
-            data-testid={`${prefix}-${t.step}-view-${item.id}`}
-            data-action={t.step === "auditor" ? (item.auditor?.action ?? "none") : undefined}
-          >
-            <span className="w-9 shrink-0 text-[11px] text-muted-foreground">{t.who}</span>
-            {latest ? (
-              <Pill tone={t.tone}>{t.text}</Pill>
-            ) : (
-              <span className={cn("text-xs font-medium", STEP_INK[t.tone])}>{t.text}</span>
-            )}
-            {t.note && <span className="text-[11px] text-muted-foreground">{t.note}</span>}
-          </li>
-        );
-      })}
-    </ul>
+    <div className="space-y-1">
+      {flag && (
+        <Pill tone={flag.tone} testId={`${prefix}-flag-${item.id}`}>
+          {flag.text}
+        </Pill>
+      )}
+      <ul className="space-y-1" aria-label="Decisions so far">
+        {steps.map((t, i) => {
+          const latest = i === steps.length - 1;
+          return (
+            <li
+              key={t.step}
+              data-testid={`${prefix}-${t.step}-view-${item.id}`}
+              data-action={t.step === "auditor" ? (item.auditor?.action ?? "none") : undefined}
+            >
+              <span className="flex items-center gap-1.5 whitespace-nowrap">
+                <span className="w-9 shrink-0 text-[11px] text-muted-foreground">{t.who}</span>
+                {latest ? (
+                  <Pill tone={t.tone}>{t.text}</Pill>
+                ) : (
+                  <span className={cn("text-xs font-medium", STEP_INK[t.tone])}>{t.text}</span>
+                )}
+                {t.note && <span className="text-[11px] text-muted-foreground">{t.note}</span>}
+              </span>
+              {t.step === reviewer && remark && (
+                <span
+                  className="ml-[2.625rem] block max-w-[13rem] truncate text-[11px] italic text-slate-600"
+                  title={remark}
+                  data-testid={`${prefix}-reviewer-remark-${item.id}`}
+                >
+                  &ldquo;{remark}&rdquo;
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {reviewer && answer && answer !== "waiting" && (
+        <p className="text-[11px] font-medium text-slate-500" data-testid={`${prefix}-answer-${item.id}`}>
+          {answerText(answer, reviewer)}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -130,85 +206,194 @@ function Remarks({ item, wrap }: { item: SettlementBatchItem; wrap?: boolean }) 
   );
 }
 
-/** HR Review: Keep / Reduce / Reject / Remark (the proposal made is tinted); HR Final Settlement: Final decision. */
+/**
+ * A row's actions, on one line, as ghost icon buttons with their hover label (All Employees). The answer to the stage's
+ * reviewer comes first, then what HR may change, so the same buttons line up down the table:
+ *  - HR Review: [Rework] Keep as asked / Reduce / Reject / Remark (the proposal made is tinted);
+ *  - HR Rework (MD Changes): waiting rows Accept the MD's decision / Keep mine, answered rows Rework; then Reduce /
+ *    Reject / Remark;
+ *  - HR Final Settlement: [Rework] Final decision;
+ *  - HR Rework (Auditor Changes): waiting rows Accept the auditor's change / Keep HR's settlement, answered rows Rework;
+ *    then Change the final decision.
+ * Rework (reopen a decision made in this stage) shows on a row that is not waiting any more.
+ */
 function Actions({
   item,
   mode,
   prefix,
+  review,
   busy,
-  onHrAction,
-  onEditFinal,
+  canRework,
+  onAction,
 }: {
   item: SettlementBatchItem;
   mode: RequestsMode;
   prefix: string;
-  busy: boolean;
-  onHrAction: Props["onHrAction"];
-  onEditFinal: Props["onEditFinal"];
+  review: ReviewState;
+  busy: Props["busy"];
+  canRework: boolean;
+  onAction: Props["onAction"];
 }) {
+  if (!mode) return null;
   const name = item.advance.employeeName;
+  const mine = busy?.id === item.id;
+  const spin = (action: RowActionKind) => mine && busy?.action === action;
+  const wait = mine;
+  const act = (action: RowActionKind) => () => onAction(item, action);
+  const rework = canRework && review !== "pending" && (
+    <RowAction
+      label="Rework — reopen this decision"
+      icon={<RotateCcw size={15} />}
+      color="violet"
+      onClick={act("rework")}
+      disabled={wait}
+      busy={spin("rework")}
+      aria={`Rework: reopen the decision on ${name}'s request`}
+      testId={`${prefix}-rework-${item.id}`}
+    />
+  );
+  const proposal = item.hr?.action ?? null;
+  const hrChoices = (
+    <>
+      <RowAction
+        label="Propose a smaller amount"
+        icon={<MinusCircle size={15} />}
+        color="amber"
+        onClick={act("reduce")}
+        disabled={wait}
+        pressed={proposal === "reduce"}
+        aria={`Propose a smaller amount for ${name}`}
+        testId={`${prefix}-reduce-${item.id}`}
+      />
+      <RowAction
+        label="Propose to reject"
+        icon={<XCircle size={15} />}
+        color="red"
+        onClick={act("reject")}
+        disabled={wait}
+        pressed={proposal === "reject"}
+        aria={`Propose to reject ${name}'s request`}
+        testId={`${prefix}-hr-reject-${item.id}`}
+      />
+      <RowAction
+        label="Remark to the MD"
+        icon={<MessageSquareText size={15} />}
+        color="blue"
+        onClick={act("remark")}
+        disabled={wait}
+        aria={`Remark to the MD on ${name}'s request`}
+        testId={`${prefix}-note-${item.id}`}
+      />
+    </>
+  );
+  const finalButton = (label: string) => (
+    <RowAction
+      label={label}
+      icon={<PencilLine size={15} />}
+      color={mode === "auditor_changes" ? "amber" : "blue"}
+      onClick={act("final")}
+      disabled={wait}
+      aria={`${label} on ${name}'s request`}
+      testId={`${prefix}-final-${item.id}`}
+    />
+  );
+
   if (mode === "hr_review") {
-    const proposal = item.hr?.action ?? null;
+    const kept = proposal === "approve";
     return (
       <RowActions>
+        {rework}
         <RowAction
-          label={proposal === null ? "Kept as asked" : "Keep as asked"}
+          label={kept ? "Kept as asked" : "Keep as asked"}
           icon={<Check size={15} />}
           color="emerald"
-          onClick={() => onHrAction(item, "keep")}
-          disabled={busy || proposal === null}
-          pressed={proposal === null}
+          onClick={act("keep")}
+          disabled={wait || kept}
+          busy={spin("keep")}
+          pressed={kept}
           aria={`Keep ${name}'s request as asked`}
           testId={`${prefix}-keep-${item.id}`}
         />
-        <RowAction
-          label="Propose a smaller amount"
-          icon={<MinusCircle size={15} />}
-          color="amber"
-          onClick={() => onHrAction(item, "reduce")}
-          disabled={busy}
-          pressed={proposal === "reduce"}
-          aria={`Propose a smaller amount for ${name}`}
-          testId={`${prefix}-reduce-${item.id}`}
-        />
-        <RowAction
-          label="Propose to reject"
-          icon={<XCircle size={15} />}
-          color="red"
-          onClick={() => onHrAction(item, "reject")}
-          disabled={busy}
-          pressed={proposal === "reject"}
-          aria={`Propose to reject ${name}'s request`}
-          testId={`${prefix}-hr-reject-${item.id}`}
-        />
-        <RowAction
-          label="Remark to the MD"
-          icon={<MessageSquareText size={15} />}
-          color="blue"
-          onClick={() => onHrAction(item, "remark")}
-          disabled={busy}
-          aria={`Remark to the MD on ${name}'s request`}
-          testId={`${prefix}-note-${item.id}`}
-        />
+        {hrChoices}
+      </RowActions>
+    );
+  }
+  if (mode === "md_changes") {
+    const waiting = item.rework === "md";
+    const mdDecided = !!item.md.decision && !!item.md.decidedAt && !item.md.fromHr;
+    return (
+      <RowActions>
+        {waiting ? (
+          <>
+            <RowAction
+              label={mdDecided ? "Accept the MD's decision" : "The MD has not decided this request"}
+              icon={<CheckCheck size={15} />}
+              color="emerald"
+              onClick={act("accept")}
+              disabled={wait || !mdDecided}
+              busy={spin("accept")}
+              aria={`Accept the MD's decision on ${name}'s request`}
+              testId={`${prefix}-accept-${item.id}`}
+            />
+            <RowAction
+              label="Keep mine (my proposal)"
+              icon={<UserCheck size={15} />}
+              color="blue"
+              onClick={act("keepOwn")}
+              disabled={wait}
+              busy={spin("keepOwn")}
+              aria={`Keep your proposal on ${name}'s request`}
+              testId={`${prefix}-keep-own-${item.id}`}
+            />
+          </>
+        ) : (
+          rework
+        )}
+        {hrChoices}
       </RowActions>
     );
   }
   if (mode === "hr_final") {
     return (
       <RowActions>
-        <RowAction
-          label="Final decision"
-          icon={<PencilLine size={15} />}
-          color="blue"
-          onClick={() => onEditFinal(item)}
-          disabled={busy}
-          aria={`Final decision on ${name}'s request`}
-          testId={`${prefix}-final-${item.id}`}
-        />
+        {rework}
+        {finalButton("Final decision")}
       </RowActions>
     );
   }
-  return null;
+  // HR Rework (Auditor Changes)
+  const waiting = item.rework === "auditor";
+  return (
+    <RowActions>
+      {waiting ? (
+        <>
+          <RowAction
+            label={auditorChanged(item) ? "Accept the auditor's change" : "Accept the auditor's remark"}
+            icon={<CheckCheck size={15} />}
+            color="emerald"
+            onClick={act("accept")}
+            disabled={wait}
+            busy={spin("accept")}
+            aria={`Accept the auditor's change on ${name}'s request`}
+            testId={`${prefix}-accept-${item.id}`}
+          />
+          <RowAction
+            label="Keep HR's settlement"
+            icon={<UserCheck size={15} />}
+            color="blue"
+            onClick={act("keepOwn")}
+            disabled={wait}
+            busy={spin("keepOwn")}
+            aria={`Keep HR's settlement of ${name}'s request`}
+            testId={`${prefix}-keep-own-${item.id}`}
+          />
+        </>
+      ) : (
+        rework
+      )}
+      {finalButton("Change the final decision")}
+    </RowActions>
+  );
 }
 
 /** One cell's content by column (the table and the phone cards draw the same values). */
@@ -217,7 +402,7 @@ function cellOf(
   item: SettlementBatchItem,
   ctx: { batch: SettlementBatch; prefix: string; onLeave: Props["onLeave"]; wrap?: boolean },
 ): ReactNode {
-  const f = requestFigures(item);
+  const f = requestFigures(item, ctx.batch.stage);
   switch (key) {
     case "requested":
       return <Figure value={money(item.requestedAmount)} strong />;
@@ -246,7 +431,7 @@ function cellOf(
     case "firstEmi":
       return f.firstEmi ? <span className="whitespace-nowrap text-sm text-slate-700">{f.firstEmi}</span> : muted;
     case "approved":
-      return <Approved item={item} />;
+      return <Approved item={item} batch={ctx.batch} />;
     case "leave":
       return (
         <LeaveButton
@@ -287,6 +472,12 @@ const person = (item: SettlementBatchItem, size?: number) => (
   />
 );
 
+const GROUP_DOT: Record<ReviewState, string> = {
+  pending: "bg-amber-500",
+  approved: "bg-emerald-500",
+  rejected: "bg-red-500",
+};
+
 /**
  * The batch's requests (owner 2026-11-27), in the HRMS table style (All Employees): the employee with initials, code and
  * department; every figure under its own heading, right-aligned (a Salary Advance: fixed salary, working days, earned,
@@ -294,6 +485,10 @@ const person = (item: SettlementBatchItem, size?: number) => (
  * EMI, first EMI); the leave check (opens the leave calendar); the status (one line per stage reached, the latest as a
  * pill); the remarks; and the stage's actions as icon buttons. The less needed columns show from a wider screen on, so
  * the table fits its card on a laptop; a phone or tablet gets a card per request with every value.
+ *
+ * The rows are grouped by where they stand with the stage's reviewer (owner 2026-11-27): the waiting ones on top, the
+ * approved ones below, the rejected ones below those, each group under a quiet divider; a request reopened with Rework
+ * waits again, so it moves back to the top, and a row that just moved glows for a moment where it landed.
  */
 export default function RequestsTable({
   batch,
@@ -302,10 +497,11 @@ export default function RequestsTable({
   selected,
   onToggle,
   onToggleAll,
-  onHrAction,
-  onEditFinal,
+  onAction,
   onLeave,
-  busyId = null,
+  busy = null,
+  canRework = false,
+  flashId = null,
 }: Props) {
   const select = mode !== null;
   const columns = requestColumns(batch.advanceType, { select, actions: mode !== null });
@@ -313,6 +509,69 @@ export default function RequestsTable({
   const ctx = (prefix: string, wrap?: boolean) => ({ batch, prefix, onLeave, wrap });
   const labelOf = (key: RequestColumnKey) => columns.find((c) => c.key === key)?.header ?? "";
   const last = columns[columns.length - 1]?.key;
+  const reviewOf = (item: SettlementBatchItem) => reviewStateOf(item, batch.stage);
+  const groups = groupByReview(items, reviewOf);
+  const groupLabel = (state: ReviewState) => reviewGroupLabel(state, pendingGroupLabel(batch.stage));
+  const actions = (item: SettlementBatchItem, prefix: string) => (
+    <Actions
+      item={item}
+      mode={mode}
+      prefix={prefix}
+      review={reviewOf(item)}
+      busy={busy}
+      canRework={canRework}
+      onAction={onAction}
+    />
+  );
+
+  const row = (item: SettlementBatchItem) => {
+    const on = selected.has(item.id);
+    const changed = auditorChanged(item);
+    return (
+      <TableRow
+        key={item.id}
+        className={cn(changed && "bg-amber-50/50", on && "bg-sky-50/80 hover:bg-sky-50", flashId === item.id && FLASH)}
+        data-state={on ? "selected" : undefined}
+        data-testid={`auto-row-${item.id}`}
+        data-review={reviewOf(item)}
+        data-auditor-changed={changed ? "true" : undefined}
+        data-selected={on ? "true" : undefined}
+        data-flash={flashId === item.id ? "true" : undefined}
+      >
+        {columns.map((c) => {
+          const edge = cn(c.key === last && LAST);
+          if (c.key === "select")
+            return (
+              <TableCell key={c.key} className={cn(FIRST, "w-10")}>
+                <SelectBox
+                  checked={on}
+                  onChange={(v) => onToggle(item.id, v)}
+                  label={`Select ${item.advance.employeeName}'s request`}
+                  testId={`auto-select-${item.id}`}
+                />
+              </TableCell>
+            );
+          if (c.key === "employee")
+            return (
+              <TableCell key={c.key} className={cn("max-w-[15rem] py-3", !select && FIRST)}>
+                {person(item)}
+              </TableCell>
+            );
+          if (c.key === "actions")
+            return (
+              <TableCell key={c.key} className={cn("text-right", edge)}>
+                {actions(item, "auto")}
+              </TableCell>
+            );
+          return (
+            <TableCell key={c.key} className={cn(ALIGN[c.align], c.from && TIER[c.from], edge)} data-column={c.key}>
+              {cellOf(c.key, item, ctx("auto"))}
+            </TableCell>
+          );
+        })}
+      </TableRow>
+    );
+  };
 
   return (
     <>
@@ -336,7 +595,7 @@ export default function RequestsTable({
                     className={cn(
                       "whitespace-nowrap",
                       ALIGN[c.align],
-                      c.from && FROM[c.from],
+                      c.from && TIER[c.from],
                       c.key === "employee" && !select && FIRST,
                       c.key === last && LAST,
                     )}
@@ -349,114 +608,81 @@ export default function RequestsTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => {
-              const on = selected.has(item.id);
-              const changed = auditorChanged(item);
-              return (
-                <TableRow
-                  key={item.id}
-                  className={cn(changed && "bg-amber-50/50", on && "bg-sky-50/80 hover:bg-sky-50")}
-                  data-state={on ? "selected" : undefined}
-                  data-testid={`auto-row-${item.id}`}
-                  data-auditor-changed={changed ? "true" : undefined}
-                  data-selected={on ? "true" : undefined}
-                >
-                  {columns.map((c) => {
-                    const edge = cn(c.key === last && LAST);
-                    if (c.key === "select")
-                      return (
-                        <TableCell key={c.key} className={cn(FIRST, "w-10")}>
-                          <SelectBox
-                            checked={on}
-                            onChange={(v) => onToggle(item.id, v)}
-                            label={`Select ${item.advance.employeeName}'s request`}
-                            testId={`auto-select-${item.id}`}
-                          />
-                        </TableCell>
-                      );
-                    if (c.key === "employee")
-                      return (
-                        <TableCell key={c.key} className={cn("max-w-[15rem] py-3", !select && FIRST)}>
-                          {person(item)}
-                        </TableCell>
-                      );
-                    if (c.key === "actions")
-                      return (
-                        <TableCell key={c.key} className={cn("text-right", edge)}>
-                          <Actions
-                            item={item}
-                            mode={mode}
-                            prefix="auto"
-                            busy={busyId === item.id}
-                            onHrAction={onHrAction}
-                            onEditFinal={onEditFinal}
-                          />
-                        </TableCell>
-                      );
-                    return (
-                      <TableCell
-                        key={c.key}
-                        className={cn(ALIGN[c.align], c.from && FROM[c.from], edge)}
-                        data-column={c.key}
-                      >
-                        {cellOf(c.key, item, ctx("auto"))}
-                      </TableCell>
-                    );
-                  })}
-                </TableRow>
-              );
-            })}
+            {groups.map((g) => (
+              <Fragment key={g.state}>
+                <GroupRow
+                  state={g.state}
+                  label={groupLabel(g.state)}
+                  count={g.rows.length}
+                  colSpan={columns.length}
+                  testId={`auto-group-${g.state}`}
+                />
+                {g.rows.map(row)}
+              </Fragment>
+            ))}
           </TableBody>
         </Table>
       </div>
 
       <ul className="divide-y divide-slate-100 border-t border-slate-100 xl:hidden" data-testid="auto-requests-cards">
-        {items.map((item) => {
-          const on = selected.has(item.id);
-          return (
+        {groups.map((g) => (
+          <Fragment key={g.state}>
             <li
-              key={item.id}
-              className={cn("space-y-3 px-4 py-3.5", auditorChanged(item) && "bg-amber-50/50", on && "bg-sky-50/80")}
-              data-testid={`auto-card-${item.id}`}
+              className="flex items-center gap-2 bg-slate-50/80 px-4 py-1.5 text-[11.5px] font-semibold text-slate-600"
+              data-group={g.state}
+              data-testid={`auto-card-group-${g.state}`}
             >
-              <div className="flex items-center gap-3">
-                {select && (
-                  <SelectBox
-                    checked={on}
-                    onChange={(v) => onToggle(item.id, v)}
-                    label={`Select ${item.advance.employeeName}'s request`}
-                    testId={`auto-card-select-${item.id}`}
-                  />
-                )}
-                <div className="min-w-0 flex-1">{person(item, 38)}</div>
-                {cellOf("leave", item, ctx("auto-card"))}
-              </div>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3 sm:grid-cols-3">
-                {CARD_FIGURES.filter((k) => columns.some((c) => c.key === k)).map((k) => (
-                  <CardField key={k} label={labelOf(k)}>
-                    {cellOf(k, item, ctx("auto-card"))}
-                  </CardField>
-                ))}
-              </dl>
-              <dl className="grid gap-2.5 sm:grid-cols-2">
-                <CardField label="Status">{cellOf("decision", item, ctx("auto-card"))}</CardField>
-                <CardField label="Remarks">{cellOf("remarks", item, ctx("auto-card", true))}</CardField>
-              </dl>
-              {mode && (
-                <div className="flex justify-end border-t border-slate-100 pt-2">
-                  <Actions
-                    item={item}
-                    mode={mode}
-                    prefix="auto-card"
-                    busy={busyId === item.id}
-                    onHrAction={onHrAction}
-                    onEditFinal={onEditFinal}
-                  />
-                </div>
-              )}
+              <span className={cn("h-1.5 w-1.5 rounded-full", GROUP_DOT[g.state])} aria-hidden />
+              {groupLabel(g.state)}
+              <span className="rounded-full bg-white px-1.5 py-px text-[10.5px] font-bold tabular-nums text-slate-500 ring-1 ring-slate-200">
+                {g.rows.length}
+              </span>
             </li>
-          );
-        })}
+            {g.rows.map((item) => {
+              const on = selected.has(item.id);
+              return (
+                <li
+                  key={item.id}
+                  className={cn(
+                    "space-y-3 px-4 py-3.5",
+                    auditorChanged(item) && "bg-amber-50/50",
+                    on && "bg-sky-50/80",
+                    flashId === item.id && FLASH,
+                  )}
+                  data-testid={`auto-card-${item.id}`}
+                  data-review={reviewOf(item)}
+                >
+                  <div className="flex items-center gap-3">
+                    {select && (
+                      <SelectBox
+                        checked={on}
+                        onChange={(v) => onToggle(item.id, v)}
+                        label={`Select ${item.advance.employeeName}'s request`}
+                        testId={`auto-card-select-${item.id}`}
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">{person(item, 38)}</div>
+                    {cellOf("leave", item, ctx("auto-card"))}
+                  </div>
+                  <dl className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3 sm:grid-cols-3">
+                    {CARD_FIGURES.filter((k) => columns.some((c) => c.key === k)).map((k) => (
+                      <CardField key={k} label={labelOf(k)}>
+                        {cellOf(k, item, ctx("auto-card"))}
+                      </CardField>
+                    ))}
+                  </dl>
+                  <dl className="grid gap-2.5 sm:grid-cols-2">
+                    <CardField label="Status">{cellOf("decision", item, ctx("auto-card"))}</CardField>
+                    <CardField label="Remarks">{cellOf("remarks", item, ctx("auto-card", true))}</CardField>
+                  </dl>
+                  {mode && (
+                    <div className="flex justify-end border-t border-slate-100 pt-2">{actions(item, "auto-card")}</div>
+                  )}
+                </li>
+              );
+            })}
+          </Fragment>
+        ))}
       </ul>
     </>
   );

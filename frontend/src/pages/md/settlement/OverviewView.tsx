@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, IndianRupee, ListChecks, XCircle } from "lucide-react";
 import StatCard from "@/components/md/kit/StatCard";
+import WorkflowFlow from "@/components/settlement-flow/WorkflowFlow";
 import { num } from "@/lib/md/format";
 import { batchTitle, finalized, istDateTime, money, periodLabel, sentBackToHr, type ReviewSummary } from "./logic";
 import { Quote } from "./parts";
-import Tracker from "./Tracker";
 import type { SettlementBatch } from "./types";
 
 /**
- * The Overview tab: the batch's eight stages, the six headline numbers, HR's note to the MD and, once the MD has confirmed,
- * "Sent back to HR" with the MD's instructions (and HR's final note once HR has finalized). Read-only.
+ * The Overview tab: the branching workflow tracker (owner 2026-11-27: the normal path, the two rework loops with how often
+ * each was gone round, the MD's approved path through HR or directly to the auditor, the approval history), the six
+ * headline numbers, HR's note to the MD and, once the MD has approved, "Sent back to HR" with the MD's instructions (and
+ * HR's final note once HR has finalized). Read-only.
  */
 export default function OverviewView({
   batch,
@@ -47,7 +49,14 @@ export default function OverviewView({
         {stageChip}
       </div>
 
-      <Tracker steps={batch.tracker} />
+      <WorkflowFlow
+        steps={batch.tracker}
+        flow={batch.flow}
+        history={batch.history ?? []}
+        received={batch.counts.total}
+        variant="md"
+        label="Settlement progress"
+      />
 
       <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3 @5xl:grid-cols-6" data-testid="md-settlement-stats">
         <StatCard

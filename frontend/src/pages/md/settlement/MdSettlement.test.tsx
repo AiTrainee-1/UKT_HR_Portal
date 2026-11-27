@@ -9,7 +9,7 @@ import { preloadMdShell } from "@/components/md/shell/loader";
 import MdSettlement from "../MdSettlement";
 import { renderMdPage, type Fixtures, type RenderedPage } from "../testing/renderMdPage";
 import { advance, batch, fakeServer, fourItems, item } from "./fixtures";
-import { istMonthKey, periodLabel } from "./logic";
+import { changesReason, istMonthKey, periodLabel, RETURN_NOTE_MESSAGE } from "./logic";
 import type { SettlementBatch, SettlementItem } from "./types";
 
 let page: RenderedPage | undefined;
@@ -30,6 +30,14 @@ const text = (selector: string) => (el(selector)?.textContent ?? "").replace(/\s
 const row = (id: number) => `[data-testid="md-settlement-table"] [data-testid="md-settlement-row-${id}"]`;
 const inRow = (id: number, testId: string) => `${row(id)} [data-testid="${testId}"]`;
 const dialog = (testId: string) => `[data-testid="md-settlement-dialog"] [data-testid="${testId}"]`;
+/** The table's request rows in the order they are drawn (the group divider rows left out). */
+const rowOrder = () =>
+  [
+    ...document.body.querySelectorAll<HTMLElement>(
+      '[data-testid="md-settlement-table"] tbody tr[data-testid^="md-settlement-row-"]',
+    ),
+  ].map((r) => Number(r.dataset.testid!.replace("md-settlement-row-", "")));
+const isDisabled = (selector: string) => (el(selector) as HTMLButtonElement | null)?.disabled;
 const decided = (it: SettlementItem, decision: "approved" | "rejected", amount: number | null, remark = "") => ({
   ...it,
   md: { decision, amount, remark, decidedAt: "2026-11-25T05:00:00+00:00" },
@@ -80,7 +88,7 @@ describe("the layout: one row of tabs, dropdowns for the batch and the filter", 
     expect(el('[data-testid="md-settlement-bar"]')).toBeNull(); // the Review bar belongs to Requests
 
     await page!.click(tab("history"));
-    expect(text('[data-testid="md-settlement-history"]')).toContain("HR forwarded the batch to you");
+    expect(text('[data-testid="md-settlement-history"]')).toContain("HR forwarded it to the MD");
     expect(text('[data-testid="md-settlement-history"]')).toContain("Priya (HR)");
     expect(text('[data-testid="md-settlement-history"]')).toContain("4 requests");
     expect(document.body.querySelectorAll('[role="tablist"]')).toHaveLength(1);
@@ -113,7 +121,7 @@ describe("the layout: one row of tabs, dropdowns for the batch and the filter", 
       "Leave alerts (2)",
     ]);
     await choose('[data-testid="md-settlement-filter"]', "leave");
-    expect(document.body.querySelectorAll('[data-testid="md-settlement-table"] tbody tr')).toHaveLength(2);
+    expect(rowOrder()).toEqual([12, 13]);
     expect(el(row(12))).not.toBeNull();
     expect(el(row(13))).not.toBeNull();
   });
@@ -127,12 +135,19 @@ describe("the batch waiting for the MD", () => {
     expect(text('[data-testid="md-settlement-batch-title"]')).toBe(`Salary Advance · Batch 1 · ${periodLabel(M, Y)}`);
     expect(text('[data-testid="md-settlement-stage"]')).toBe("Waiting for your decision");
 
-    // the tracker: received and HR Review done (with who), MD Review is the current step, the rest still to come
+    // the branching tracker: received and HR Review done (with who), MD Review is the current step, the rework loop
+    // under it not gone round, the rest still to come
     expect(el('[data-testid="md-settlement-step-received"]')?.dataset.state).toBe("done");
-    expect(text('[data-testid="md-settlement-step-hr_review"]')).toContain("by Priya (HR)");
+    expect(text('[data-testid="md-settlement-step-hr_review"]')).toContain("Priya (HR)");
     expect(el('[data-testid="md-settlement-step-md_review"]')?.getAttribute("aria-current")).toBe("step");
+    expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.state).toBe("pending");
     expect(el('[data-testid="md-settlement-step-completed"]')?.dataset.state).toBe("pending");
-    expect(document.body.querySelectorAll('[data-testid="md-settlement-tracker"] > li')).toHaveLength(9);
+    expect(
+      document.body.querySelectorAll(
+        '[data-testid="md-settlement-tracker"] li[data-testid^="md-settlement-step-"]:not([data-testid$="-row"])',
+      ),
+    ).toHaveLength(10);
+    expect(text('[data-testid="md-settlement-next-action"]')).toContain("MD Review & Approval: next step.");
 
     // the headline numbers
     expect(text('[data-testid="md-settlement-kpi-requests-value"]')).toBe("4");
@@ -169,7 +184,7 @@ describe("the batch waiting for the MD", () => {
     expect(el('[data-testid="md-nav-settlement"]')?.getAttribute("aria-current")).toBe("page");
   });
 
-  it("approves a request at once for the full amount, and undoes it", async () => {
+  it("approves a request at once for the full amount, and reopens it with Rework", async () => {
     const server = await open([batch({ month: M, year: Y })]);
     await page!.click(inRow(11, "md-settlement-approve"));
     expect(server.calls.at(-1)).toEqual({ path: "/api/md/settlement/items/11", body: { decision: "approved" } });
@@ -177,11 +192,20 @@ describe("the batch waiting for the MD", () => {
     expect(text('[data-testid="md-settlement-progress"]')).toContain("1 of 4 decided");
     expect(text(tab("requests"))).toBe("Requests4");
     expect(toast).toHaveBeenCalledWith({ title: "Approved: Anita Rao, ₹10,000" });
+    // it moved under "Approved", below the ones still waiting, and is marked for a moment
+    expect(rowOrder()).toEqual([12, 13, 14, 11]);
+    expect(el(row(11))?.dataset.review).toBe("approved");
+    expect(el(row(11))?.dataset.moved).toBe("true");
 
-    await page!.click(inRow(11, "md-settlement-undo"));
-    expect(server.calls.at(-1)?.body).toEqual({ decision: "" });
+    expect(el(inRow(11, "md-settlement-rework"))?.getAttribute("aria-label")).toBe(
+      "Rework: reopen your decision on Anita Rao's request",
+    );
+    await page!.click(inRow(11, "md-settlement-rework"));
+    expect(server.calls.at(-1)).toEqual({ path: "/api/md/settlement/items/11", body: { decision: "" } });
     expect(el(inRow(11, "md-settlement-decision"))).toBeNull();
     expect(el(inRow(11, "md-settlement-approve"))).not.toBeNull();
+    expect(rowOrder()).toEqual([11, 12, 13, 14]); // back at the top
+    expect(toast).toHaveBeenCalledWith({ title: "Reopened: Anita Rao waits for your decision again" });
   });
 
   it("reduces only to less than the amount asked, with a remark, before anything is sent", async () => {
@@ -288,7 +312,7 @@ describe("the batch waiting for the MD", () => {
     expect(text('[data-testid="md-settlement-sent-back"]')).toContain("Pay with this month's salary");
     expect(el('[data-testid="md-settlement-step-md_review"]')?.dataset.state).toBe("done");
     await page!.click(tab("history"));
-    expect(text('[data-testid="md-settlement-history"]')).toContain("You confirmed and sent it back to HR");
+    expect(text('[data-testid="md-settlement-history"]')).toContain("MD approved it and sent it to HR");
     expect(text('[data-testid="md-settlement-history"]')).toContain("4 approved · 0 rejected");
   });
 
@@ -297,7 +321,7 @@ describe("the batch waiting for the MD", () => {
     const all = [
       decided(a, "approved", 10000),
       decided(b, "approved", 8000),
-      decided(c, "rejected", null, "Not now"),
+      { ...decided(c, "rejected", null, "Not now"), hr: hrReject("Not now") },
       decided(d, "approved", 5000),
     ];
     const server = fakeServer([batch({ month: M, year: Y, items: all })]);
@@ -329,6 +353,10 @@ describe("the batch waiting for the MD", () => {
     expect((el('[data-testid="md-settlement-confirm-hr-mode"]') as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+/** HR's proposals (the MD confirming them is no change). */
+const hrReject = (remark: string) => ({ action: "reject" as const, amount: null, remark });
+const hrReduce = (amount: number, remark: string) => ({ action: "reduce" as const, amount, remark });
 
 /** Settle until `ready` holds (the finalized report is built in the browser, which takes longer than one settle). */
 async function until(ready: () => boolean, rounds = 120) {
@@ -438,8 +466,8 @@ describe("round 5: bulk decisions, HR's proposals, the leave calendar, Forward t
     const [a, b, c, d] = fourItems();
     const all = [
       decided(a, "approved", 10000),
-      decided(b, "approved", 6000, "Only the limit"),
-      decided(c, "rejected", null, "Not now"),
+      { ...decided(b, "approved", 6000, "Only the limit"), hr: hrReduce(6000, "Only the limit") },
+      { ...decided(c, "rejected", null, "Not now"), hr: hrReject("Not now") },
       decided(d, "approved", 5000),
     ];
     const server = await open([batch({ month: M, year: Y, items: all })]);
@@ -480,7 +508,7 @@ describe("round 5: bulk decisions, HR's proposals, the leave calendar, Forward t
     const all = [
       decided(a, "approved", 10000),
       decided(b, "approved", 8000),
-      decided(c, "rejected", null, "No"),
+      { ...decided(c, "rejected", null, "No"), hr: hrReject("No") },
       decided(d, "approved", 5000),
     ];
     const server = fakeServer([batch({ month: M, year: Y, items: all })], { auditorFails: true });
@@ -496,6 +524,262 @@ describe("round 5: bulk decisions, HR's proposals, the leave calendar, Forward t
       expect.objectContaining({ title: "Finalized — not sent to the auditor", variant: "destructive" }),
     );
     expect(text('[data-testid="md-settlement-stage"]')).toBe("Send to Auditor");
+  });
+});
+
+describe("rework and re-approval (owner 2026-11-27)", () => {
+  it("groups the requests: waiting for the MD at the top, approved below, rejected below those", async () => {
+    const [a, b, c, d] = fourItems();
+    const items = [
+      decided(a, "approved", 10000),
+      b,
+      { ...decided(c, "rejected", null, "Too much leave"), hr: hrReject("Too much leave") },
+      // HR's proposal, pre-filled and not yet confirmed: it waits for the MD too
+      {
+        ...d,
+        hr: hrReduce(4000, "Half"),
+        md: { decision: "approved" as const, amount: 4000, remark: "Half", decidedAt: null },
+      },
+    ];
+    const server = await open([batch({ month: M, year: Y, items })]);
+    expect(rowOrder()).toEqual([12, 14, 11, 13]);
+    expect(text('[data-testid="md-settlement-group-pending"]')).toBe("Waiting for your decision2");
+    expect(text('[data-testid="md-settlement-group-approved"]')).toBe("Approved1");
+    expect(text('[data-testid="md-settlement-group-rejected"]')).toBe("Rejected1");
+    // the cards are grouped the same way
+    expect(
+      [...document.body.querySelectorAll<HTMLElement>('[data-testid^="md-settlement-card-group-"]')].map(
+        (g) => g.dataset.testid,
+      ),
+    ).toEqual([
+      "md-settlement-card-group-pending",
+      "md-settlement-card-group-approved",
+      "md-settlement-card-group-rejected",
+    ]);
+
+    // Rework on the rejected one: it goes back to the top group (in the server's order), the Rejected group goes
+    await page!.click(inRow(13, "md-settlement-rework"));
+    expect(server.calls.at(-1)).toEqual({ path: "/api/md/settlement/items/13", body: { decision: "" } });
+    expect(rowOrder()).toEqual([12, 13, 14, 11]);
+    expect(el('[data-testid="md-settlement-group-rejected"]')).toBeNull();
+    expect(el(row(13))?.dataset.moved).toBe("true");
+    // Rework on HR's pre-filled proposal clears it: the MD decides it themselves
+    expect(el(inRow(14, "md-settlement-rework"))?.getAttribute("aria-label")).toBe(
+      "Rework: clear HR's proposal on Dinesh Kumar's request",
+    );
+    await page!.click(inRow(14, "md-settlement-rework"));
+    expect(server.calls.at(-1)).toEqual({ path: "/api/md/settlement/items/14", body: { decision: "" } });
+    expect(el(inRow(14, "md-settlement-approve"))).not.toBeNull();
+  });
+
+  it("turns approving off once the MD changes HR's proposal; Return to HR sends the instructions and turns read-only", async () => {
+    const server = await open([batch({ month: M, year: Y })]);
+    // Bala: HR kept the 8,000 asked; the MD reduces it - a change from HR's proposal (the dialog says so first)
+    await page!.click(inRow(12, "md-settlement-reduce"));
+    await page!.type(dialog("md-settlement-amount"), "6000");
+    expect(text(dialog("md-settlement-dialog-changes"))).toContain("differs from HR's proposal");
+    await page!.type(dialog("md-settlement-remark"), "Only the 50% limit");
+    await page!.click(dialog("md-settlement-save"));
+    expect(text(inRow(12, "md-settlement-changed"))).toBe("Changed from HR's proposal");
+    expect(text('[data-testid="md-settlement-bar-changes"]')).toContain("1 request changed from HR's proposal");
+    expect(el('[data-testid="md-settlement-bar-return"]')).not.toBeNull();
+
+    // the rest as HR proposed (the full amounts): still no way to approve
+    await page!.click('[data-testid="md-settlement-bulk"]');
+    await page!.click('[data-testid="md-settlement-bulk-send"]');
+    await page!.click('[data-testid="md-settlement-review-open"]');
+    expect(isDisabled('[data-testid="md-settlement-confirm-hr-mode"]')).toBe(true);
+    expect(isDisabled('[data-testid="md-settlement-confirm-direct"]')).toBe(true);
+    expect(text('[data-testid="md-settlement-approve-blocked"]')).toBe(changesReason(1));
+    expect(el('[data-testid="md-settlement-option-return"]')?.dataset.primary).toBe("true");
+    expect(text('[data-testid="md-settlement-review-row-12"]')).toContain("Changed from HR's proposal");
+
+    // Return to HR for rework: the sheet gives way to the dialog, which lists the change
+    await page!.click('[data-testid="md-settlement-return-open"]');
+    expect(el('[data-testid="md-settlement-review"]')).toBeNull();
+    expect(text('[data-testid="md-settlement-return-changes"]')).toContain("Bala Murugan");
+    expect(text('[data-testid="md-settlement-return-changes"]')).toContain("HR ₹8,000 → you ₹6,000");
+    expect(text('[data-testid="md-settlement-return-dialog"]')).toContain("(optional)");
+    await page!.type('[data-testid="md-settlement-return-note"]', "Keep Bala to the limit");
+    await page!.click('[data-testid="md-settlement-return-send"]');
+    expect(server.calls.at(-1)).toEqual({
+      path: "/api/md/settlement/batches/1/return",
+      body: { note: "Keep Bala to the limit" },
+    });
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Returned to HR for rework" }));
+
+    // read-only until HR resubmits: the banner with the instructions, no buttons, the requests HR answers at the top
+    expect(el('[data-testid="md-settlement-return-dialog"]')).toBeNull();
+    expect(text('[data-testid="md-settlement-returned"]')).toContain(
+      "Returned to HR for rework — waiting for HR to resubmit",
+    );
+    expect(text('[data-testid="md-settlement-returned"]')).toContain("HR is answering 1 request");
+    expect(text('[data-testid="md-settlement-returned-note"]')).toContain("Keep Bala to the limit");
+    expect(text('[data-testid="md-settlement-stage"]')).toBe("HR Rework (MD Changes)");
+    expect(el('[data-testid="md-settlement-actions"]')).toBeNull();
+    expect(el('[data-testid="md-settlement-bar"]')).toBeNull();
+    expect(text('[data-testid="md-settlement-group-pending"]')).toBe("Waiting for HR's answer1");
+    expect(rowOrder()[0]).toBe(12);
+    expect(text(inRow(12, "md-settlement-status"))).toBe("Returned to HR");
+
+    // the tracker: the rework loop is the current step; the history says it in words
+    await page!.click(tab("overview"));
+    expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.state).toBe("current");
+    expect(el('[data-testid="md-settlement-step-md_review"]')?.dataset.state).toBe("done");
+    expect(text('[data-testid="md-settlement-returned"]')).toContain("Keep Bala to the limit");
+    await page!.click(tab("history"));
+    expect(text('[data-testid="md-settlement-history"]')).toContain("MD returned it to HR for rework (round 1)");
+    expect(text('[data-testid="md-settlement-history"]')).toContain("1 changed");
+  });
+
+  it("without changes, a return needs instructions, and the server's no_changes refusal is shown", async () => {
+    const [a, b, c, d] = fourItems();
+    const all = [
+      decided(a, "approved", 10000),
+      decided(b, "approved", 8000),
+      { ...decided(c, "rejected", null, "No"), hr: hrReject("No") },
+      decided(d, "approved", 5000),
+    ];
+    const refusal = {
+      status: 400,
+      body: {
+        error: "Nothing to rework: approve the settlement, or write what HR should correct (at least 3 characters).",
+        code: "no_changes",
+      },
+    };
+    await open([batch({ month: M, year: Y, items: all })], { "/api/md/settlement/batches/1/return": refusal });
+    expect(el('[data-testid="md-settlement-bar-return"]')).toBeNull();
+    await page!.click('[data-testid="md-settlement-review-open"]');
+    // approving works; the return is the second way, for corrections
+    expect(isDisabled('[data-testid="md-settlement-confirm-hr-mode"]')).toBe(false);
+    expect(el('[data-testid="md-settlement-option-return"]')?.dataset.primary).toBeUndefined();
+    await page!.click('[data-testid="md-settlement-return-open"]');
+    expect(text('[data-testid="md-settlement-return-dialog"]')).toContain("(required)");
+    await page!.click('[data-testid="md-settlement-return-send"]');
+    expect(text('[data-testid="md-settlement-return-problem"]')).toBe(RETURN_NOTE_MESSAGE);
+    expect(page!.requests().some((r) => r.endsWith("/return"))).toBe(false);
+
+    await page!.type('[data-testid="md-settlement-return-note"]', "Check Chitra's leave again");
+    await page!.click('[data-testid="md-settlement-return-send"]');
+    expect(page!.requests().filter((r) => r.endsWith("/return"))).toHaveLength(1);
+    expect(text('[data-testid="md-settlement-return-error"]')).toContain("Nothing to rework");
+    expect(el('[data-testid="md-settlement-return-dialog"]')).not.toBeNull(); // still open, nothing changed
+  });
+
+  it("says so when the server finds a change the page did not show (409 has_changes on approve)", async () => {
+    const [a, b, c, d] = fourItems();
+    const all = [
+      decided(a, "approved", 10000),
+      decided(b, "approved", 8000),
+      decided(c, "approved", 50000),
+      decided(d, "approved", 5000),
+    ];
+    const conflict = {
+      status: 409,
+      body: {
+        error:
+          "You changed 1 request(s) from HR's proposal. Return the settlement to HR for rework; you approve it once HR resubmits.",
+        code: "has_changes",
+        changed: [13],
+      },
+    };
+    await open([batch({ month: M, year: Y, items: all })], { "/api/md/settlement/batches/1/confirm": conflict });
+    await page!.click('[data-testid="md-settlement-review-open"]');
+    await page!.click('[data-testid="md-settlement-confirm-hr-mode"]');
+    expect(text('[data-testid="md-settlement-confirm-error"]')).toContain(
+      "You changed 1 request(s) from HR's proposal",
+    );
+    expect(text('[data-testid="md-settlement-confirm-error"]')).toContain("return it to HR for rework");
+  });
+
+  it("shows a revised settlement (round 2): the banner, the earlier round on each request, and approving once it matches", async () => {
+    const [a, b, c, d] = fourItems();
+    const at = "2026-11-27T05:30:00+00:00";
+    const r1 = (role: "hr" | "md", action: string, amount: number | null, remark = "") => ({
+      at,
+      by: role === "hr" ? "Priya (HR)" : "Test MD (MD)",
+      role,
+      round: 1,
+      action,
+      amount,
+      remark,
+    });
+    const items = [
+      decided(a, "approved", 10000),
+      // Bala: the MD set 6,000 in round 1; HR answers 7,000 - pre-filled for the MD to confirm or change
+      {
+        ...b,
+        hr: hrReduce(7000, "Met halfway"),
+        md: { decision: "approved" as const, amount: 7000, remark: "Met halfway", decidedAt: null },
+        trail: [r1("hr", "approve", null), r1("md", "approved", 6000, "Only the limit")],
+      },
+      // Chitra: the MD rejected it in round 1; HR accepted that - the MD's decision stays
+      {
+        ...decided(c, "rejected", null, "Too much leave"),
+        hr: hrReject("Too much leave"),
+        trail: [r1("hr", "approve", null), r1("md", "rejected", null, "Too much leave")],
+      },
+      decided(d, "approved", 5000),
+    ];
+    const history = [
+      { at: "2026-11-24T06:30:00+00:00", by: "Priya (HR)", action: "forwarded", count: 4 },
+      { at, by: "Test MD (MD)", action: "md_returned", note: "Keep Bala to the limit", round: 1, changes: 2 },
+      {
+        at: "2026-11-27T07:00:00+00:00",
+        by: "Priya (HR)",
+        action: "md_resubmitted",
+        note: "Bala needs 7,000",
+        round: 2,
+        count: 1,
+      },
+    ];
+    const server = await open([
+      batch({
+        month: M,
+        year: Y,
+        items,
+        mdRound: 2,
+        history,
+        flow: {
+          mdRound: 2,
+          auditorRound: 1,
+          mdCycles: 1,
+          auditorCycles: 0,
+          mdPath: null,
+          accountsVia: null,
+          mdReturn: { at, by: "Test MD (MD)", note: "Keep Bala to the limit" },
+        },
+      }),
+    ]);
+    expect(text('[data-testid="md-settlement-round"]')).toContain("Revised settlement — round 2");
+    expect(text('[data-testid="md-settlement-round-again"]')).toBe("1 request to look at again");
+    expect(text('[data-testid="md-settlement-round-hr-note"]')).toContain("Bala needs 7,000");
+    expect(text('[data-testid="md-settlement-round-your-note"]')).toBe(
+      "Your instructions (round 1): “Keep Bala to the limit”",
+    );
+    expect(rowOrder()).toEqual([12, 11, 14, 13]);
+    expect(text(inRow(12, "md-settlement-trail"))).toBe("Round 1: you set ₹6,000 · HR now proposes ₹7,000");
+    expect(text(inRow(13, "md-settlement-trail"))).toBe("Round 1: you rejected it · HR accepted it");
+    expect(el(inRow(11, "md-settlement-trail"))).toBeNull();
+    expect(text(inRow(12, "md-settlement-status"))).toBe("HR's revised proposal — confirm it");
+
+    // confirming HR's revised proposal: nothing differs from HR now, so the MD can approve it
+    await page!.click(inRow(12, "md-settlement-confirm-hr"));
+    expect(server.calls.at(-1)).toEqual({
+      path: "/api/md/settlement/items/12",
+      body: { decision: "approved", amount: 7000, remark: "Met halfway" },
+    });
+    expect(text('[data-testid="md-settlement-round-again"]')).toBe("Nothing new to decide");
+    await page!.click('[data-testid="md-settlement-review-open"]');
+    expect(isDisabled('[data-testid="md-settlement-confirm-hr-mode"]')).toBe(false);
+    expect(isDisabled('[data-testid="md-settlement-confirm-direct"]')).toBe(false);
+    await page!.click('[data-testid="md-settlement-review"] button.md-btn-ghost');
+
+    // the tracker: round 2 of MD Review, the loop gone round once
+    await page!.click(tab("overview"));
+    expect(text('[data-testid="md-settlement-step-md_review"]')).toContain("round 2");
+    expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.cycles).toBe("1");
+    expect(el('[data-testid="md-settlement-step-md_changes"]')?.dataset.state).toBe("done");
   });
 });
 

@@ -4,17 +4,18 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
 import type { BankFileLine } from "@/lib/bankFile";
-import type { PortalData } from "./api";
+import type { PortalAuditorAction, PortalData } from "./api";
 import AuditorReview from "./AuditorReview";
-import { LEAVE_CALENDAR, TIMECARD, portalData, recount, termPortalData } from "./fixtures";
+import { LEAVE_CALENDAR, TIMECARD, portalData, recount, round2PortalData, termPortalData } from "./fixtures";
 
 // The Auditor Review Portal (owner 2026-11-27, redesigned the same day) against a small fake server (the browser's fetch
 // is replaced): the link's states (valid, not valid, replaced, expired, answered), one row of three tabs each with its
-// own section, the Overview's columns (a Term Loan batch in the Term Loan columns), choosing requests (Select All, the
-// search) and the bulk approve / reject, the auditor's changes on one request (reduce, reject, remark, undo) with the
-// checks and the server's words, the leave calendar, the time card, and the three answers: the bank file built here
-// from the approved settlement as paid, the Accounts addresses, forwarding to HR, forwarding changes, and read-only once
-// submitted.
+// own section, the Overview's columns (a Term Loan batch in the Term Loan columns), the requests grouped (waiting, then
+// approved, then rejected), choosing requests (Select All, the search) and the bulk approve / reject, the auditor's
+// answers on one request (approve, reduce, reject, remark, Rework) with the checks and the server's words, a revised
+// settlement (round 2: what HR did with the earlier changes), the leave calendar, the time card, and the three answers:
+// the bank file built here from the approved settlement as paid, the Accounts addresses, forwarding to HR, returning it
+// to HR for rework (with a change, a remark or a note), and read-only once submitted.
 
 const h = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -68,8 +69,8 @@ function server(url: string, options?: { method?: string; body?: unknown }) {
       nextRefusal = null;
       return Promise.reject(r);
     }
-    // service.auditor_bulk: approve clears a change (a remark replaces the old one when given); reject = one reason,
-    // only on what HR approved
+    // service.auditor_bulk: approve is an explicit approval that clears a change (a remark replaces the old one when
+    // given); reject = one reason, only on what HR approved
     portal = recount({
       ...portal,
       items: portal.items.map((i) => {
@@ -78,9 +79,15 @@ function server(url: string, options?: { method?: string; body?: unknown }) {
           return i.final.decision === "approved"
             ? { ...i, auditor: { action: "reject", amount: null, remark: body.remark, at: "2026-11-26T05:00:00Z" } }
             : i;
+        if (i.final.decision !== "approved") return i;
         return {
           ...i,
-          auditor: { action: null, amount: null, remark: body.remark || i.auditor.remark, at: "2026-11-26T05:00:00Z" },
+          auditor: {
+            action: "approve",
+            amount: null,
+            remark: body.remark || i.auditor.remark,
+            at: "2026-11-26T05:00:00Z",
+          },
         };
       }),
     });
@@ -102,7 +109,7 @@ function server(url: string, options?: { method?: string; body?: unknown }) {
           ? {
               ...i,
               auditor: {
-                action: (body.action || null) as "reduce" | "reject" | null,
+                action: (body.action || null) as PortalAuditorAction | null,
                 amount: body.action === "reduce" ? (body.amount ?? null) : null,
                 remark: body.remark,
                 at: "2026-11-26T05:00:00Z",
@@ -263,6 +270,9 @@ describe("the link", () => {
     );
     expect(q("portal-tabs")).toBeNull();
     expect(q("portal-retry")).toBeNull();
+    // a replaced link (each review round has its own) says where the new one is
+    if (kind === "revoked") expect(text(q("portal-problem-hint"))).toContain("comes with a new link");
+    else expect(q("portal-problem-hint")).toBeNull();
   });
 
   it("offers to try again when the server cannot be reached", async () => {
@@ -385,15 +395,11 @@ describe("Overview: the requests and the auditor's changes", () => {
     expect(card).toContain("Eligible limit₹26,000");
     expect(card).toContain("Monthly EMI₹3,334");
     expect(card).not.toContain("Working days");
-    // a reduced loan shows its new EMI (₹15,000 over 6 months)
-    await click(q("portal-reduce-1"));
+    // the auditor has no Reduce (owner 2026-11-27); a Term Loan's dialog speaks of its eligible limit
+    expect(q("portal-reduce-1")).toBeNull();
+    await click(q("portal-reject-1"));
     expect(text(q("portal-change-facts"))).toContain("Eligible limit₹26,000");
-    await type(q("portal-change-amount"), "15000");
-    expect(text(q("portal-change-preview"))).toContain("New EMI: ₹2,500 a month over 6 months");
-    await type(q("portal-change-remark"), "Within two months of salary");
-    await click(q("portal-change-save"));
-    expect(text(q("portal-after-1"))).toContain("₹15,000");
-    expect(text(q("portal-after-1"))).toContain("new EMI ₹2,500");
+    expect(q("portal-change-amount")).toBeNull();
   });
 
   it("Select All chooses every request HR approved; Approve selected sends one bulk approval", async () => {
@@ -502,39 +508,24 @@ describe("Overview: the requests and the auditor's changes", () => {
     }
   });
 
-  it("Reduce needs a smaller amount and a remark; the change is highlighted with the original struck through", async () => {
+  it("the auditor cannot reduce an amount: no Reduce anywhere; a remark asks HR for the change", async () => {
     await mount();
-    await click(q("portal-reduce-1"));
-    expect(text(q("portal-change-title"))).toBe("Reduce the approved amount");
-    expect(text(q("portal-change-facts"))).toBe("Requested₹8,000HR approved₹6,000Limit₹8,000");
-    await type(q("portal-change-amount"), "6000");
-    await click(q("portal-change-save"));
-    expect(text(document.getElementById("portal-change-amount-error"))).toBe(
-      "A reduced amount must be less than the approved ₹6,000.",
-    );
-    expect(text(document.getElementById("portal-change-remark-error"))).toBe(
-      "Write a remark for the reduced amount (at least 3 characters).",
-    );
-    expect(writes).toEqual([]);
-    await type(q("portal-change-amount"), "4500");
-    await type(q("portal-change-remark"), "  Two  absent days ");
+    expect(q("portal-reduce-1")).toBeNull();
+    expect(q("portal-card-reduce-1")).toBeNull();
+    expect(q("portal-approve-1")).not.toBeNull();
+    expect(q("portal-reject-1")).not.toBeNull();
+    await click(q("portal-remark-1"));
+    expect(text(q("portal-change-title"))).toBe("Remark on this request");
+    expect(q("portal-change-amount")).toBeNull();
+    await type(q("portal-change-remark"), "  Please lower it to the days worked ");
     await click(q("portal-change-save"));
     expect(writes).toEqual([
-      ["PATCH", `${BASE}/items/1`, { action: "reduce", amount: 4500, remark: "Two absent days" }],
+      ["PATCH", `${BASE}/items/1`, { action: "", remark: "Please lower it to the days worked" }],
     ]);
-    expect(q("portal-change-dialog")).toBeNull();
-    expect(q("portal-row-1")?.getAttribute("data-status")).toBe("reduced");
-    // highlighted from -> to: HR's amount struck through, the reduced one, and by how much
-    expect(q("portal-after-1")?.querySelector(".line-through")?.textContent).toBe("₹6,000");
-    expect(text(q("portal-after-1"))).toContain("₹4,500");
-    expect(text(q("portal-after-1"))).toContain("−₹1,500");
-    expect(text(q("portal-remark-text-1"))).toBe("Two absent days");
-    expect(text(q("portal-total-after-value"))).toBe("₹12,000.4");
-    expect(text(q("portal-total-changes-value"))).toBe("1");
-    expect(reads).toBe(1); // the reply replaced the portal: no read again
+    expect(text(q("portal-total-after-value"))).toBe("₹13,500.4"); // the amount is HR's until HR reworks it
   });
 
-  it("Reject needs the reason; Undo puts the request back as HR finalized it", async () => {
+  it("Reject needs the reason; Rework reopens the request (back to the top, the remark kept)", async () => {
     await mount();
     await click(q("portal-reject-2"));
     await click(q("portal-change-save"));
@@ -545,33 +536,43 @@ describe("Overview: the requests and the auditor's changes", () => {
     await click(q("portal-change-save"));
     expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/2`, { action: "reject", remark: "Loan already running" }]);
     expect(q("portal-row-2")?.getAttribute("data-status")).toBe("rejected_by_auditor");
+    expect(q("portal-row-2")?.getAttribute("data-review")).toBe("rejected");
     expect(text(q("portal-after-2"))).toContain("Rejected by you");
     expect(text(q("portal-total-rejected"))).toContain("1 by HR · 1 by you");
-    await click(q("portal-undo-2"));
-    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/2`, { action: "", remark: "" }]);
+    // a reviewed request: Remark and Rework (violet) only; no Approve / Reduce / Reject until it is reopened
+    expect(q("portal-approve-2")).toBeNull();
+    expect(q("portal-reject-2")).toBeNull();
+    expect(q("portal-remark-2")).not.toBeNull();
+    await click(q("portal-rework-2"));
+    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/2`, { action: "", remark: "Loan already running" }]);
     expect(q("portal-row-2")?.getAttribute("data-status")).toBe("approved");
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Change undone" }));
+    expect(q("portal-row-2")?.getAttribute("data-review")).toBe("pending");
+    expect(q("portal-rework-2")).toBeNull();
+    expect(q("portal-approve-2")).not.toBeNull();
+    expect(text(q("portal-remark-text-2"))).toBe("Loan already running");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Reopened for your review" }));
+    // HR's own rejection is never reopened: it only takes a remark
+    expect(q("portal-rework-3")).toBeNull();
   });
 
-  it("a remark alone keeps the reduced amount; the server's refusal shows in the dialog", async () => {
+  it("a remark keeps the answer the request has; the server's refusal shows in the dialog", async () => {
     portal = recount({
       ...portal,
       items: portal.items.map((i) =>
-        i.id === 1 ? { ...i, auditor: { action: "reduce", amount: 5000, remark: "First note", at: null } } : i,
+        i.id === 1 ? { ...i, auditor: { action: "approve", amount: null, remark: "First note", at: null } } : i,
       ),
     });
     await mount();
     await click(q("portal-remark-1"));
     expect((q("portal-change-remark") as HTMLTextAreaElement).value).toBe("First note");
     await type(q("portal-change-remark"), "Checked the time card");
-    nextRefusal = refusal(400, { error: "A reduced amount must be less than the approved ₹6,000.00.", code: "amount" });
+    nextRefusal = refusal(409, {
+      error: "This settlement is no longer waiting for the auditor's review.",
+      code: "stage",
+    });
     await click(q("portal-change-save"));
-    expect(writes.at(-1)).toEqual([
-      "PATCH",
-      `${BASE}/items/1`,
-      { action: "reduce", amount: 5000, remark: "Checked the time card" },
-    ]);
-    expect(text(q("portal-change-error"))).toBe("A reduced amount must be less than the approved ₹6,000.00.");
+    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/1`, { action: "approve", remark: "Checked the time card" }]);
+    expect(text(q("portal-change-error"))).toBe("This settlement is no longer waiting for the auditor's review.");
     expect(q("portal-change-dialog")).not.toBeNull();
   });
 
@@ -588,6 +589,157 @@ describe("Overview: the requests and the auditor's changes", () => {
     await click(q("portal-change-save"));
     expect(reads).toBe(2);
     expect(q("portal-submitted")).not.toBeNull();
+  });
+});
+
+/** The table body in order: the group rows ("group:pending") and the request rows ("row:2"). */
+const order = () =>
+  [...document.querySelectorAll('[data-testid="portal-items-table"] tbody tr')].map((tr) => {
+    const id = tr.getAttribute("data-testid") ?? "";
+    return id.startsWith("portal-group-") ? `group:${id.slice(13)}` : `row:${id.slice(11)}`;
+  });
+/** The phone cards in order, with their group headings. */
+const cardOrder = () =>
+  [
+    ...document.querySelectorAll(
+      '[data-testid="portal-items-cards"] [data-group], [data-testid="portal-items-cards"] article[data-review]',
+    ),
+  ].map((el) =>
+    el.hasAttribute("data-group")
+      ? `group:${el.getAttribute("data-group")}`
+      : `card:${(el.getAttribute("data-testid") ?? "").slice(12)}`,
+  );
+
+describe("the review order and the auditor's answers (owner 2026-11-27)", () => {
+  const mixed = () => {
+    const base = portalData();
+    return recount({
+      ...base,
+      items: base.items.map((i) =>
+        i.id === 1 ? { ...i, auditor: { action: "approve" as const, amount: null, remark: "", at: null } } : i,
+      ),
+    });
+  };
+
+  it("groups the requests: waiting at the top, then approved, then rejected, in the table and on the cards", async () => {
+    portal = mixed();
+    await mount();
+    expect(order()).toEqual(["group:pending", "row:2", "group:approved", "row:1", "group:rejected", "row:3"]);
+    expect(text(q("portal-group-pending"))).toBe("Waiting for your review1");
+    expect(text(q("portal-group-approved"))).toBe("Approved1");
+    expect(text(q("portal-group-rejected"))).toBe("Rejected1");
+    expect(cardOrder()).toEqual(["group:pending", "card:2", "group:approved", "card:1", "group:rejected", "card:3"]);
+    // the card says the state in words
+    expect(text(q("portal-card-2"))).toContain("Waiting for you");
+    expect(text(q("portal-card-1"))).toContain("Approved");
+    // the waiting count on the summary
+    expect(text(q("portal-total-pending"))).toBe("1 waiting for your review");
+    // the filter for the waiting ones
+    await choose(q("portal-filter"), "pending");
+    expect(order()).toEqual(["group:pending", "row:2"]);
+  });
+
+  it("Approve is an explicit answer: the request moves to Approved and glows; Rework sends it back to the top", async () => {
+    await mount();
+    expect(order()).toEqual(["group:pending", "row:1", "row:2", "group:rejected", "row:3"]);
+    // a waiting request HR approved: Approve, Reject, Remark (no Reduce: owner 2026-11-27; no Rework yet)
+    expect(q("portal-approve-1")).not.toBeNull();
+    expect(q("portal-reduce-1")).toBeNull();
+    expect(q("portal-reject-1")).not.toBeNull();
+    expect(q("portal-rework-1")).toBeNull();
+    await click(q("portal-approve-2"));
+    expect(writes).toEqual([["PATCH", `${BASE}/items/2`, { action: "approve", remark: "" }]]);
+    expect(order()).toEqual(["group:pending", "row:1", "group:approved", "row:2", "group:rejected", "row:3"]);
+    expect(q("portal-row-2")?.className).toContain("animate-in"); // the row that moved glows where it landed
+    expect(q("portal-row-2")?.getAttribute("data-review")).toBe("approved");
+    expect(text(q("portal-after-2"))).toBe("₹7,500.4"); // as HR settled it
+    expect(text(q("portal-total-pending"))).toBe("1 waiting for your review");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Approved" }));
+    // reviewed: Remark and Rework only
+    expect(q("portal-approve-2")).toBeNull();
+    expect(q("portal-reduce-2")).toBeNull();
+    await click(q("portal-rework-2"));
+    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/2`, { action: "", remark: "" }]);
+    expect(order()).toEqual(["group:pending", "row:1", "row:2", "group:rejected", "row:3"]);
+    expect(q("portal-approve-2")).not.toBeNull();
+    // the phone card has the same answers, with their names
+    expect(text(q("portal-card-approve-1"))).toBe("Approve");
+    await click(q("portal-card-approve-1"));
+    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/1`, { action: "approve", remark: "" }]);
+    expect(text(q("portal-card-rework-1"))).toBe("Rework");
+    expect(text(q("portal-total-pending"))).toBe("1 waiting for your review");
+  });
+
+  it("an approval keeps the request's remark, and a remark on an approved request keeps it approved", async () => {
+    const base = portalData();
+    portal = recount({
+      ...base,
+      items: base.items.map((i) =>
+        i.id === 1 ? { ...i, auditor: { action: null, amount: null, remark: "Checked the time card", at: null } } : i,
+      ),
+    });
+    await mount();
+    await click(q("portal-approve-1"));
+    expect(writes.at(-1)).toEqual(["PATCH", `${BASE}/items/1`, { action: "approve", remark: "Checked the time card" }]);
+    await click(q("portal-remark-1"));
+    await type(q("portal-change-remark"), "Time card and leave checked");
+    await click(q("portal-change-save"));
+    expect(writes.at(-1)).toEqual([
+      "PATCH",
+      `${BASE}/items/1`,
+      { action: "approve", remark: "Time card and leave checked" },
+    ]);
+    expect(q("portal-row-1")?.getAttribute("data-review")).toBe("approved");
+  });
+
+  it("the bulk bar approves the chosen requests explicitly", async () => {
+    await mount();
+    await click(q("portal-select-all"));
+    await click(q("portal-bulk-approve"));
+    await click(q("portal-bulk-submit"));
+    expect(writes.at(-1)).toEqual(["POST", `${BASE}/bulk`, { itemIds: [1, 2], action: "approve", remark: "" }]);
+    expect(order()).toEqual(["group:approved", "row:1", "row:2", "group:rejected", "row:3"]);
+    expect(text(q("portal-total-pending"))).toBe("All reviewed");
+  });
+});
+
+describe("a revised settlement (round 2)", () => {
+  it("says HR reworked the earlier changes and resubmitted it, and what HR did on each request", async () => {
+    portal = round2PortalData();
+    await mount();
+    expect(q("portal-round-banner")?.getAttribute("data-round")).toBe("2");
+    expect(text(q("portal-round-title"))).toBe("Revised settlement · round 2");
+    expect(text(q("portal-round-text"))).toMatch(
+      /^HR reworked your earlier changes and resubmitted it on .*2026.* \(Priya HR\)\./,
+    );
+    expect(text(q("portal-round-summary"))).toContain(
+      "You flagged 3 requests in round 1: HR accepted 1, kept 1 and changed 1.",
+    );
+    expect(text(q("portal-round-note"))).toBe(
+      "HR's note: Took your reduction for Asha; Ravi's earlier loan is closed, so his advance stays.",
+    );
+    expect(text(q("portal-eyebrow"))).toContain("Revised · round 2");
+    // per request: a short chip, the whole line for the tooltip and screen readers
+    expect(text(q("portal-trail-1"))).toBe("Round 1 · HR accepted");
+    expect(q("portal-trail-1")?.getAttribute("data-text")).toBe("Round 1: you reduced it to ₹3,000 · HR accepted");
+    expect(q("portal-trail-1")?.getAttribute("data-outcome")).toBe("accepted");
+    expect(text(q("portal-trail-2"))).toBe("Round 1 · HR kept ₹7,500.4");
+    expect(q("portal-trail-2")?.getAttribute("aria-label")).toBe("Round 1: you rejected it · HR kept ₹7,500.4");
+    expect(text(q("portal-trail-4"))).toBe("Round 1 · HR changed to ₹4,000");
+    expect(q("portal-trail-3")).toBeNull(); // rejected by HR, never flagged
+    // every request waits for the auditor again (HR's rejection stays rejected)
+    expect(order()).toEqual(["group:pending", "row:1", "row:2", "row:4", "group:rejected", "row:3"]);
+    expect(text(q("portal-hr-1"))).toBe("₹3,000");
+    // the phone card writes the line out
+    expect(text(q("portal-card-trail-2"))).toContain("Round 1: you rejected it · HR kept ₹7,500.4");
+    expect(text(q("portal-card-trail-2"))).toContain("HR: The earlier loan closed in October");
+  });
+
+  it("a first review shows no round banner and no trail", async () => {
+    await mount();
+    expect(q("portal-round-banner")).toBeNull();
+    expect(q("portal-trail-1")).toBeNull();
+    expect(text(q("portal-eyebrow"))).not.toContain("round");
   });
 });
 
@@ -627,7 +779,9 @@ describe("Approval: the answer", () => {
     expect(q("portal-option-forward")?.getAttribute("data-open")).toBe("true");
     expect(q("portal-option-changes")?.getAttribute("data-open")).toBe("false");
     expect((q("portal-decide-changes_forward_hr") as HTMLButtonElement).disabled).toBe(true);
-    expect(text(q("portal-closed-changes_forward_hr"))).toBe("You made no changes: approve the settlement instead.");
+    expect(text(q("portal-closed-changes_forward_hr"))).toBe(
+      "You made no change and wrote no remark: approve the settlement, or write in the note what HR should correct.",
+    );
     await type(q("portal-note"), "All in order");
     await click(q("portal-decide-approved_send_accounts"));
     expect(text(q("portal-confirm"))).toContain("goes to accounts@uktextiles.in (CC md@uktextiles.in)");
@@ -718,7 +872,7 @@ describe("Approval: the answer", () => {
     expect(text(q("portal-send-blocked"))).toBe("Nothing is approved, so there is no bank file for Accounts.");
   });
 
-  it("with changes: only Forward changes to HR, listing every change from → to", async () => {
+  it("with changes: only Return to HR for rework, listing every change from → to", async () => {
     portal = recount({
       ...portal,
       items: portal.items.map((i) =>
@@ -736,16 +890,90 @@ describe("Approval: the answer", () => {
     expect(text(q("portal-approval-after-value"))).toBe("₹12,000.4");
     expect((q("portal-decide-approved_send_accounts") as HTMLButtonElement).disabled).toBe(true);
     expect((q("portal-decide-approved_forward_hr") as HTMLButtonElement).disabled).toBe(true);
-    expect(text(q("portal-send-blocked"))).toBe("You changed the settlement: forward the changes to HR.");
-    expect(text(q("portal-closed-approved_forward_hr"))).toBe("You changed the settlement: forward the changes to HR.");
+    expect(text(q("portal-send-blocked"))).toBe("You changed the settlement: return it to HR for rework.");
+    expect(text(q("portal-closed-approved_forward_hr"))).toBe(
+      "You changed the settlement: return it to HR for rework.",
+    );
     expect(q("portal-option-changes")?.getAttribute("data-open")).toBe("true");
+    expect(text(q("portal-decide-changes_forward_hr"))).toBe("Return to HR for rework");
+    expect(text(q("portal-option-changes"))).toContain(
+      "1 request you rejected and 2 remarks go back to HR.",
+    );
+    expect(text(q("portal-option-changes"))).toContain("nothing reaches Accounts before you approve it");
+    // the approvals are closed, so nothing says requests would be approved as HR settled them
+    expect(q("portal-pending-note")).toBeNull();
     await click(q("portal-decide-changes_forward_hr"));
+    expect(text(q("portal-confirm"))).toContain("Return the settlement to HR for rework?");
+    expect(text(q("portal-confirm-return"))).toContain("resubmits it to you for approval with a new link");
     nextRefusal = refusal(400, { error: "You made no change: approve the settlement instead.", code: "no_changes" });
     await click(q("portal-confirm-submit"));
     expect(text(q("portal-confirm-error"))).toBe("You made no change: approve the settlement instead.");
     await click(q("portal-confirm-submit"));
     expect((writes.at(-1)![2] as FormData).get("decision")).toBe("changes_forward_hr");
-    expect(text(q("portal-submitted"))).toContain("Changes forwarded to HR");
+    expect(text(q("portal-submitted"))).toContain("Returned to HR for rework");
+    expect(text(q("portal-submitted"))).toContain("sends you the revised settlement with a new link");
+  });
+
+  it("approving with requests not marked says they are approved as HR settled them", async () => {
+    await mount("?tab=approval");
+    expect(text(q("portal-pending-note"))).toContain(
+      "2 requests you have not marked will be approved as HR settled them.",
+    );
+    await click(q("portal-decide-approved_forward_hr"));
+    expect(text(q("portal-confirm-pending"))).toBe(
+      "2 requests you have not marked will be approved as HR settled them.",
+    );
+    await click(q("portal-confirm-cancel"));
+    // one marked, one not
+    act(() => root!.unmount());
+    host!.remove();
+    const base = portalData();
+    portal = recount({
+      ...base,
+      items: base.items.map((i) =>
+        i.id === 1 ? { ...i, auditor: { action: "approve" as const, amount: null, remark: "", at: null } } : i,
+      ),
+    });
+    await mount("?tab=approval");
+    expect(text(q("portal-pending-note"))).toContain(
+      "1 request you have not marked will be approved as HR settled it.",
+    );
+  });
+
+  it("Return to HR for rework opens with a remark alone (no change), and the approvals stay open", async () => {
+    const base = portalData();
+    portal = recount({
+      ...base,
+      items: base.items.map((i) =>
+        i.id === 2 ? { ...i, auditor: { action: null, amount: null, remark: "Check the leave days", at: null } } : i,
+      ),
+    });
+    expect(portal.hasChanges).toBe(false);
+    await mount("?tab=approval");
+    expect(q("portal-option-changes")?.getAttribute("data-open")).toBe("true");
+    expect(q("portal-closed-changes_forward_hr")).toBeNull();
+    expect(text(q("portal-option-changes"))).toContain("Your remark goes back to HR.");
+    expect(q("portal-option-forward")?.getAttribute("data-open")).toBe("true");
+    expect(q("portal-option-send")?.getAttribute("data-open")).toBe("true");
+    await click(q("portal-decide-changes_forward_hr"));
+    await click(q("portal-confirm-submit"));
+    expect((writes.at(-1)![2] as FormData).get("decision")).toBe("changes_forward_hr");
+    expect(text(q("portal-submitted"))).toContain("Returned to HR for rework");
+  });
+
+  it("Return to HR for rework opens with a note of at least 3 characters when nothing else changed", async () => {
+    await mount("?tab=approval");
+    expect((q("portal-decide-changes_forward_hr") as HTMLButtonElement).disabled).toBe(true);
+    await type(q("portal-note"), " ab ");
+    expect((q("portal-decide-changes_forward_hr") as HTMLButtonElement).disabled).toBe(true);
+    await type(q("portal-note"), "Recheck Ravi's leave days");
+    expect((q("portal-decide-changes_forward_hr") as HTMLButtonElement).disabled).toBe(false);
+    expect(text(q("portal-option-changes"))).toContain("Your note tells HR what to correct.");
+    await click(q("portal-decide-changes_forward_hr"));
+    await click(q("portal-confirm-submit"));
+    const form = writes.at(-1)![2] as FormData;
+    expect(form.get("decision")).toBe("changes_forward_hr");
+    expect(form.get("note")).toBe("Recheck Ravi's leave days");
   });
 
   it("opens read-only on a review already submitted", async () => {

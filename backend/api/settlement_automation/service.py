@@ -24,6 +24,15 @@ choice). While the Automation Method is on, the Normal Method's approve / reject
 withdrawn by the employee or deleted by HR (409 `in_workflow`). Switching back to the Normal Method is refused while a
 batch is between Forward and Completed.
 
+Re-approval cycles (owner 2026-11-27): when the MD changes an amount, rejects a request or asks for corrections, the MD
+cannot approve: the batch goes back to HR (HR Rework (MD Changes)); HR answers every request the MD flagged (accept the
+MD's decision, keep its own, or change it) and resubmits; the MD reviews the revised settlement again (round 2, ...) and
+approves it to HR Final Settlement or directly to the auditor. The same with the auditor: a reduced / rejected request or
+a correction asked for sends the settlement back to HR (HR Rework (Auditor Changes)); HR answers and resubmits it, a new
+review link goes out, and only the auditor's approval of the revised settlement opens the way to Accounts. Every reviewer
+can reopen ("Rework") a request they decided, until they complete their stage. Earlier decisions are kept per request
+(`trail`) and per batch (`history`).
+
 Every action is HR's (or the MD's) own click: nothing advances by itself.
 """
 
@@ -46,6 +55,7 @@ MAX_FILE_BYTES = 15 * 1024 * 1024
 # Stages a batch is "in progress" in: the Normal Method can't be switched on while one is.
 IN_PROGRESS = (
     B.STAGE_MD_REVIEW,
+    B.STAGE_MD_CHANGES,
     B.STAGE_HR_FINAL,
     B.STAGE_AUDITOR_SEND,
     B.STAGE_AUDITOR_REVIEW,
@@ -58,36 +68,56 @@ FORWARDED = (*IN_PROGRESS, B.STAGE_COMPLETED)
 STAGE_INDEX = {
     B.STAGE_HR_REVIEW: 1,
     B.STAGE_MD_REVIEW: 2,
-    B.STAGE_HR_FINAL: 3,
-    B.STAGE_AUDITOR_SEND: 4,
-    B.STAGE_AUDITOR_REVIEW: 5,
-    B.STAGE_AUDITOR_CHANGES: 6,
-    B.STAGE_ACCOUNTS_SEND: 7,
+    B.STAGE_MD_CHANGES: 3,
+    B.STAGE_HR_FINAL: 4,
+    B.STAGE_AUDITOR_SEND: 5,
+    B.STAGE_AUDITOR_REVIEW: 6,
+    B.STAGE_AUDITOR_CHANGES: 7,
+    B.STAGE_ACCOUNTS_SEND: 8,
     B.STAGE_COMPLETED: 9,
 }
 
+# The stages in order. Two are REWORK LOOPS (owner 2026-11-27), not steps every batch takes: HR Rework (MD Changes) hangs
+# under MD Review and HR Rework (Auditor Changes) under Auditor Review; a batch goes round them as often as the reviewer
+# returns it.
 TRACKER = (
     ("received", "Employee Requests Received"),
     ("hr_review", "HR Review"),
     ("md_review", "MD Review & Approval"),
+    ("md_changes", "HR Rework (MD Changes)"),
     ("hr_final", "HR Final Settlement"),
     ("auditor_send", "Send to Auditor"),
     ("auditor_review", "Auditor Review"),
-    ("auditor_changes", "HR Review of Auditor Changes"),
+    ("auditor_changes", "HR Rework (Auditor Changes)"),
     ("accounts_send", "Send Bank File to Accounts"),
     ("completed", "Settlement Workflow Completed"),
 )
+# a loop stage -> (the history action of a return into it, of a resubmission out of it)
+LOOPS = {
+    "md_changes": ("md_returned", "md_resubmitted"),
+    "auditor_changes": ("auditor_changes", "auditor_resubmitted"),
+}
 
 NEXT_ACTION = {
     B.STAGE_HR_REVIEW: "HR: review the requests and Forward to MD.",
-    B.STAGE_MD_REVIEW: "MD: approve, reduce or reject each request, then Confirm & Proceed.",
+    B.STAGE_MD_REVIEW: (
+        "MD: approve, reduce or reject each request. No changes: approve (to HR or directly to the auditor). "
+        "Changes or corrections: Return to HR for rework."
+    ),
+    B.STAGE_MD_CHANGES: (
+        "HR: answer each request the MD changed (accept the MD's decision, keep yours or change it), then Resubmit to "
+        "the MD."
+    ),
     B.STAGE_HR_FINAL: "HR: check the MD's decisions, adjust within them, and Finalize the settlement.",
     B.STAGE_AUDITOR_SEND: "HR: Send to Auditor (a secure review link with the finalized report, PDF and Excel).",
     B.STAGE_AUDITOR_REVIEW: (
         "Auditor: review and confirm in the Auditor Review Portal (link e-mailed). HR may confirm by hand if the auditor "
         "confirmed another way."
     ),
-    B.STAGE_AUDITOR_CHANGES: "HR: review the auditor's changes and finalize the revised settlement.",
+    B.STAGE_AUDITOR_CHANGES: (
+        "HR: answer each request the auditor changed (accept the change, keep yours or change it), then Resubmit to "
+        "the auditor."
+    ),
     B.STAGE_ACCOUNTS_SEND: "HR: Send the bank file to Accounts.",
     B.STAGE_COMPLETED: "",
 }
@@ -280,24 +310,31 @@ def requested_of(adv: Advance) -> Decimal:
 
 
 def set_hr_note(item: I, note) -> I:
-    _require_stage(item.batch, B.STAGE_HR_REVIEW)
+    _require_stage(item.batch, B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES)
     item.hr_note = _remark(note)
     item.save(update_fields=["hr_note", "updated_at"])
     return item
 
 
 def set_hr_review(item: I, data) -> I:
-    """HR's review of one request before the MD (owner 2026-11-27): a remark (`hrNote`), and a proposal - keep it
-    (action ""), reduce it (an amount below what was asked; a remark is required) or reject it (a remark is required).
-    The proposal is carried to the MD as their pre-filled decision; nothing is final until the settlement is."""
-    _require_stage(item.batch, B.STAGE_HR_REVIEW)
+    """HR's review of one request before the MD (owner 2026-11-27): a remark (`hrNote`), and a proposal - keep it as
+    asked (action keep / approve), reduce it (an amount below what was asked; a remark is required) or reject it (a
+    remark is required); action "" reopens it (Rework: not reviewed yet). The proposal is carried to the MD as their
+    pre-filled decision; nothing is final until the settlement is. Also HR's answer to the MD in HR Rework (MD Changes):
+    any proposal answers the MD's flag."""
+    _require_stage(item.batch, B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES)
+    if "action" in data and str(data.get("action") or "").strip() == "":
+        if "hrNote" in data or "remark" in data:
+            item.hr_note = _remark(data.get("hrNote", data.get("remark")))
+            item.save(update_fields=["hr_note", "updated_at"])
+        return rework_item(item, "")
     if "hrNote" in data or "remark" in data:
         item.hr_note = _remark(data.get("hrNote", data.get("remark")))
     if "action" in data:
         action = str(data.get("action") or "").strip()
-        if action not in ("", "keep", "approve", "reduce", "reject"):
+        if action not in ("keep", "approve", "reduce", "reject"):
             raise WorkflowError("Choose keep, reduce or reject.", "action")
-        action = "" if action in ("keep", "approve") else action
+        action = "approve" if action in ("keep", "approve") else action
         requested = requested_of(item.advance)
         if action == "reduce":
             amount = _money(data.get("amount"), "reduced amount")
@@ -315,7 +352,9 @@ def set_hr_review(item: I, data) -> I:
         else:
             item.hr_amount = None
         item.hr_action = action
-    item.save(update_fields=["hr_note", "hr_action", "hr_amount", "updated_at"])
+        if item.batch.stage == B.STAGE_MD_CHANGES:
+            item.rework = ""  # HR answered the MD on this request
+    item.save(update_fields=["hr_note", "hr_action", "hr_amount", "rework", "updated_at"])
     return item
 
 
@@ -332,8 +371,9 @@ def _items_of(batch: B, item_ids) -> list:
 
 
 def hr_review_bulk(batch: B, item_ids, action, remark) -> tuple[B, list]:
-    """HR Review, several requests at once: approve (keep, clearing a proposal) or reject (one remark for all)."""
-    _require_stage(batch, B.STAGE_HR_REVIEW)
+    """HR Review (and HR Rework (MD Changes)), several requests at once: approve (keep as asked, clearing a proposal) or
+    reject (one remark for all)."""
+    _require_stage(batch, B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES)
     action = str(action or "").strip()
     if action not in ("approve", "reject"):
         raise WorkflowError("Choose approve or reject.", "action")
@@ -342,12 +382,143 @@ def hr_review_bulk(batch: B, item_ids, action, remark) -> tuple[B, list]:
         raise WorkflowError("Write the reason for rejecting (at least 3 characters).", "remark")
     with transaction.atomic():
         for item in _items_of(batch, item_ids):
-            item.hr_action = "reject" if action == "reject" else ""
+            item.hr_action = "reject" if action == "reject" else "approve"
             item.hr_amount = None
+            item.rework = ""
             if remark:
                 item.hr_note = remark
-            item.save(update_fields=["hr_note", "hr_action", "hr_amount", "updated_at"])
+            item.save(update_fields=["hr_note", "hr_action", "hr_amount", "rework", "updated_at"])
     return batch, []
+
+
+# ─────────────────────────── Rework (reopen) and the answers to a reviewer's changes ───────────────────────────
+
+
+def _snap(item: I, role: str, round_no: int, action: str, amount, remark: str, by: str = "", at=None) -> None:
+    """Keep one earlier decision on the request (a rework round replaces it); the same (role, round) is kept once."""
+    trail = list(item.trail or [])
+    if any(t.get("role") == role and t.get("round") == round_no for t in trail):
+        return
+    trail.append(
+        {
+            "at": (at or _now()).isoformat(),
+            "by": by,
+            "role": role,
+            "round": round_no,
+            "action": action or "",
+            "amount": float(amount) if amount is not None else None,
+            "remark": remark or "",
+        }
+    )
+    item.trail = trail
+
+
+def _snap_hr(item: I, round_no: int, by: str = "") -> None:
+    _snap(item, "hr", round_no, item.hr_action or "approve", item.hr_amount, item.hr_note, by)
+
+
+def _snap_md(item: I, round_no: int, by: str = "") -> None:
+    if item.md_decision:
+        _snap(item, "md", round_no, item.md_decision, item.md_amount, item.md_remark, by, item.md_decided_at)
+
+
+def _snap_final(item: I, round_no: int, by: str = "") -> None:
+    if item.final_decision:
+        _snap(item, "hr_final", round_no, item.final_decision, item.final_amount, item.final_remark, by)
+
+
+def _snap_auditor(item: I, round_no: int) -> None:
+    if item.auditor_action or (item.auditor_remark or "").strip():
+        _snap(
+            item, "auditor", round_no, item.auditor_action, item.auditor_amount, item.auditor_remark, AUDITOR_NAME,
+            item.auditor_at,
+        )
+
+
+def rework_item(item: I, by: str) -> I:
+    """Rework (owner 2026-11-27): HR reopens a request it decided, before completing its stage - it goes back to the
+    waiting ones at the top of the list. HR Review: the proposal is cleared (the remark stays); HR Rework (MD / Auditor
+    Changes): the request needs HR's answer again; HR Final Settlement: the final decision is cleared (the remark stays)
+    and must be made again before Finalize."""
+    stage = item.batch.stage
+    if stage == B.STAGE_HR_REVIEW:
+        item.hr_action, item.hr_amount = "", None
+        item.save(update_fields=["hr_action", "hr_amount", "updated_at"])
+    elif stage == B.STAGE_MD_CHANGES:
+        item.rework = "md"
+        item.save(update_fields=["rework", "updated_at"])
+    elif stage == B.STAGE_HR_FINAL:
+        item.final_decision, item.final_amount, item.final_changed_at = "", None, None
+        item.save(update_fields=["final_decision", "final_amount", "final_changed_at", "updated_at"])
+    elif stage == B.STAGE_AUDITOR_CHANGES:
+        item.rework = "auditor"
+        item.save(update_fields=["rework", "updated_at"])
+    else:
+        _require_stage(item.batch, B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES, B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES)
+    return item
+
+
+def _accept_md(item: I) -> None:
+    """HR takes the MD's decision on a request as its own proposal (HR Rework (MD Changes))."""
+    if item.md_decision == I.DECISION_REJECTED:
+        item.hr_action, item.hr_amount = "reject", None
+        item.hr_note = item.md_remark or item.hr_note
+    elif item.md_decision == I.DECISION_APPROVED:
+        amount = Decimal(item.md_amount) if item.md_amount is not None else requested_of(item.advance)
+        if amount < requested_of(item.advance):
+            item.hr_action, item.hr_amount = "reduce", amount
+            item.hr_note = item.md_remark or item.hr_note
+        else:
+            item.hr_action, item.hr_amount = "approve", None
+    else:
+        raise WorkflowError("The MD has not decided this request: there is nothing to accept.", "nothing_to_accept")
+
+
+def _accept_auditor(item: I) -> None:
+    """HR takes the auditor's change as the final settlement (HR Rework (Auditor Changes)); a remark alone changes
+    nothing."""
+    if item.auditor_action == "reject":
+        item.final_decision, item.final_amount = I.DECISION_REJECTED, None
+        item.final_remark = item.auditor_remark or item.final_remark
+    elif item.auditor_action == "reduce" and item.auditor_amount is not None:
+        item.final_decision, item.final_amount = I.DECISION_APPROVED, Decimal(item.auditor_amount)
+        item.final_remark = item.auditor_remark or item.final_remark
+    else:
+        return
+    item.final_changed_at = _now()
+
+
+def resolve_item(item: I, how, by: str) -> I:
+    """HR's answer to the reviewer's change on one request, in a rework stage: "accept" (the MD's decision becomes HR's
+    proposal / the auditor's change becomes the final settlement) or "keep" (HR stands by its own; the reviewer sees it
+    again on resubmission). Either way the request no longer waits for HR."""
+    how = str(how or "").strip()
+    if how not in ("accept", "keep"):
+        raise WorkflowError("Choose accept or keep.", "how")
+    stage = item.batch.stage
+    _require_stage(item.batch, B.STAGE_MD_CHANGES, B.STAGE_AUDITOR_CHANGES)
+    if how == "accept":
+        if stage == B.STAGE_MD_CHANGES:
+            _accept_md(item)
+        else:
+            _accept_auditor(item)
+    item.rework = ""
+    item.save()
+    return item
+
+
+def resolve_bulk(batch: B, item_ids, how, by: str) -> tuple[B, list]:
+    """HR's answer on several requests at once (accept / keep); requests with nothing to accept are left out."""
+    _require_stage(batch, B.STAGE_MD_CHANGES, B.STAGE_AUDITOR_CHANGES)
+    skipped: list = []
+    with transaction.atomic():
+        for item in _items_of(batch, item_ids):
+            item.batch = batch
+            try:
+                resolve_item(item, how, by)
+            except WorkflowError as exc:
+                skipped.append({"id": item.id, "reason": exc.message})
+    return batch, skipped
 
 
 def forward(batch: B, advance_ids, note, by: str) -> B:
@@ -367,7 +538,8 @@ def forward(batch: B, advance_ids, note, by: str) -> B:
                 "changed",
                 status=409,
             )
-        # HR's proposals are the MD's pre-filled decisions (owner 2026-11-27); a request HR kept waits for the MD
+        # HR's proposals are the MD's pre-filled decisions (owner 2026-11-27); a request HR kept (approve, or not
+        # reviewed) waits for the MD
         for item in batch.items.select_related("advance"):
             if item.hr_action == "reduce" and item.hr_amount is not None:
                 item.md_decision, item.md_amount, item.md_remark = I.DECISION_APPROVED, item.hr_amount, item.hr_note
@@ -386,6 +558,32 @@ def forward(batch: B, advance_ids, note, by: str) -> B:
 
 
 # ─────────────────────────── MD Review ───────────────────────────
+
+
+def hr_expected(item: I) -> tuple[str, Decimal | None]:
+    """HR's proposal on a request, as an MD decision: (approved, the amount) or (rejected, None)."""
+    if item.hr_action == "reject":
+        return I.DECISION_REJECTED, None
+    if item.hr_action == "reduce" and item.hr_amount is not None:
+        return I.DECISION_APPROVED, Decimal(item.hr_amount)
+    return I.DECISION_APPROVED, requested_of(item.advance)
+
+
+def md_changed(item: I) -> bool:
+    """The MD's OWN decision differs from HR's proposal (a lower / other amount, a rejection, an approval of what HR
+    proposed to reject). A decision pre-filled from HR and not touched by the MD is no change."""
+    if not item.md_decision or item.md_decided_at is None:
+        return False
+    decision, amount = hr_expected(item)
+    if item.md_decision != decision:
+        return True
+    return decision == I.DECISION_APPROVED and Decimal(item.md_amount or 0) != amount
+
+
+def md_remarked(item: I) -> bool:
+    """The MD wrote their own remark on a request (not HR's carried over): a correction HR has to look at."""
+    mine = " ".join((item.md_remark or "").split())
+    return bool(item.md_decided_at) and bool(mine) and mine != " ".join((item.hr_note or "").split())
 
 
 def md_decide(item: I, decision, amount, remark, by: str) -> I:
@@ -443,10 +641,88 @@ def md_bulk(batch: B, item_ids, decision, remark, by: str) -> tuple[B, list]:
     return batch, skipped
 
 
+def md_return(batch: B, note, by: str) -> B:
+    """MD Review -> HR Rework (MD Changes) (owner 2026-11-27): the MD changed amounts, rejected requests or asks for
+    corrections, so HR reworks the settlement and resubmits it. Every request the MD changed (from HR's proposal) or
+    wrote their own remark on waits for HR's answer. Needs a change, a remark or the MD's note for HR."""
+    with transaction.atomic():
+        batch = B.objects.select_for_update().get(pk=batch.pk)
+        _require_stage(batch, B.STAGE_MD_REVIEW)
+        items = list(batch.items.select_related("advance"))
+        note = _remark(note)
+        changed = [i for i in items if md_changed(i)]
+        remarked = [i for i in items if i not in changed and md_remarked(i)]
+        if not changed and not remarked and len(note) < REMARK_MIN:
+            raise WorkflowError(
+                "Nothing to rework: approve the settlement, or write what HR should correct (at least 3 characters).",
+                "no_changes",
+            )
+        for i in changed + remarked:
+            _snap_hr(i, batch.md_round, batch.forwarded_by)
+            _snap_md(i, batch.md_round, by)
+            i.rework = "md"
+            i.save(update_fields=["trail", "rework", "updated_at"])
+        batch.stage = B.STAGE_MD_CHANGES
+        batch.md_returned_at, batch.md_returned_by, batch.md_return_note = _now(), by, note
+        _log(
+            batch,
+            "md_returned",
+            by,
+            note,
+            round=batch.md_round,
+            changes=len(changed),
+            remarks=len(remarked),
+        )
+        batch.save()
+    return batch
+
+
+def resubmit_md(batch: B, note, by: str) -> B:
+    """HR Rework (MD Changes) -> MD Review, the next round: every request the MD flagged has HR's answer. A request whose
+    proposal now equals the MD's decision keeps it (the MD already decided it); one HR changed or stood by is pre-filled
+    again with HR's proposal for the MD to confirm (a kept one waits for the MD's decision)."""
+    with transaction.atomic():
+        batch = B.objects.select_for_update().get(pk=batch.pk)
+        _require_stage(batch, B.STAGE_MD_CHANGES)
+        items = list(batch.items.select_related("advance"))
+        waiting = [i for i in items if i.rework]
+        if waiting:
+            raise WorkflowError(
+                f"{len(waiting)} request(s) still need your answer to the MD (accept the MD's decision, keep yours or "
+                "change it).",
+                "rework_open",
+                rework=[i.id for i in waiting],
+            )
+        again = 0
+        for i in items:
+            decision, amount = hr_expected(i)
+            same = i.md_decision == decision and (
+                decision == I.DECISION_REJECTED or Decimal(i.md_amount or 0) == amount
+            )
+            if same and i.md_decided_at is not None:
+                continue
+            _snap_md(i, batch.md_round, batch.md_returned_by)
+            if i.hr_action == "reduce" and i.hr_amount is not None:
+                i.md_decision, i.md_amount, i.md_remark = I.DECISION_APPROVED, i.hr_amount, i.hr_note
+            elif i.hr_action == "reject":
+                i.md_decision, i.md_amount, i.md_remark = I.DECISION_REJECTED, None, i.hr_note
+            else:
+                i.md_decision, i.md_amount, i.md_remark = "", None, ""
+            i.md_decided_at = None
+            i.save(update_fields=["md_decision", "md_amount", "md_remark", "md_decided_at", "trail", "updated_at"])
+            again += 1
+        batch.md_round += 1
+        batch.stage = B.STAGE_MD_REVIEW
+        _log(batch, "md_resubmitted", by, _remark(note), round=batch.md_round, count=again)
+        batch.save()
+    return batch
+
+
 def md_confirm(batch: B, note, by: str, direct: bool = False) -> B:
     """MD Review -> HR Final Settlement (Forward to HR), or - `direct` (owner 2026-11-27: "Direct to Auditor") - the
     MD's decisions become the final settlement at once (HR Final Settlement is skipped) and the batch goes to Send to
-    Auditor, which the caller then sends. Every request must be decided either way."""
+    Auditor, which the caller then sends. Every request must be decided either way, and the MD's decisions must be HR's
+    proposals: with changes the MD returns the settlement to HR for rework instead (owner 2026-11-27)."""
     with transaction.atomic():
         batch = B.objects.select_for_update().get(pk=batch.pk)
         _require_stage(batch, B.STAGE_MD_REVIEW)
@@ -457,6 +733,15 @@ def md_confirm(batch: B, note, by: str, direct: bool = False) -> B:
                 f"{len(open_items)} request(s) still need your decision before you can confirm.",
                 "undecided",
                 undecided=[i.id for i in open_items],
+            )
+        changed = [i for i in items if md_changed(i)]
+        if changed:
+            raise WorkflowError(
+                f"You changed {len(changed)} request(s) from HR's proposal. Return the settlement to HR for rework; "
+                "you approve it once HR resubmits.",
+                "has_changes",
+                status=409,
+                changed=[i.id for i in changed],
             )
         for i in items:
             i.final_decision = i.md_decision
@@ -502,8 +787,9 @@ def _int(raw):
 
 def set_final(item: I, data, by: str) -> I:
     """HR's final settlement of one request, WITHIN the MD's decision (owner's choice): never approve what the MD
-    rejected, never more than the MD approved; any change from the MD needs a remark."""
-    _require_stage(item.batch, B.STAGE_HR_FINAL)
+    rejected, never more than the MD approved; any change from the MD needs a remark. Also HR's answer to the auditor
+    in HR Rework (Auditor Changes)."""
+    _require_stage(item.batch, B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES)
     decision = str(data.get("decision") or item.final_decision or "").strip()
     remark = _remark(data.get("remark"))
     if decision not in (I.DECISION_APPROVED, I.DECISION_REJECTED):
@@ -546,6 +832,7 @@ def set_final(item: I, data, by: str) -> I:
             item.final_months = months
     item.final_remark = remark
     item.final_changed_at = _now()
+    item.rework = ""
     item.save()
     return item
 
@@ -635,9 +922,9 @@ def _apply_item(item: I, request, actor: str, after_commit: list) -> None:
 
 
 def final_bulk(batch: B, item_ids, decision, remark, by: str) -> tuple[B, list]:
-    """HR Final Settlement, several requests at once, within the MD's decision: approve (at the MD's amount - only
-    requests the MD approved) or reject (one remark for all)."""
-    _require_stage(batch, B.STAGE_HR_FINAL)
+    """HR Final Settlement (and HR Rework (Auditor Changes)), several requests at once, within the MD's decision:
+    approve (at the MD's amount - only requests the MD approved) or reject (one remark for all)."""
+    _require_stage(batch, B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES)
     decision = str(decision or "").strip()
     remark = _remark(remark)
     if decision not in (I.DECISION_APPROVED, I.DECISION_REJECTED):
@@ -656,6 +943,7 @@ def final_bulk(batch: B, item_ids, decision, remark, by: str) -> tuple[B, list]:
             else:
                 item.final_decision, item.final_amount, item.final_remark = decision, None, remark
             item.final_changed_at = _now()
+            item.rework = ""
             item.save()
     return batch, skipped
 
@@ -839,7 +1127,9 @@ def _new_link(batch: B, to: list[str], by: str):
     from ..models import SettlementAuditorLink as L
 
     days = max(LINK_DAYS_MIN, min(LINK_DAYS_MAX, int(settings_row().auditor_link_days or 7)))
-    L.objects.filter(batch=batch, revoked_at__isnull=True, submitted_at__isnull=True).update(revoked_at=_now())
+    # every older link stops: an unanswered one, and an answered one of an earlier round (it would show the revised
+    # settlement as if it were the one answered)
+    L.objects.filter(batch=batch, revoked_at__isnull=True).update(revoked_at=_now())
     token = secrets.token_urlsafe(32)
     row = L.objects.create(
         batch=batch, token_hash=_hash(token), sent_to=to, created_by=by, expires_at=_now() + timedelta(days=days)
@@ -930,7 +1220,15 @@ def auditor_done(batch: B, note, request, by: str) -> B:
     with transaction.atomic():
         batch = B.objects.select_for_update().get(pk=batch.pk)
         _require_stage(batch, B.STAGE_AUDITOR_REVIEW)
-        _rights(request, list(batch.items.select_related("advance")))
+        items = list(batch.items.select_related("advance"))
+        _rights(request, items)
+        if has_auditor_changes(items):
+            raise WorkflowError(
+                "The auditor marked changes in the review portal: wait for their answer (the settlement then comes back "
+                "to HR for rework).",
+                "auditor_changes_open",
+                status=409,
+            )
         _apply_settlement(batch, request, by, after)
         _close_links(batch)
         batch.stage = B.STAGE_ACCOUNTS_SEND
@@ -943,30 +1241,48 @@ def auditor_done(batch: B, note, request, by: str) -> B:
     return batch
 
 
-def accept_auditor_changes(batch: B, note, request, by: str) -> B:
-    """HR Review of Auditor Changes -> Send Bank File to Accounts: HR accepts the auditor's changes; the revised
-    settlement (the auditor's reduced amounts and rejections on top of HR's final decisions) is written to the advances."""
-    after: list = []
+def resubmit_auditor(batch: B, note, request, by: str) -> B:
+    """HR Rework (Auditor Changes) -> Send to Auditor, the next round (owner 2026-11-27: the revised settlement goes back
+    to the auditor; only their approval opens the way to Accounts). Every request the auditor flagged has HR's answer;
+    the auditor's changes of the round are kept in each request's trail and cleared, so the revised settlement is what
+    the auditor reviews (a new review link is sent next)."""
     with transaction.atomic():
         batch = B.objects.select_for_update().get(pk=batch.pk)
         _require_stage(batch, B.STAGE_AUDITOR_CHANGES)
-        _rights(request, list(batch.items.select_related("advance")))
-        _apply_settlement(batch, request, by, after)
-        batch.stage = B.STAGE_ACCOUNTS_SEND
+        items = list(batch.items.select_related("advance", "advance__employee"))
+        _rights(request, items)
+        waiting = [i for i in items if i.rework]
+        if waiting:
+            raise WorkflowError(
+                f"{len(waiting)} request(s) still need your answer to the auditor (accept the change, keep yours or "
+                "change it).",
+                "rework_open",
+                rework=[i.id for i in waiting],
+            )
+        if any(i.final_decision not in (I.DECISION_APPROVED, I.DECISION_REJECTED) for i in items):
+            raise WorkflowError("Every request needs a final decision.", "undecided")
+        for i in items:
+            _snap_auditor(i, batch.auditor_round)
+            i.auditor_action, i.auditor_amount, i.auditor_remark, i.auditor_at = "", None, "", None
+            i.save(
+                update_fields=["auditor_action", "auditor_amount", "auditor_remark", "auditor_at", "trail", "updated_at"]
+            )
+        batch.auditor_round += 1
+        batch.stage = B.STAGE_AUDITOR_SEND
+        batch.auditor_outcome, batch.auditor_submitted_at, batch.auditor_submitted_note = "", None, ""
         batch.changes_accepted_at, batch.changes_accepted_by, batch.changes_note = _now(), by, _remark(note)
         t = _totals(batch)
         _log(
             batch,
-            "auditor_changes_accepted",
+            "auditor_resubmitted",
             by,
             batch.changes_note,
+            round=batch.auditor_round,
             approved=t["approved"],
             rejected=t["rejected"],
             total=float(t["total"]),
         )
         batch.save()
-        for fn in after:
-            transaction.on_commit(fn)
     return batch
 
 
@@ -979,6 +1295,9 @@ def _deliver_accounts(batch: B, bank: tuple, request, by: str, via: str):
         raise WorkflowError(
             "No request was approved in this batch, so there is no bank file to send.", "nothing_to_pay"
         )
+    # never to Accounts while a correction or a re-approval is open (owner 2026-11-27)
+    if batch.items.exclude(rework="").exists():
+        raise WorkflowError("Requests still wait for HR's rework: nothing goes to Accounts yet.", "rework_open", 409)
     row = settings_row()
     to, cc = list(row.accounts_emails or []), list(row.accounts_cc or [])
     if not to:
@@ -1061,16 +1380,25 @@ def _require_review(link) -> B:
 
 
 def auditor_change(link, item_id: int, data) -> B:
-    """The auditor's change on one request: a remark, a reduced amount (below HR's approved amount; a remark is
-    required) or a rejection (a remark is required); an empty action clears the change (the remark stays)."""
+    """The auditor's answer on one request: approve it as HR settled it, a remark, a reduced amount (below HR's approved
+    amount; a remark is required) or a rejection (a remark is required); an empty action reopens it (Rework: not
+    reviewed yet; the remark stays)."""
     batch = _require_review(link)
     item = I.objects.select_related("advance").filter(pk=item_id, batch=batch).first()
     if item is None:
         raise WorkflowError("Request not found in this settlement.", "not_found", 404)
     action = str(data.get("action") or "").strip()
     remark = _remark(data.get("remark"))
-    if action not in ("", "reduce", "reject"):
-        raise WorkflowError("Choose keep, reduce or reject.", "action")
+    if action == "reduce":
+        # owner 2026-11-27: the auditor does not reduce amounts - they reject, or write a remark and return the
+        # settlement to HR, who changes the amount in the rework
+        raise WorkflowError(
+            "The auditor cannot reduce an amount. Reject the request, or write a remark and return the settlement to HR "
+            "for rework.",
+            "reduce_not_allowed",
+        )
+    if action not in ("", "approve", "reject"):
+        raise WorkflowError("Choose approve or reject.", "action")
     if action and item.final_decision != I.DECISION_APPROVED:
         raise WorkflowError("HR rejected this request: there is nothing to reduce or reject.", "not_approved", 409)
     if action == "reduce":
@@ -1094,8 +1422,8 @@ def auditor_change(link, item_id: int, data) -> B:
 
 
 def auditor_bulk(link, item_ids, action, remark) -> B:
-    """The auditor on several requests at once: approve (keep HR's settlement, clearing a change) or reject (one reason
-    for all; only requests HR approved)."""
+    """The auditor on several requests at once: approve (HR's settlement as it is, clearing a change) or reject (one
+    reason for all); only requests HR approved."""
     batch = _require_review(link)
     action = str(action or "").strip()
     remark = _remark(remark)
@@ -1105,12 +1433,12 @@ def auditor_bulk(link, item_ids, action, remark) -> B:
         raise WorkflowError("Write the reason for rejecting (at least 3 characters).", "remark")
     with transaction.atomic():
         for item in _items_of(batch, item_ids):
+            if item.final_decision != I.DECISION_APPROVED:
+                continue  # HR rejected it: nothing to approve or reject
             if action == "reject":
-                if item.final_decision != I.DECISION_APPROVED:
-                    continue  # HR already rejected it
                 item.auditor_action, item.auditor_amount, item.auditor_remark = "reject", None, remark
             else:
-                item.auditor_action, item.auditor_amount = "", None
+                item.auditor_action, item.auditor_amount = "approve", None
                 if remark:
                     item.auditor_remark = remark
             item.auditor_at = _now()
@@ -1124,8 +1452,9 @@ DECISIONS = {"approved_send_accounts", "approved_forward_hr", "changes_forward_h
 def auditor_submit(link, decision: str, note, bank: tuple | None, request) -> tuple[B, str | None]:
     """The auditor's answer. Without changes: "approved_send_accounts" (the settlement is applied and the bank file -
     built by the portal from the approved settlement - goes straight to Accounts) or "approved_forward_hr" (applied; HR
-    sends it). With changes (a reduced amount or a rejection): "changes_forward_hr" - back to HR, who reviews and
-    finalizes the revised settlement. Returns (batch, a warning when Accounts could not be e-mailed)."""
+    sends it). With changes (a reduced amount or a rejection) or corrections asked for (remarks, a note):
+    "changes_forward_hr" - back to HR for rework (every request changed or remarked waits for HR's answer); HR resubmits
+    the revised settlement for the auditor's approval. Returns (batch, a warning when Accounts could not be e-mailed)."""
     from ..models import SettlementAuditorLink as L
 
     if decision not in DECISIONS:
@@ -1139,8 +1468,12 @@ def auditor_submit(link, decision: str, note, bank: tuple | None, request) -> tu
         batch = B.objects.select_for_update().get(pk=batch.pk)
         items = list(batch.items.select_related("advance", "advance__employee"))
         changed = has_auditor_changes(items)
-        if decision == "changes_forward_hr" and not changed:
-            raise WorkflowError("You made no change: approve the settlement instead.", "no_changes")
+        remarked = [i for i in items if (i.auditor_remark or "").strip()]
+        if decision == "changes_forward_hr" and not changed and not remarked and len(note) < REMARK_MIN:
+            raise WorkflowError(
+                "You made no change and wrote no remark: approve the settlement, or write what HR should correct.",
+                "no_changes",
+            )
         if decision != "changes_forward_hr" and changed:
             raise WorkflowError(
                 "You changed amounts or rejected requests: forward the settlement to HR for review.", "has_changes"
@@ -1156,10 +1489,27 @@ def auditor_submit(link, decision: str, note, bank: tuple | None, request) -> tu
         link.submitted_at, link.decision = now, decision
         link.save(update_fields=["submitted_at", "decision"])
         batch.auditor_submitted_at, batch.auditor_submitted_note = now, note
-        batch.auditor_outcome = "changes" if changed else "approved"
-        if changed:
+        returned = decision == "changes_forward_hr"
+        batch.auditor_outcome = "changes" if returned else "approved"
+        if returned:
             batch.stage = B.STAGE_AUDITOR_CHANGES
-            _log(batch, "auditor_changes", AUDITOR_NAME, note, changes=sum(1 for i in items if i.auditor_action))
+            for i in items:
+                # HR's settlement as the auditor saw it, for EVERY request: the next round shows what HR changed,
+                # also on a request the auditor did not flag
+                _snap_final(i, batch.auditor_round, batch.finalized_by)
+                if i.auditor_action in ("reduce", "reject") or (i.auditor_remark or "").strip():
+                    _snap_auditor(i, batch.auditor_round)
+                    i.rework = "auditor"
+                i.save(update_fields=["rework", "trail", "updated_at"])
+            _log(
+                batch,
+                "auditor_changes",
+                AUDITOR_NAME,
+                note,
+                round=batch.auditor_round,
+                changes=sum(1 for i in items if i.auditor_action in ("reduce", "reject")),
+                remarks=len(remarked),
+            )
         else:
             _apply_settlement(batch, None, AUDITOR_NAME, after)
             batch.stage = B.STAGE_ACCOUNTS_SEND
@@ -1265,6 +1615,10 @@ def portal_json(link, batch: B) -> dict:
                     "amount": float(amount) if amount is not None else None,
                     "remark": remark,
                 },
+                # with the auditor: pending (not reviewed yet, at the top) | approved | rejected (2026-11-27)
+                "review": review_state(i, batch.stage),
+                # the earlier rounds on this request (the auditor's earlier change and HR's answer)
+                "trail": [t for t in (i.trail or []) if t.get("role") in ("auditor", "hr_final")],
             }
         )
     t = _totals(batch)
@@ -1299,6 +1653,13 @@ def portal_json(link, batch: B) -> dict:
             "finalNote": batch.final_note,
             "mdConfirmedBy": batch.md_confirmed_by or None,
             "mdNote": batch.md_note,
+            # the auditor's review round: 2+ = HR reworked the auditor's changes and resubmitted it (2026-11-27)
+            "round": batch.auditor_round,
+            "resubmittedAt": batch.changes_accepted_at.isoformat()
+            if batch.auditor_round > 1 and batch.changes_accepted_at
+            else None,
+            "resubmittedBy": (batch.changes_accepted_by or None) if batch.auditor_round > 1 else None,
+            "resubmitNote": batch.changes_note if batch.auditor_round > 1 else "",
         },
         "items": out_items,
         "totals": {
@@ -1309,6 +1670,7 @@ def portal_json(link, batch: B) -> dict:
             "hrApprovedAmount": float(hr_total),
             "changes": sum(1 for i in items if i.auditor_action in ("reduce", "reject")),
             "remarks": sum(1 for i in items if (i.auditor_remark or "").strip()),
+            "pending": sum(1 for i in items if review_state(i, batch.stage) == "pending"),
         },
         "accounts": {"to": list(row.accounts_emails or []), "cc": list(row.accounts_cc or [])},
         "link": {
@@ -1391,44 +1753,122 @@ def complete_without_bank_file(batch: B, note, by: str) -> B:
 # ─────────────────────────── JSON ───────────────────────────
 
 
+def _count(batch: B | None, action: str) -> int:
+    return sum(1 for h in (batch.history or []) if h.get("action") == action) if batch is not None else 0
+
+
+def _last(batch: B | None, action: str) -> dict | None:
+    if batch is None:
+        return None
+    return next((h for h in reversed(batch.history or []) if h.get("action") == action), None)
+
+
+def _times(n: int) -> str:
+    return "once" if n == 1 else f"{n} times"
+
+
+def flow_json(batch: B | None) -> dict:
+    """The branching tracker's facts (owner 2026-11-27): which round of the MD's / auditor's review this is, how often
+    each rework loop was gone round, the path the MD chose (to HR Final Settlement or directly to the auditor) and who
+    sent the bank file."""
+    if batch is None:
+        return {
+            "mdRound": 1,
+            "auditorRound": 1,
+            "mdCycles": 0,
+            "auditorCycles": 0,
+            "mdPath": None,
+            "accountsVia": None,
+            "mdReturn": None,
+        }
+    md_path = None
+    if batch.finalized_via == "md":
+        md_path = "direct"
+    elif batch.md_confirmed_at is not None:
+        md_path = "hr"
+    return {
+        "mdRound": batch.md_round,
+        "auditorRound": batch.auditor_round,
+        "mdCycles": _count(batch, "md_returned"),
+        "auditorCycles": _count(batch, "auditor_changes"),
+        "mdPath": md_path,
+        "accountsVia": batch.accounts_sent_via or None,
+        # the MD's latest Return to HR for rework, with their instructions
+        "mdReturn": {
+            "at": batch.md_returned_at.isoformat(),
+            "by": batch.md_returned_by or None,
+            "note": batch.md_return_note,
+        }
+        if batch.md_returned_at
+        else None,
+    }
+
+
 def tracker_json(batch: B | None, received: int) -> list[dict]:
     """The stages with done / current / pending / skipped, when and by whom, what happened (`detail`) and what to do at
-    the current one. "HR Review of Auditor Changes" is skipped when the auditor approved without changes (or HR confirmed
-    the review by hand); the Accounts step says whether HR or the auditor sent the bank file."""
+    the current one. The two rework loops (HR Rework (MD Changes) / (Auditor Changes)) are "done" once gone round (with
+    `cycles`), "current" while HR reworks, and "skipped" when the review they hang under passed without one. HR Final
+    Settlement is skipped when the MD sent the settlement directly to the auditor; the Accounts step says whether HR or
+    the auditor sent the bank file."""
     current = STAGE_INDEX.get(batch.stage, 1) if batch is not None else (1 if received else 0)
     stamps: dict = {}
     details: dict = {}
     skipped: set = set()
+    cycles = {key: _count(batch, back) for key, (back, _) in LOOPS.items()}
     if batch is not None:
         outcome = batch.auditor_outcome or ""
         auditor_at = batch.auditor_submitted_at or batch.auditor_confirmed_at
         auditor_by = AUDITOR_NAME if batch.auditor_submitted_at else batch.auditor_confirmed_by
+        md_at, md_by = batch.md_confirmed_at, batch.md_confirmed_by
+        if batch.stage == B.STAGE_MD_CHANGES:  # the MD's latest answer was a return
+            md_at, md_by = batch.md_returned_at, batch.md_returned_by
         stamps = {
             "hr_review": (batch.forwarded_at, batch.forwarded_by),
-            "md_review": (batch.md_confirmed_at, batch.md_confirmed_by),
+            "md_review": (md_at, md_by),
             "hr_final": (batch.finalized_at, batch.finalized_by),
             "auditor_send": (batch.auditor_sent_at, batch.auditor_sent_by),
             "auditor_review": (auditor_at, auditor_by),
-            "auditor_changes": (batch.changes_accepted_at, batch.changes_accepted_by),
             "accounts_send": (batch.accounts_sent_at, batch.accounts_sent_by),
             "completed": (batch.completed_at, ""),
         }
+        for key, (_, out) in LOOPS.items():
+            last = _last(batch, out)
+            if last:
+                stamps[key] = (datetime.fromisoformat(last["at"]), last.get("by") or "")
         details = {
+            "md_review": "Returned to HR for rework"
+            if batch.stage == B.STAGE_MD_CHANGES
+            else (
+                ("Approved, sent directly to the auditor" if batch.finalized_via == "md" else "Approved, sent to HR")
+                if batch.md_confirmed_at
+                else None
+            ),
             "auditor_review": {
                 "approved": "Approved by the auditor",
-                "changes": "The auditor changed the settlement",
+                "changes": "Returned to HR for rework",
                 "confirmed_by_hr": "Confirmed by HR (by hand)",
             }.get(outcome),
             "accounts_send": {"auditor": "Sent by the auditor", "hr": "Sent by HR"}.get(batch.accounts_sent_via or ""),
+            "md_changes": f"Reworked and resubmitted {_times(cycles['md_changes'])}" if cycles["md_changes"] else None,
+            "auditor_changes": f"Reworked and resubmitted {_times(cycles['auditor_changes'])}"
+            if cycles["auditor_changes"]
+            else None,
         }
-        if current > STAGE_INDEX[B.STAGE_AUDITOR_CHANGES] and outcome != "changes":
-            skipped.add("auditor_changes")
         if batch.finalized_via == "md":
             skipped.add("hr_final")
     out = []
     for index, (key, label) in enumerate(TRACKER):
+        loop = key in LOOPS
         if index == 0:
             state = "done" if received else "current"
+        elif loop and batch is not None and batch.stage == key:
+            state = "current"
+        elif loop and cycles.get(key):
+            state = "done"
+        elif loop:
+            # passed the review it hangs under without a return: no rework was needed
+            under = STAGE_INDEX[B.STAGE_MD_REVIEW] if key == "md_changes" else STAGE_INDEX[B.STAGE_AUDITOR_REVIEW]
+            state = "skipped" if current > under else "pending"
         elif key in skipped:
             state = "skipped"
         elif index < current:
@@ -1438,6 +1878,34 @@ def tracker_json(batch: B | None, received: int) -> list[dict]:
         else:
             state = "pending"
         at, by = stamps.get(key, (None, ""))
+        # a review in its second round or later is current again: say which round
+        round_no = None
+        if batch is not None and key == "md_review":
+            round_no = batch.md_round
+        elif batch is not None and key == "auditor_review":
+            round_no = batch.auditor_round
+        action = None
+        if batch is not None and state == "current":
+            action = NEXT_ACTION.get(batch.stage, "")
+            if key == "md_review" and batch.md_round > 1:
+                action = (
+                    f"MD: review HR's revised settlement (round {batch.md_round}). No changes: approve it; changes or "
+                    "corrections: return it to HR again."
+                )
+            elif key == "auditor_send" and batch.auditor_round > 1:
+                action = f"HR: send the revised settlement to the auditor (round {batch.auditor_round})."
+        if state == "done":
+            detail = details.get(key)
+        elif state == "skipped":
+            detail = {
+                "hr_final": "Finalized directly by the MD",
+                "md_changes": "No MD changes",
+                "auditor_changes": "No auditor changes",
+            }.get(key)
+        elif state == "current" and key in ("md_changes", "auditor_changes") and cycles.get(key, 0) > 1:
+            detail = f"Rework round {cycles[key]}"
+        else:
+            detail = None
         out.append(
             {
                 "key": key,
@@ -1445,14 +1913,12 @@ def tracker_json(batch: B | None, received: int) -> list[dict]:
                 "state": state,
                 "at": at.isoformat() if at and state == "done" else None,
                 "by": (by or None) if state == "done" else None,
-                "detail": details.get(key)
-                if state == "done"
-                else (
-                    ("Finalized directly by the MD" if key == "hr_final" else "No auditor changes")
-                    if state == "skipped"
-                    else None
-                ),
-                "action": NEXT_ACTION.get(batch.stage, "") if (batch is not None and state == "current") else None,
+                "detail": detail,
+                "action": action,
+                # a rework loop: how often it was gone round; a review: which round it is in
+                "loop": loop,
+                "cycles": cycles.get(key, 0) if loop else None,
+                "round": round_no,
             }
         )
     if batch is None and received == 0:
@@ -1460,7 +1926,38 @@ def tracker_json(batch: B | None, received: int) -> list[dict]:
     return out
 
 
-def item_json(item: I, *, include_bank: bool) -> dict:
+def review_state(item: I, stage: str) -> str:
+    """Where a request stands with the reviewer of the batch's current stage (owner 2026-11-27: waiting ones at the top,
+    approved ones below, rejected ones below those; a request reopened with Rework waits again): "pending" |
+    "approved" | "rejected"."""
+    rejected = I.DECISION_REJECTED
+    if stage == B.STAGE_HR_REVIEW:
+        if not item.hr_action:
+            return "pending"
+        return "rejected" if item.hr_action == "reject" else "approved"
+    if stage == B.STAGE_MD_REVIEW:
+        if not item.md_decision or item.md_decided_at is None:
+            return "pending"  # undecided, or HR's proposal still to be confirmed by the MD
+        return "rejected" if item.md_decision == rejected else "approved"
+    if stage == B.STAGE_MD_CHANGES:
+        if item.rework:
+            return "pending"
+        return "rejected" if item.hr_action == "reject" else "approved"
+    if stage in (B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES):
+        if item.rework or not item.final_decision:
+            return "pending"
+        return "rejected" if item.final_decision == rejected else "approved"
+    if stage == B.STAGE_AUDITOR_REVIEW:
+        if item.final_decision == rejected or item.auditor_action == "reject":
+            return "rejected"
+        return "approved" if item.auditor_action in ("approve", "reduce") else "pending"
+    decision = effective(item)[0]
+    if decision == rejected:
+        return "rejected"
+    return "approved" if decision == I.DECISION_APPROVED else "pending"
+
+
+def item_json(item: I, *, include_bank: bool, stage: str | None = None) -> dict:
     from ..settlement_views import advance_json
 
     adv = item.advance
@@ -1473,10 +1970,21 @@ def item_json(item: I, *, include_bank: bool) -> dict:
         "hrNote": item.hr_note,
         # HR's review proposal (2026-11-27): "" | reduce | reject, the amount; the remark is hrNote
         "hr": {
+            # null: not reviewed yet (kept as asked) | approve (kept as asked) | reduce | reject
             "action": item.hr_action or None,
             "amount": float(item.hr_amount) if item.hr_amount is not None else None,
             "remark": item.hr_note,
         },
+        # the request with the current stage's reviewer: pending (at the top) | approved | rejected (2026-11-27)
+        "review": review_state(item, stage or item.batch.stage),
+        # flagged for HR's rework by the MD / the auditor, and not answered yet
+        "rework": item.rework or None,
+        # the MD's own decision differs from HR's proposal (MD Review: the MD must return the settlement to HR)
+        "mdChanged": md_changed(item),
+        "mdRemarked": md_remarked(item),
+        # the earlier rounds' decisions on this request: [{at, by, role: hr|md|hr_final|auditor, round, action, amount,
+        # remark}]
+        "trail": item.trail or [],
         "md": {
             "decision": item.md_decision or None,
             "amount": md_amount,
@@ -1574,6 +2082,9 @@ def batch_json(batch: B, *, viewer: str) -> dict:
     st = batch.stage
     hr = viewer == "hr"
     files = list(batch.files.all()) if hr else []
+    states = [review_state(i, st) for i in items]
+    md_changes = sum(1 for i in items if md_changed(i))
+    waiting_rework = sum(1 for i in items if i.rework)
     return {
         "id": batch.id,
         "advanceType": batch.advance_type,
@@ -1587,6 +2098,7 @@ def batch_json(batch: B, *, viewer: str) -> dict:
         "stageLabel": batch.get_stage_display(),
         "nextAction": NEXT_ACTION.get(st, ""),
         "tracker": tracker_json(batch, len(items)),
+        "flow": flow_json(batch),
         "counts": {
             "total": len(items),
             "mdDecided": md_done,
@@ -1595,6 +2107,13 @@ def batch_json(batch: B, *, viewer: str) -> dict:
             "undecided": len(items) - len(approved) - len(rejected),
             "warning": sum(1 for d in flags if leave_flag(d) == "warning"),
             "critical": sum(1 for d in flags if leave_flag(d) == "critical"),
+            # with the current stage's reviewer (2026-11-27)
+            "pending": states.count("pending"),
+            "reviewedApproved": states.count("approved"),
+            "reviewedRejected": states.count("rejected"),
+            # the MD's decisions that differ from HR's proposals; requests waiting for HR's rework answer
+            "mdChanges": md_changes,
+            "rework": waiting_rework,
         },
         "amounts": {
             "requested": float(requested),
@@ -1638,20 +2157,40 @@ def batch_json(batch: B, *, viewer: str) -> dict:
             "sentVia": batch.accounts_sent_via or None,  # "hr" | "auditor"
         },
         "completedAt": batch.completed_at.isoformat() if batch.completed_at else None,
+        # the re-approval rounds (2026-11-27)
+        "mdRound": batch.md_round,
+        "auditorRound": batch.auditor_round,
         "history": batch.history or [],
         "files": [file_json(f) for f in files],
-        "items": [item_json(i, include_bank=hr) for i in items],
+        "items": [item_json(i, include_bank=hr, stage=st) for i in items],
         "actions": {
-            "canEditHrNotes": hr and st == B.STAGE_HR_REVIEW,
+            "canEditHrNotes": hr and st in (B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES),
             "canForward": hr and st == B.STAGE_HR_REVIEW and bool(items),
+            # Rework (reopen a request HR decided) in every HR stage that decides requests (2026-11-27)
+            "canRework": hr and st in (B.STAGE_HR_REVIEW, B.STAGE_MD_CHANGES, B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES),
             "canDecideMd": (not hr) and st == B.STAGE_MD_REVIEW,
-            "canConfirmMd": (not hr) and st == B.STAGE_MD_REVIEW and md_done == len(items) and bool(items),
-            "canEditFinal": hr and st == B.STAGE_HR_FINAL,
+            # the MD approves only a settlement without changes from HR's proposals; with changes they return it
+            "canConfirmMd": (not hr)
+            and st == B.STAGE_MD_REVIEW
+            and md_done == len(items)
+            and bool(items)
+            and md_changes == 0,
+            "canReturnMd": (not hr) and st == B.STAGE_MD_REVIEW and bool(items),
+            # HR Rework (MD Changes): answer the MD (accept / keep / change), then Resubmit to the MD
+            "canResolveMd": hr and st == B.STAGE_MD_CHANGES,
+            "canResubmitMd": hr and st == B.STAGE_MD_CHANGES and waiting_rework == 0,
+            "canEditFinal": hr and st in (B.STAGE_HR_FINAL, B.STAGE_AUDITOR_CHANGES),
             "canFinalize": hr and st == B.STAGE_HR_FINAL,
             "canSendAuditor": hr and st == B.STAGE_AUDITOR_SEND,
             "canResendAuditor": hr and st == B.STAGE_AUDITOR_REVIEW,
             "canConfirmAuditor": hr and st == B.STAGE_AUDITOR_REVIEW,
-            "canAcceptAuditorChanges": hr and st == B.STAGE_AUDITOR_CHANGES,
+            # HR Rework (Auditor Changes): answer the auditor, then Resubmit to the auditor (no more "accept & go to
+            # Accounts": only the auditor's approval of the revised settlement leads there)
+            "canResolveAuditor": hr and st == B.STAGE_AUDITOR_CHANGES,
+            "canResubmitAuditor": hr
+            and st == B.STAGE_AUDITOR_CHANGES
+            and waiting_rework == 0
+            and all(i.final_decision for i in items),
             "canSendAccounts": hr and st == B.STAGE_ACCOUNTS_SEND and bool(approved),
             "canCompleteWithoutBankFile": hr and st == B.STAGE_ACCOUNTS_SEND and not approved,
             "canResendAccounts": hr and st == B.STAGE_COMPLETED and bool(approved) and bool(batch.accounts_sent_at),
@@ -1679,6 +2218,7 @@ def month_json(month: int, year: int, *, viewer: str, advance_type: str) -> dict
         "outsideWorkflow": outside,
         "currentBatchId": current.id if current else None,
         "tracker": tracker_json(current, received) if current or not batches else tracker_json(None, received),
+        "flow": flow_json(current),
         "batches": [batch_json(b, viewer=viewer) for b in batches],
     }
 
@@ -1707,6 +2247,7 @@ def overview_json(month: int, year: int) -> dict:
                 "waitingForMd": sum(1 for b in batches if b.stage == B.STAGE_MD_REVIEW),
                 "currentBatch": current_json,
                 "tracker": tracker_json(current, received),
+                "flow": flow_json(current),
             }
         )
     return {

@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { historyLabel } from "@/components/settlement-flow/WorkflowFlow";
 import { advance, batch, fourItems, item, leave } from "./fixtures";
 import {
   bulkResultText,
+  changesReason,
+  hrExpected,
+  lastHistory,
+  mdChangedOf,
+  mdRoundOf,
+  pendingLabel,
+  RETURN_NOTE_MESSAGE,
+  returnState,
+  reviewOf,
+  sentBackToHr,
+  trailLine,
   confirmHrBody,
   eligibleLimit,
   hrProposal,
@@ -22,7 +34,7 @@ import {
   filterItems,
   filterOptions,
   hasProblems,
-  historyText,
+  historyFacts,
   istDate,
   istDateTime,
   istMonthKey,
@@ -153,12 +165,19 @@ describe("the decision rules", () => {
 });
 
 describe("the review before Confirm & Proceed", () => {
-  // Anita approved in full (10,000), Bala reduced 8,000 -> 5,000, Chitra rejected (50,000), Dinesh open (5,000)
+  // Anita approved in full (10,000), Bala reduced 8,000 -> 5,000, Chitra rejected (50,000), Dinesh open (5,000); Bala's
+  // and Chitra's are HR's proposals confirmed by the MD (no change from HR)
   const [a, b, c, d] = fourItems();
   const items = [
     decided(a, "approved", 10000),
-    decided(b, "approved", 5000, "Only the limit"),
-    decided(c, "rejected", null, "Too many leaves"),
+    {
+      ...decided(b, "approved", 5000, "Only the limit"),
+      hr: { action: "reduce" as const, amount: 5000, remark: "Only the limit" },
+    },
+    {
+      ...decided(c, "rejected", null, "Too many leaves"),
+      hr: { action: "reject" as const, amount: null, remark: "Too many leaves" },
+    },
     d,
   ];
 
@@ -225,6 +244,120 @@ describe("the review before Confirm & Proceed", () => {
     });
     const empty = batch({ items: [] });
     expect(confirmState(empty, reviewSummary([])).enabled).toBe(false);
+  });
+
+  it("never approves a settlement the MD changed from HR's proposals: it goes back to HR first", () => {
+    // Bala: HR proposed 5,000, the MD set 4,000; Chitra: HR proposed reject, the MD approved it in full
+    const changed = [
+      items[0],
+      { ...items[1], md: { ...items[1].md, amount: 4000 } },
+      { ...items[2], md: { decision: "approved" as const, amount: 50000, remark: "", decidedAt: "2026-11-26" } },
+      decided(d, "approved", 5000),
+    ];
+    const b2 = batch({ items: changed });
+    expect(b2.counts.mdChanges).toBe(2);
+    expect(b2.actions.canConfirmMd).toBe(false);
+    const s = reviewSummary(b2.items);
+    expect(s).toMatchObject({ changed: 2, changedIds: [12, 13], undecided: 0 });
+    expect(s.rows.filter((r) => r.changed).map((r) => r.id)).toEqual([12, 13]);
+    expect(confirmState(b2, s)).toEqual({
+      enabled: false,
+      reason:
+        "You changed 2 requests from HR's proposal — return the settlement to HR; you approve it once HR resubmits.",
+    });
+    // the change outranks the open requests: approving is off either way
+    expect(
+      confirmState(batch({ items: [...changed.slice(0, 3), d] }), reviewSummary([...changed.slice(0, 3), d])).reason,
+    ).toBe(changesReason(2));
+    // a pre-filled proposal not yet confirmed is no change; the server's own flag wins when it sends one
+    expect(mdChangedOf({ ...items[1], md: { ...items[1].md, amount: 4000, decidedAt: null, fromHr: true } })).toBe(
+      false,
+    );
+    expect(mdChangedOf({ ...items[0], mdChanged: true })).toBe(true);
+    expect(hrExpected(a)).toEqual({ decision: "approved", amount: 10000 });
+  });
+
+  it("asks for instructions on a return only when nothing changed and nothing was remarked", () => {
+    expect(returnState({ changed: 1, remarked: 0 }, "")).toEqual({ noteRequired: false, problem: null });
+    expect(returnState({ changed: 0, remarked: 1 }, "")).toEqual({ noteRequired: false, problem: null });
+    expect(returnState({ changed: 0, remarked: 0 }, "  ok ")).toEqual({
+      noteRequired: true,
+      problem: RETURN_NOTE_MESSAGE,
+    });
+    expect(returnState({ changed: 0, remarked: 0 }, "Check Bala's leave")).toEqual({
+      noteRequired: true,
+      problem: null,
+    });
+  });
+});
+
+describe("rework and re-approval", () => {
+  const [a, b, c, d] = fourItems();
+
+  it("puts the requests waiting for the MD first, then approved, then rejected - a reworked one waits again", () => {
+    const fromHr = {
+      ...b,
+      md: { decision: "approved" as const, amount: 6000, remark: "Limit", decidedAt: null, fromHr: true },
+    };
+    expect(reviewOf(a, "md_review")).toBe("pending");
+    expect(reviewOf(fromHr, "md_review")).toBe("pending"); // HR's proposal still to confirm
+    expect(reviewOf(decided(a, "approved", 10000), "md_review")).toBe("approved");
+    expect(reviewOf(decided(c, "rejected", null, "No"), "md_review")).toBe("rejected");
+    expect(reviewOf({ ...decided(c, "rejected", null, "No"), review: "pending" as const }, "md_review")).toBe(
+      "pending",
+    );
+    expect(reviewOf({ ...d, rework: "md" as const }, "md_changes")).toBe("pending");
+    expect(pendingLabel("md_review")).toBe("Waiting for your decision");
+    expect(pendingLabel("md_changes")).toBe("Waiting for HR's answer");
+    expect(pendingLabel("completed")).toBe("Waiting");
+  });
+
+  it("says, in round 2, what the MD set in round 1 and what HR answers now", () => {
+    const trail = [
+      { at: "", by: "Priya (HR)", role: "hr" as const, round: 1, action: "reduce", amount: 6000, remark: "Limit" },
+      { at: "", by: "MD", role: "md" as const, round: 1, action: "approved", amount: 3000, remark: "Too much leave" },
+    ];
+    // HR now proposes 4,000 (changed its proposal)
+    const revised = { ...b, trail, hr: { action: "reduce" as const, amount: 4000, remark: "Met halfway" } };
+    expect(trailLine(revised, 2)).toEqual({
+      round: 1,
+      you: "Round 1: you set ₹3,000",
+      hr: "HR now proposes ₹4,000",
+      detail: ["Round 1: HR proposed ₹6,000 (“Limit”) · you set ₹3,000 (“Too much leave”)"],
+    });
+    // HR took the MD's amount
+    expect(trailLine({ ...revised, hr: { action: "reduce", amount: 3000, remark: "" } }, 2)?.hr).toBe("HR accepted it");
+    // a rejection, and HR standing by its full approval
+    const rejected = {
+      ...c,
+      trail: [{ ...trail[1], action: "rejected", amount: null, remark: "No" }],
+      hr: { action: "approve" as const, amount: null, remark: "" },
+    };
+    expect(trailLine(rejected, 2)).toMatchObject({ you: "Round 1: you rejected it", hr: "HR now proposes ₹50,000" });
+    // the round being reworked right now (HR Rework, round 1) has no earlier round yet
+    expect(trailLine(revised, 1)).toBeNull();
+    expect(trailLine(a, 3)).toBeNull();
+  });
+
+  it("reads the round, the latest return and where HR Rework stands", () => {
+    expect(mdRoundOf(batch())).toBe(1);
+    expect(mdRoundOf(batch({ mdRound: 3 }))).toBe(3);
+    const h = batch({
+      history: [
+        { at: "1", by: "MD", action: "md_returned", note: "first", round: 1 },
+        { at: "2", by: "HR", action: "md_resubmitted", note: "", round: 2 },
+        { at: "3", by: "MD", action: "md_returned", note: "second", round: 2 },
+      ],
+    });
+    expect(lastHistory(h, "md_returned")?.note).toBe("second");
+    expect(lastHistory(h, "auditor_sent")).toBeNull();
+    expect(sentBackToHr("md_changes")).toBe(false);
+    expect(sentBackToHr("hr_final")).toBe(true);
+    expect(requestStatus({ ...a, rework: "md" as const }, "md_changes")).toEqual({
+      text: "Returned to HR",
+      tone: "sand",
+    });
+    expect(requestStatus(a, "md_changes").text).toBe("No change asked");
   });
 });
 
@@ -388,16 +521,20 @@ describe("the tabs, the dropdowns and the history", () => {
     ]);
   });
 
-  it("says what each history step was, with its figures", () => {
-    expect(historyText({ at: "", by: "Priya (HR)", action: "forwarded", count: 4 })).toEqual({
-      title: "HR forwarded the batch to you",
-      facts: "4 requests",
-    });
-    expect(historyText({ at: "", by: "", action: "finalized", approved: 3, rejected: 1, total: 23000 })).toEqual({
-      title: "HR finalized the settlement",
-      facts: "3 approved · 1 rejected · ₹23,000",
-    });
-    expect(historyText({ at: "", by: "", action: "something_new" }).title).toBe("something new");
+  it("says what each history step was (the shared tracker's words), with its figures", () => {
+    const forwarded = { at: "", by: "Priya (HR)", action: "forwarded", count: 4 };
+    expect(historyLabel(forwarded).text).toBe("HR forwarded it to the MD");
+    expect(historyFacts(forwarded)).toBe("4 requests");
+    expect(historyFacts({ at: "", by: "", action: "finalized", approved: 3, rejected: 1, total: 23000 })).toBe(
+      "3 approved · 1 rejected · ₹23,000",
+    );
+    const back = { at: "", by: "MD", action: "md_returned", round: 1, changes: 2, remarks: 1 };
+    expect(historyLabel(back)).toEqual({ text: "MD returned it to HR for rework (round 1)", tone: "rework" });
+    expect(historyFacts(back)).toBe("2 changed · 1 with your remark");
+    expect(historyFacts({ at: "", by: "HR", action: "md_resubmitted", round: 2, count: 1 })).toBe(
+      "1 request to look at again",
+    );
+    expect(historyFacts({ at: "", by: "", action: "something_new" })).toBe("");
   });
 });
 
@@ -442,6 +579,12 @@ describe("round 5: HR's proposal, the eligible limit, the status and bulk decisi
       md: { decision: "approved" as const, amount: 6000, remark: "x", decidedAt: null, fromHr: true },
     };
     expect(requestStatus(fromHr, "md_review").text).toBe("HR's proposal — confirm it");
+    expect(
+      requestStatus(
+        { ...fromHr, trail: [{ at: "", by: "", role: "md", round: 1, action: "approved", amount: 5000, remark: "" }] },
+        "md_review",
+      ).text,
+    ).toBe("HR's revised proposal — confirm it");
     expect(requestStatus({ ...fromHr, md: { ...fromHr.md, fromHr: false } }, "md_review").text).toBe("Decided by you");
     expect(requestStatus(fromHr, "hr_final").text).toBe("With HR (final settlement)");
     const paid = { ...fromHr, applied: true, effective: { decision: "approved" as const, amount: 6000, remark: "" } };

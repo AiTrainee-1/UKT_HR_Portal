@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Ban, Loader2, MessageSquarePlus, Scissors } from "lucide-react";
+import { Ban, Loader2, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,17 +15,15 @@ import { cn } from "@/lib/utils";
 import { REMARK_MAX } from "@/pages/hr/settlement/logic";
 import { formatMoney } from "@/pages/hr/settlement/shared";
 import type { PortalChangeInput, PortalItem } from "./api";
-import { changeBody, changeProblems, refusalText, termEmiText, termMonths, type ChangeMode } from "./logic";
+import { changeBody, changeProblems, refusalText, type ChangeMode } from "./logic";
 import { HEADING_FONT } from "./parts";
 
 const TITLE: Record<ChangeMode, string> = {
-  reduce: "Reduce the approved amount",
   reject: "Reject this request",
   remark: "Remark on this request",
 };
 
 const MODE_ICON = {
-  reduce: { icon: Scissors, className: "bg-amber-50 text-amber-700" },
   reject: { icon: Ban, className: "bg-rose-50 text-rose-700" },
   remark: { icon: MessageSquarePlus, className: "bg-[#006496]/10 text-[#006496]" },
 } as const;
@@ -40,9 +38,9 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 /**
- * One change by the auditor on one request: a smaller amount (with a remark), a rejection (with the reason), or a remark
- * alone. Checked here as the server checks it; the dialog stays open while it saves and shows the server's own words
- * when it is refused. A reduced amount shows what it changes (from -> to, and a Term Loan's new monthly EMI).
+ * One answer by the auditor on one request: a rejection (with the reason), or a remark alone - how the auditor asks HR
+ * for a change (owner 2026-11-27: the auditor does not reduce amounts; HR does it in the rework). Checked here as the
+ * server checks it; the dialog stays open while it saves and shows the server's own words when it is refused.
  */
 export default function ChangeDialog({
   item,
@@ -58,7 +56,6 @@ export default function ChangeDialog({
   onSave: (item: PortalItem, body: PortalChangeInput) => Promise<void>;
   onClose: () => void;
 }) {
-  const [amount, setAmount] = useState("");
   const [remark, setRemark] = useState("");
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -66,13 +63,12 @@ export default function ChangeDialog({
 
   useEffect(() => {
     if (!item) return;
-    setAmount(mode === "reduce" && item.auditor.action === "reduce" ? String(item.auditor.amount ?? "") : "");
     setRemark(item.auditor.remark ?? "");
     setTried(false);
     setRefused(null);
   }, [item, mode]);
 
-  const problems = item ? changeProblems(item, mode, amount, remark) : {};
+  const problems = item ? changeProblems(item, mode, "", remark) : {};
   const shown = tried ? problems : {};
   const save = async () => {
     if (!item) return;
@@ -81,7 +77,7 @@ export default function ChangeDialog({
     if (Object.values(problems).some(Boolean)) return;
     setBusy(true);
     try {
-      await onSave(item, changeBody(item, mode, amount, remark));
+      await onSave(item, changeBody(item, mode, "", remark));
     } catch (err) {
       setRefused(refusalText(err, "The change could not be saved.").text);
     } finally {
@@ -92,9 +88,6 @@ export default function ChangeDialog({
   const a = item?.advance;
   const approved = item?.final.decision === "approved";
   const limit = term ? (a?.termLimit ?? null) : (a?.earnings?.limit ?? null);
-  const reduced = Number(amount.replace(/,/g, ""));
-  const preview = mode === "reduce" && item && amount.trim() !== "" && !problems.amount && reduced > 0;
-  const months = item ? termMonths(item) : null;
   const { icon: Icon, className: iconTone } = MODE_ICON[mode];
   return (
     <Dialog open={!!item} onOpenChange={(open) => !open && !busy && onClose()}>
@@ -131,62 +124,6 @@ export default function ChangeDialog({
               <Fact label={term ? "Eligible limit" : "Limit"} value={limit != null ? formatMoney(limit) : "—"} />
             </dl>
           )}
-          {mode === "reduce" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="portal-change-amount" className="text-[13px] font-semibold text-slate-800">
-                Reduced amount <span className="text-rose-600">*</span>
-              </Label>
-              <div className="relative">
-                <span
-                  className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm font-semibold text-slate-500"
-                  aria-hidden
-                >
-                  ₹
-                </span>
-                <input
-                  id="portal-change-amount"
-                  type="number"
-                  inputMode="decimal"
-                  min={1}
-                  step="any"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder={item?.final.amount ? `Less than ${formatMoney(item.final.amount)}` : ""}
-                  aria-invalid={!!shown.amount}
-                  aria-describedby={shown.amount ? "portal-change-amount-error" : undefined}
-                  className={cn(
-                    "h-11 w-full rounded-lg border bg-white pl-7 pr-3 text-[15px] font-semibold tabular-nums text-slate-900 outline-none transition focus:border-[#006496] focus:ring-2 focus:ring-[#006496]/20",
-                    shown.amount ? "border-rose-400" : "border-slate-300",
-                  )}
-                  data-testid="portal-change-amount"
-                />
-              </div>
-              {shown.amount && (
-                <p id="portal-change-amount-error" role="alert" className="text-xs font-medium text-rose-700">
-                  {shown.amount}
-                </p>
-              )}
-              {preview && item && (
-                <div
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12.5px] text-amber-900"
-                  data-testid="portal-change-preview"
-                >
-                  <span className="tabular-nums line-through opacity-70">{formatMoney(item.final.amount)}</span>
-                  <ArrowRight size={13} aria-label="to" />
-                  <b className="tabular-nums">{formatMoney(reduced)}</b>
-                  <span className="text-amber-800">
-                    ({formatMoney(Math.round(((item.final.amount ?? 0) - reduced) * 100) / 100)} less)
-                  </span>
-                  {term && termEmiText(reduced, months) && (
-                    <span className="basis-full text-[12px]">
-                      New EMI: {termEmiText(reduced, months)}
-                      {months ? ` over ${months} ${months === 1 ? "month" : "months"}` : ""}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
           <div className="space-y-1.5">
             <Label htmlFor="portal-change-remark" className="text-[13px] font-semibold text-slate-800">
               {mode === "reject" ? "Reason for rejecting" : "Remark"}
@@ -201,9 +138,7 @@ export default function ChangeDialog({
               placeholder={
                 mode === "reject"
                   ? "e.g. Too many absent days this month"
-                  : mode === "reduce"
-                    ? "e.g. Limit the advance to the days worked"
-                    : "A note for HR on this request (leave empty to remove it)"
+                  : "e.g. Please lower this to the days worked (leave empty to remove the remark)"
               }
               aria-invalid={!!shown.remark}
               aria-describedby={shown.remark ? "portal-change-remark-error" : "portal-change-remark-hint"}
@@ -217,8 +152,8 @@ export default function ChangeDialog({
             ) : (
               <p id="portal-change-remark-hint" className="text-[11.5px] text-slate-500">
                 {mode === "remark"
-                  ? "A remark alone does not change the amount."
-                  : "HR sees this remark with your change."}
+                  ? "A remark does not change the amount: to have it changed, return the settlement to HR for rework."
+                  : "HR sees this reason with your rejection."}
               </p>
             )}
           </div>
@@ -246,7 +181,7 @@ export default function ChangeDialog({
             data-testid="portal-change-save"
           >
             {busy && <Loader2 size={14} className="animate-spin" />}
-            {mode === "reduce" ? "Save reduced amount" : mode === "reject" ? "Reject request" : "Save remark"}
+            {mode === "reject" ? "Reject request" : "Save remark"}
           </Button>
         </DialogFooter>
       </DialogContent>

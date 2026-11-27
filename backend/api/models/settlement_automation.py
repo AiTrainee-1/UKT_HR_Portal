@@ -58,19 +58,23 @@ class SettlementBatch(models.Model):
 
     STAGE_HR_REVIEW = "hr_review"
     STAGE_MD_REVIEW = "md_review"
+    # the MD changed amounts / rejected requests / asked for corrections: HR reworks and resubmits to the MD (2026-11-27)
+    STAGE_MD_CHANGES = "md_changes"
     STAGE_HR_FINAL = "hr_final"
     STAGE_AUDITOR_SEND = "auditor_send"
     STAGE_AUDITOR_REVIEW = "auditor_review"
-    STAGE_AUDITOR_CHANGES = "auditor_changes"  # the auditor changed the settlement: HR reviews and finalizes it again
+    # the auditor changed the settlement or asked for corrections: HR reworks it and resubmits it to the auditor
+    STAGE_AUDITOR_CHANGES = "auditor_changes"
     STAGE_ACCOUNTS_SEND = "accounts_send"
     STAGE_COMPLETED = "completed"
     STAGES = [
         (STAGE_HR_REVIEW, "HR Review"),
         (STAGE_MD_REVIEW, "MD Review & Approval"),
+        (STAGE_MD_CHANGES, "HR Rework (MD Changes)"),
         (STAGE_HR_FINAL, "HR Final Settlement"),
         (STAGE_AUDITOR_SEND, "Send to Auditor"),
         (STAGE_AUDITOR_REVIEW, "Auditor Review"),
-        (STAGE_AUDITOR_CHANGES, "HR Review of Auditor Changes"),
+        (STAGE_AUDITOR_CHANGES, "HR Rework (Auditor Changes)"),
         (STAGE_ACCOUNTS_SEND, "Send Bank File to Accounts"),
         (STAGE_COMPLETED, "Completed"),
     ]
@@ -89,6 +93,13 @@ class SettlementBatch(models.Model):
     md_confirmed_at = models.DateTimeField(null=True, blank=True)
     md_confirmed_by = models.TextField(blank=True, default="")
     md_note = models.TextField(blank=True, default="")  # the MD's instructions for the whole batch
+    # the re-approval cycles (owner 2026-11-27): which round of the MD's / auditor's review this is (1 = the first), and
+    # the MD's latest "Return to HR for rework" with their instructions
+    md_round = models.IntegerField(default=1, db_default=1)
+    auditor_round = models.IntegerField(default=1, db_default=1)
+    md_returned_at = models.DateTimeField(null=True, blank=True)
+    md_returned_by = models.TextField(blank=True, default="", db_default="")
+    md_return_note = models.TextField(blank=True, default="", db_default="")
 
     finalized_at = models.DateTimeField(null=True, blank=True)
     finalized_by = models.TextField(blank=True, default="")
@@ -143,8 +154,9 @@ class SettlementBatchItem(models.Model):
     batch = models.ForeignKey(SettlementBatch, on_delete=models.CASCADE, related_name="items")
     advance = models.OneToOneField(Advance, on_delete=models.CASCADE, related_name="settlement_item")
     hr_note = models.TextField(blank=True, default="")
-    # HR's review before the MD (2026-11-27): a proposal - "" (keep) | reduce | reject, the reduced amount; the remark is
-    # `hr_note`. Forwarding pre-fills the MD's decision with it; the MD accepts or changes it.
+    # HR's review before the MD (2026-11-27): a proposal - "" (not reviewed yet: kept as asked) | approve (kept as asked,
+    # reviewed) | reduce | reject, the reduced amount; the remark is `hr_note`. Forwarding pre-fills the MD's decision with
+    # a reduce / reject; the MD accepts or changes it.
     hr_action = models.TextField(blank=True, default="", db_default="")
     hr_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
 
@@ -161,11 +173,19 @@ class SettlementBatchItem(models.Model):
     final_remark = models.TextField(blank=True, default="")
     final_changed_at = models.DateTimeField(null=True, blank=True)
 
-    # the auditor's change in the review portal (2026-11-27): "" (none) | reduce | reject, the amount, the remark
+    # the auditor's answer on one request in the review portal (2026-11-27): "" (not reviewed) | approve | reduce | reject,
+    # the amount, the remark
     auditor_action = models.TextField(blank=True, default="", db_default="")
     auditor_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     auditor_remark = models.TextField(blank=True, default="", db_default="")
     auditor_at = models.DateTimeField(null=True, blank=True)
+
+    # flagged for HR's rework (2026-11-27): "" | "md" (the MD changed it / asked for a correction) | "auditor"; cleared once
+    # HR answered it (accepted the change, kept or changed its own decision)
+    rework = models.TextField(blank=True, default="", db_default="")
+    # every earlier decision on the request, kept when a rework round replaces it: [{at, by, role, round, action,
+    # amount, remark}] (role hr | md | auditor)
+    trail = models.JSONField(default=list, blank=True, db_default=[])
 
     # the settlement was written to the advance (since 2026-11-27 once the audit is through: the auditor approved it,
     # HR accepted the auditor's changes, or HR confirmed the auditor's review by hand)

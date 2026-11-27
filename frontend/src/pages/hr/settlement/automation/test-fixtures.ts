@@ -67,6 +67,13 @@ export function item(
     final?: Partial<SettlementBatchItem["final"]>;
     auditor?: Partial<SettlementBatchItem["auditor"]>;
     applied?: boolean;
+    /** The rework round's fields (2026-11-27): where it stands with the stage's reviewer (left out: worked out from the
+     *  decisions as service.review_state does), the reviewer's flag, the MD's change / remark, earlier rounds. */
+    review?: SettlementBatchItem["review"];
+    rework?: SettlementBatchItem["rework"];
+    mdChanged?: boolean;
+    mdRemarked?: boolean;
+    trail?: SettlementBatchItem["trail"];
   } = {},
 ): SettlementBatchItem {
   const adv = advance({ id: 100 + id, employeeId: id, ...over.advance });
@@ -91,6 +98,11 @@ export function item(
     auditor,
     effective: effectiveFor(final, auditor),
     applied: over.applied ?? false,
+    ...(over.review !== undefined ? { review: over.review } : {}),
+    ...(over.rework !== undefined ? { rework: over.rework } : {}),
+    ...(over.mdChanged !== undefined ? { mdChanged: over.mdChanged } : {}),
+    ...(over.mdRemarked !== undefined ? { mdRemarked: over.mdRemarked } : {}),
+    ...(over.trail !== undefined ? { trail: over.trail } : {}),
   };
 }
 
@@ -117,6 +129,7 @@ export function withAuditor(
 const STAGES: SettlementStage[] = [
   "hr_review",
   "md_review",
+  "md_changes",
   "hr_final",
   "auditor_send",
   "auditor_review",
@@ -124,34 +137,61 @@ const STAGES: SettlementStage[] = [
   "accounts_send",
   "completed",
 ];
+/** service.TRACKER: ten stages, two of them the rework loops (2026-11-27). */
 const LABELS: [SettlementTrackerStep["key"], string][] = [
   ["received", "Employee Requests Received"],
   ["hr_review", "HR Review"],
   ["md_review", "MD Review & Approval"],
+  ["md_changes", "HR Rework (MD Changes)"],
   ["hr_final", "HR Final Settlement"],
   ["auditor_send", "Send to Auditor"],
   ["auditor_review", "Auditor Review"],
-  ["auditor_changes", "HR Review of Auditor Changes"],
+  ["auditor_changes", "HR Rework (Auditor Changes)"],
   ["accounts_send", "Send Bank File to Accounts"],
   ["completed", "Settlement Workflow Completed"],
 ];
+const LOOP_UNDER: Partial<Record<SettlementTrackerStep["key"], SettlementStage>> = {
+  md_changes: "md_review",
+  auditor_changes: "auditor_review",
+};
 
-/** The tracker as service.tracker_json draws it for a batch at `stage`. After the audit, HR Review of Auditor Changes
- *  is skipped unless `auditorChanged`; the audit and Accounts steps say what happened. */
+/** The tracker as service.tracker_json draws it for a batch at `stage` (the tracker's index of a stage is its
+ *  STAGE_INDEX). A rework loop is current while HR reworks, done once gone round (`mdCycles` / `auditorCycles`), skipped
+ *  once the review it hangs under passed without a return; the audit and Accounts steps say what happened. */
 export function trackerFor(
   stage: SettlementStage,
   action = "Do the next thing.",
-  { auditorChanged = false, sentVia = "hr" }: { auditorChanged?: boolean; sentVia?: "hr" | "auditor" } = {},
+  {
+    auditorChanged = false,
+    sentVia = "hr",
+    mdCycles = 0,
+    auditorCycles = auditorChanged ? 1 : 0,
+    mdRound = 1,
+    auditorRound = 1,
+  }: {
+    auditorChanged?: boolean;
+    sentVia?: "hr" | "auditor";
+    mdCycles?: number;
+    auditorCycles?: number;
+    mdRound?: number;
+    auditorRound?: number;
+  } = {},
 ): SettlementTrackerStep[] {
-  const current = stage === "completed" ? 8 : STAGES.indexOf(stage) + 1;
-  const changesAt = LABELS.findIndex(([key]) => key === "auditor_changes");
+  const current = STAGES.indexOf(stage) + 1;
   return LABELS.map(([key, label], index) => {
-    const skipped = key === "auditor_changes" && current > changesAt && !auditorChanged;
+    const under = LOOP_UNDER[key];
+    const cycles = key === "md_changes" ? mdCycles : key === "auditor_changes" ? auditorCycles : 0;
     const state: SettlementTrackerStep["state"] =
       index === 0
         ? "done"
-        : skipped
-          ? "skipped"
+        : under
+          ? stage === key
+            ? "current"
+            : cycles > 0
+              ? "done"
+              : current > STAGES.indexOf(under) + 1
+                ? "skipped"
+                : "pending"
           : index < current
             ? "done"
             : index === current
@@ -161,16 +201,22 @@ export function trackerFor(
               : "pending";
     const detail =
       state === "skipped"
-        ? "No auditor changes"
-        : state === "done" && key === "auditor_review"
-          ? auditorChanged
-            ? "The auditor changed the settlement"
-            : "Approved by the auditor"
-          : state === "done" && key === "accounts_send"
-            ? sentVia === "auditor"
-              ? "Sent by the auditor"
-              : "Sent by HR"
-            : null;
+        ? key === "md_changes"
+          ? "No MD changes"
+          : "No auditor changes"
+        : state === "done" && under
+          ? `Reworked and resubmitted ${cycles === 1 ? "once" : `${cycles} times`}`
+          : state === "done" && key === "md_review" && stage === "md_changes"
+            ? "Returned to HR for rework"
+            : state === "done" && key === "auditor_review"
+              ? stage === "auditor_changes"
+                ? "Returned to HR for rework"
+                : "Approved by the auditor"
+              : state === "done" && key === "accounts_send"
+                ? sentVia === "auditor"
+                  ? "Sent by the auditor"
+                  : "Sent by HR"
+                : null;
     return {
       key,
       label,
@@ -179,6 +225,9 @@ export function trackerFor(
       by: state === "done" && index > 0 ? "Priya HR" : null,
       detail,
       action: state === "current" ? action : null,
+      loop: !!under,
+      cycles: under ? cycles : null,
+      round: key === "md_review" ? mdRound : key === "auditor_review" ? auditorRound : null,
     };
   });
 }
@@ -186,31 +235,46 @@ export function trackerFor(
 export const NO_ACTIONS: SettlementBatchActions = {
   canEditHrNotes: false,
   canForward: false,
+  canRework: false,
   canDecideMd: false,
   canConfirmMd: false,
+  canReturnMd: false,
+  canResolveMd: false,
+  canResubmitMd: false,
   canEditFinal: false,
   canFinalize: false,
   canSendAuditor: false,
   canResendAuditor: false,
   canConfirmAuditor: false,
-  canAcceptAuditorChanges: false,
+  canResolveAuditor: false,
+  canResubmitAuditor: false,
   canSendAccounts: false,
   canCompleteWithoutBankFile: false,
   canResendAccounts: false,
 };
 
-/** The actions the server allows HR at a stage (service.batch_json, viewer "hr"). */
-export function actionsFor(stage: SettlementStage, anyApproved: boolean, accountsSent = false): SettlementBatchActions {
+/** The actions the server allows HR at a stage (service.batch_json, viewer "hr"). `answered`: no request waits for HR's
+ *  answer in a rework stage (Resubmit is open). */
+export function actionsFor(
+  stage: SettlementStage,
+  anyApproved: boolean,
+  accountsSent = false,
+  answered = false,
+): SettlementBatchActions {
   return {
     ...NO_ACTIONS,
-    canEditHrNotes: stage === "hr_review",
+    canEditHrNotes: stage === "hr_review" || stage === "md_changes",
     canForward: stage === "hr_review",
-    canEditFinal: stage === "hr_final",
+    canRework: stage === "hr_review" || stage === "md_changes" || stage === "hr_final" || stage === "auditor_changes",
+    canResolveMd: stage === "md_changes",
+    canResubmitMd: stage === "md_changes" && answered,
+    canEditFinal: stage === "hr_final" || stage === "auditor_changes",
     canFinalize: stage === "hr_final",
     canSendAuditor: stage === "auditor_send",
     canResendAuditor: stage === "auditor_review",
     canConfirmAuditor: stage === "auditor_review",
-    canAcceptAuditorChanges: stage === "auditor_changes",
+    canResolveAuditor: stage === "auditor_changes",
+    canResubmitAuditor: stage === "auditor_changes" && answered,
     canSendAccounts: stage === "accounts_send" && anyApproved,
     canCompleteWithoutBankFile: stage === "accounts_send" && !anyApproved,
     canResendAccounts: stage === "completed" && anyApproved && accountsSent,
@@ -218,11 +282,13 @@ export function actionsFor(stage: SettlementStage, anyApproved: boolean, account
 }
 
 /** A batch of three requests at `stage`: Asha (Salary Advance 8,000), Ravi (Term Loan 30,000, 3 days of leave) and Meena
- *  (Salary Advance 5,000, 5 days of leave). From the MD's review on, the MD approved Asha in full, Ravi for 25,000 and
- *  rejected Meena; from HR's final settlement on, HR kept the MD's decisions except Asha's, lowered to 6,000. */
+ *  (Salary Advance 5,000, 5 days of leave). From the MD's return on, the MD approved Asha in full, Ravi for 25,000 and
+ *  rejected Meena; from HR's final settlement on, HR kept the MD's decisions except Asha's, lowered to 6,000. At HR
+ *  Rework (MD Changes) the MD's cut on Ravi and rejection of Meena wait for HR's answer (HR proposed nothing). */
 export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> = {}): SettlementBatch {
-  const md = STAGES.indexOf(stage) >= STAGES.indexOf("hr_final");
-  const fin = md;
+  const md = STAGES.indexOf(stage) >= STAGES.indexOf("md_changes");
+  const fin = STAGES.indexOf(stage) >= STAGES.indexOf("hr_final");
+  const mdChanges = stage === "md_changes";
   const finalized = STAGES.indexOf(stage) >= STAGES.indexOf("auditor_send");
   // since 2026-11-27 the advances are decided once the audit is through
   const applied = STAGES.indexOf(stage) >= STAGES.indexOf("accounts_send");
@@ -258,6 +324,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
       md: md ? { decision: "approved", amount: 25000, remark: "Reduce", decidedAt: "2026-11-23T05:00:00Z" } : {},
       final: fin ? { decision: "approved", amount: 25000, startMonth: 1, startYear: 2027, remark: "" } : {},
       applied,
+      ...(mdChanges ? { rework: "md" as const, mdChanged: true, mdRemarked: true } : {}),
     }),
     item(3, {
       advance: {
@@ -272,6 +339,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
         : {},
       final: fin ? { decision: "rejected", amount: null, remark: "" } : {},
       applied,
+      ...(mdChanges ? { rework: "md" as const, mdChanged: true, mdRemarked: true } : {}),
     }),
   ];
   const approved = md ? 2 : 0;
@@ -289,7 +357,20 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
     stage,
     stageLabel: stage,
     nextAction: stage === "completed" ? "" : `Next action at ${stage}.`,
-    tracker: trackerFor(stage, `Next action at ${stage}.`),
+    tracker: trackerFor(stage, `Next action at ${stage}.`, { mdCycles: mdChanges ? 1 : 0 }),
+    flow: {
+      mdRound: 1,
+      auditorRound: 1,
+      mdCycles: mdChanges ? 1 : 0,
+      auditorCycles: stage === "auditor_changes" ? 1 : 0,
+      mdPath: fin ? "hr" : null,
+      accountsVia: null,
+      mdReturn: mdChanges
+        ? { at: "2026-11-23T05:00:00Z", by: "Managing Director", note: "Recheck Ravi's loan and Meena's leave" }
+        : null,
+    },
+    mdRound: 1,
+    auditorRound: 1,
     counts: {
       total: 3,
       mdDecided: md ? 3 : 0,
@@ -298,6 +379,7 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
       undecided: md ? 0 : 3,
       warning: 1,
       critical: 1,
+      ...(mdChanges ? { rework: 2, mdChanges: 2 } : {}),
     },
     amounts: {
       requested: 43000,
@@ -308,9 +390,9 @@ export function batchAt(stage: SettlementStage, over: Partial<SettlementBatch> =
     forwardedAt: stage === "hr_review" ? null : "2026-11-22T05:30:00Z",
     forwardedBy: stage === "hr_review" ? null : "Priya HR",
     hrNote: "",
-    mdConfirmedAt: md ? "2026-11-23T05:30:00Z" : null,
-    mdConfirmedBy: md ? "Managing Director" : null,
-    mdNote: md ? "Pay before the 30th" : "",
+    mdConfirmedAt: fin ? "2026-11-23T05:30:00Z" : null,
+    mdConfirmedBy: fin ? "Managing Director" : null,
+    mdNote: fin ? "Pay before the 30th" : "",
     finalizedAt: finalized ? "2026-11-24T05:30:00Z" : null,
     finalizedBy: finalized ? "Priya HR" : null,
     finalNote: "",

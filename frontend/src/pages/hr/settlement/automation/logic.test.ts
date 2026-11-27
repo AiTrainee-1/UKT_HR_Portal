@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api-client/custom-fetch";
+import { historyLabel } from "@/components/settlement-flow/WorkflowFlow";
 import { mergeSettlementBatch } from "@/lib/api-client/custom-hooks/settlement-automation";
 import { DEFAULT_COLUMN_KEYS, EXPORT_COLUMNS, TERM_DEFAULT_COLUMN_KEYS } from "../logic";
 import {
@@ -24,7 +25,6 @@ import {
   finalReview,
   hasProblems,
   historyDetail,
-  historyLabel,
   isFutureMonth,
   linkStateText,
   monthFromUrl,
@@ -77,6 +77,9 @@ describe("the month and the batch shown", () => {
     expect(reached(batchAt("md_review"), "md_review")).toBe(true);
     expect(reached(batchAt("md_review"), "hr_final")).toBe(false);
     expect(reached(batchAt("completed"), "hr_final")).toBe(true);
+    // the MD's rework loop sits between the MD's review and HR Final Settlement (2026-11-27)
+    expect(reached(batchAt("md_changes"), "md_review")).toBe(true);
+    expect(reached(batchAt("md_changes"), "hr_final")).toBe(false);
   });
 });
 
@@ -376,8 +379,24 @@ describe("the auditor's changes (Auditor Review Portal, 2026-11-27)", () => {
   });
 
   it("words the audit's history entries", () => {
-    expect(historyLabel({ action: "auditor_approved" })).toBe("Approved by the auditor");
-    expect(historyLabel({ action: "auditor_changes_accepted" })).toBe("HR accepted the auditor's changes");
+    // the words are the branching tracker's own (WorkflowFlow.historyLabel), shared with the History tab
+    expect(historyLabel({ at: "", by: "", action: "auditor_approved" }).text).toBe("Auditor approved it");
+    expect(historyLabel({ at: "", by: "", action: "auditor_changes", round: 1 })).toEqual({
+      text: "Auditor returned it to HR for rework (round 1)",
+      tone: "rework",
+    });
+    expect(historyLabel({ at: "", by: "", action: "auditor_resubmitted", round: 2 }).text).toBe(
+      "HR resubmitted it to the auditor (round 2)",
+    );
+    expect(historyLabel({ at: "", by: "", action: "md_returned", round: 1 }).text).toBe(
+      "MD returned it to HR for rework (round 1)",
+    );
+    expect(historyLabel({ at: "", by: "", action: "md_resubmitted", round: 2 }).text).toBe(
+      "HR resubmitted it to the MD (round 2)",
+    );
+    expect(historyDetail({ at: "", by: "", action: "md_returned", note: "", round: 1, changes: 2, remarks: 1 })).toBe(
+      "2 changes · 1 remark",
+    );
     expect(historyDetail({ at: "", by: "", action: "auditor_changes", note: "", changes: 2 })).toBe("2 changes");
     expect(historyDetail({ at: "", by: "", action: "auditor_approved", note: "", via: "approved_send_accounts" })).toBe(
       "Sent the bank file to Accounts",
@@ -391,8 +410,8 @@ describe("the rest", () => {
   });
 
   it("words the history", () => {
-    expect(historyLabel({ action: "forwarded" })).toBe("Forwarded to the MD");
-    expect(historyLabel({ action: "completed_no_payments" })).toBe("Completed without a bank file (nothing approved)");
+    expect(historyLabel({ at: "", by: "", action: "forwarded" }).text).toBe("HR forwarded it to the MD");
+    expect(historyLabel({ at: "", by: "", action: "completed_no_payments" }).text).toBe("Completed (nothing to pay)");
     expect(
       historyDetail({ at: "", by: "", action: "finalized", note: "", approved: 2, rejected: 1, total: 31000 }),
     ).toBe("2 approved · 1 rejected · ₹31,000");

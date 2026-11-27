@@ -262,6 +262,29 @@ class FlowTests(_FlowBase):
         self.patch_(
             f"/api/md/settlement/items/{item_b['id']}", {"decision": "rejected", "remark": "Too much leave"}, self.md
         )
+        # 2026-11-27: the MD changed both from HR's (empty) proposals, so they cannot approve - back to HR for rework
+        r = self.post(f"/api/md/settlement/batches/{bid}/confirm", {"note": "Go ahead"}, self.md)
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "has_changes"))
+        self.assertEqual(sorted(r.json()["changed"]), sorted([item_a["id"], item_b["id"]]))
+        r = self.post(f"/api/md/settlement/batches/{bid}/return", {"note": "Lower SA1, reject SA2"}, self.md)
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "md_changes"), r.content)
+        got = {i["id"]: (i["rework"], i["review"]) for i in r.json()["items"]}
+        self.assertEqual(got, {item_a["id"]: ("md", "pending"), item_b["id"]: ("md", "pending")})
+        r = self.post(f"/api/settlement-automation/batches/{bid}/resubmit-md", {})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "rework_open"))
+        r = self.post(
+            f"/api/settlement-automation/batches/{bid}/resolve-bulk",
+            {"itemIds": [item_a["id"], item_b["id"]], "how": "accept"},
+        )
+        self.assertEqual((r.status_code, r.json()["skipped"], r.json()["counts"]["rework"]), (200, [], 0), r.content)
+        r = self.post(f"/api/settlement-automation/batches/{bid}/resubmit-md", {"note": "Done as asked"})
+        self.assertEqual((r.status_code, r.json()["stage"], r.json()["mdRound"]), (200, "md_review", 2), r.content)
+        # the MD's decisions equal HR's revised proposals: they stand, and the MD can approve the revised settlement
+        md_batch = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        self.assertEqual(
+            (md_batch["counts"]["mdChanges"], md_batch["actions"]["canConfirmMd"], md_batch["counts"]["pending"]),
+            (0, True, 0),
+        )
         r = self.post(f"/api/md/settlement/batches/{bid}/confirm", {"note": "Go ahead"}, self.md)
         self.assertEqual((r.status_code, r.json()["stage"]), (200, "hr_final"), r.content)
 
@@ -323,12 +346,17 @@ class FlowTests(_FlowBase):
         done = r.json()
         self.assertEqual(
             [t["state"] for t in done["tracker"]],
-            ["done"] * 6 + ["skipped", "done", "done"],  # no auditor changes: that step is skipped
+            ["done"] * 7 + ["skipped", "done", "done"],  # one MD rework cycle; no auditor changes: skipped
         )
+        loop = next(t for t in done["tracker"] if t["key"] == "md_changes")
+        self.assertEqual((loop["cycles"], loop["detail"]), (1, "Reworked and resubmitted once"))
+        self.assertEqual((done["flow"]["mdCycles"], done["flow"]["mdPath"]), (1, "hr"))
         self.assertEqual(
             [h["action"] for h in done["history"]],
             [
                 "forwarded",
+                "md_returned",
+                "md_resubmitted",
                 "md_confirmed",
                 "finalized",
                 "auditor_sent",
@@ -552,16 +580,15 @@ class AuditorPortalTests(_FlowBase):
         bid, ids, items = self.finalized()
         token = self.send(bid)
         a, b = items[ids[0]], items[ids[1]]
-        r = self.portal(token, f"/items/{a}", "patch", {"action": "reduce", "amount": 3000})
-        self.assertEqual((r.status_code, r.json()["code"]), (400, "remark"))
-        r = self.portal(token, f"/items/{a}", "patch", {"action": "reduce", "amount": 5000, "remark": "Too much"})
-        self.assertEqual((r.status_code, r.json()["code"]), (400, "amount"))
+        # owner 2026-11-27: the auditor cannot reduce - they reject, or remark and return it for HR to change
         r = self.portal(token, f"/items/{a}", "patch", {"action": "reduce", "amount": 3000, "remark": "Cap at 3,000"})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "reduce_not_allowed"))
+        r = self.portal(token, f"/items/{a}", "patch", {"action": "reject", "remark": "Cap at 3,000"})
         self.assertEqual(r.status_code, 200, r.content)
         self.portal(token, f"/items/{b}", "patch", {"action": "reject", "remark": "Leave record unclear"})
         body = self.portal(token).json()
         self.assertEqual(
-            (body["hasChanges"], body["totals"]["changes"], body["totals"]["approvedAmount"]), (True, 2, 3000.0)
+            (body["hasChanges"], body["totals"]["changes"], body["totals"]["approvedAmount"]), (True, 2, 0.0)
         )
         # with changes the auditor cannot approve; they forward to HR
         r = self.portal(token, "/submit", "post", {"decision": "approved_forward_hr"})
@@ -581,18 +608,51 @@ class AuditorPortalTests(_FlowBase):
         )
         row = next(i for i in batch["items"] if i["id"] == a)
         self.assertEqual(
-            (row["auditor"]["action"], row["auditor"]["amount"], row["effective"]["amount"]), ("reduce", 3000.0, 3000.0)
+            (row["auditor"]["action"], row["auditor"]["amount"], row["effective"]["decision"]), ("reject", None, "rejected")
         )
-        r = self.post(f"/api/settlement-automation/batches/{bid}/accept-auditor-changes", {"note": "Agreed"})
-        self.assertEqual((r.status_code, r.json()["stage"]), (200, "accounts_send"), r.content)
+        self.assertEqual((row["rework"], row["review"]), ("auditor", "pending"))
+        # 2026-11-27: no way to Accounts from here - HR answers and resubmits for the auditor's approval
+        self.assertFalse(batch["actions"]["canResubmitAuditor"])
+        r = self.post(f"/api/settlement-automation/batches/{bid}/resubmit-auditor", {})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "rework_open"))
+        # HR changes the amount the auditor asked about (the auditor's rejection is answered by a lower amount)
+        r = self.patch_(
+            f"/api/settlement-automation/items/{a}/final",
+            {"decision": "approved", "amount": 3000, "remark": "Cap at 3,000"},
+        )
+        self.assertEqual(r.status_code, 200, r.content)
+        row = next(i for i in r.json()["items"] if i["id"] == a)
+        self.assertEqual(
+            (row["final"]["amount"], row["final"]["remark"], row["rework"]), (3000.0, "Cap at 3,000", None)
+        )
+        r = self.post(f"/api/settlement-automation/items/{b}/resolve", {"how": "keep"})  # HR stands by its approval
+        self.assertEqual(r.status_code, 200, r.content)
+        r = self.post(f"/api/settlement-automation/batches/{bid}/resubmit-auditor", {"note": "Revised"})
+        self.assertEqual(
+            (r.status_code, r.json()["stage"], r.json()["auditorRound"]), (200, "auditor_send", 2), r.content
+        )
+        rows = {i["id"]: i for i in r.json()["items"]}
+        self.assertEqual((rows[a]["auditor"]["action"], rows[b]["effective"]["decision"]), (None, "approved"))
+        self.assertEqual([t["role"] for t in rows[b]["trail"]], ["hr_final", "auditor"])
+        self.assertEqual(Advance.objects.get(pk=ids[0]).status, "pending")  # still nothing applied
+        # round 2: a new link (the answered one is revoked); the auditor approves the revised settlement
+        token2 = self.send(bid)
+        self.assertEqual(self.portal(token).json()["code"], "link_revoked")
+        body = self.portal(token2).json()
+        self.assertEqual((body["settlement"]["round"], body["totals"]["approvedAmount"]), (2, 9000.0))
+        trail_b = next(i for i in body["items"] if i["id"] == b)["trail"]
+        self.assertEqual([t["role"] for t in trail_b], ["hr_final", "auditor"])
+        r = self.portal(token2, "/submit", "post", {"decision": "approved_forward_hr"})
+        self.assertEqual((r.status_code, r.json()["settlement"]["stage"]), (200, "accounts_send"), r.content)
         first, second = Advance.objects.get(pk=ids[0]), Advance.objects.get(pk=ids[1])
         self.assertEqual(
             (first.status, first.amount, first.decision_remark), ("approved", Decimal("3000.00"), "Cap at 3,000")
         )
-        self.assertEqual((second.status, second.decision_remark), ("rejected", "Leave record unclear"))
-        states = {t["key"]: t["state"] for t in r.json()["tracker"]}
+        self.assertEqual((second.status, second.amount), ("approved", Decimal("6000.00")))
+        states = {t["key"]: (t["state"], t["cycles"]) for t in self.month()["batches"][0]["tracker"]}
         self.assertEqual(
-            (states["auditor_review"], states["auditor_changes"], states["accounts_send"]), ("done", "done", "current")
+            (states["auditor_review"], states["auditor_changes"], states["accounts_send"]),
+            (("done", None), ("done", 1), ("current", None)),
         )
 
     def test_approved_without_changes_the_auditor_sends_the_bank_file_to_accounts(self):
@@ -728,3 +788,138 @@ class Round5Tests(_FlowBase):
         self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": ids})
         md = self.client.get(f"/api/md/settlement/items/{items[ids[0]]}/leave-calendar", **self.md)
         self.assertEqual((md.status_code, md.json()["total"]), (200, 1.0))
+
+
+class ReworkTests(_FlowBase):
+    """Rework and re-approval (owner 2026-11-27): every reviewer reopens what they decided before completing their stage;
+    the MD's / auditor's changes send the settlement back to HR, who answers and resubmits; requests sort by where they
+    stand with the current reviewer."""
+
+    def forwarded(self):
+        self.automation()
+        ids = [self.apply(self.a, "general", 5000), self.apply(self.b, "general", 6000)]
+        b = self.month()["batches"][0]
+        items = {i["advance"]["id"]: i["id"] for i in b["items"]}
+        return b["id"], ids, items
+
+    def test_rework_reopens_a_request_in_hr_review_and_hr_final(self):
+        bid, ids, items = self.forwarded()
+        a, b = items[ids[0]], items[ids[1]]
+        r = self.month()["batches"][0]
+        self.assertEqual(({i["review"] for i in r["items"]}, r["counts"]["pending"]), ({"pending"}, 2))
+        r = self.post(f"/api/settlement-automation/batches/{bid}/hr-review-bulk", {"itemIds": [a, b], "action": "approve"})
+        self.assertEqual({i["id"]: (i["hr"]["action"], i["review"]) for i in r.json()["items"]}, {
+            a: ("approve", "approved"),
+            b: ("approve", "approved"),
+        })
+        r = self.post(f"/api/settlement-automation/items/{a}/rework")
+        self.assertEqual(r.status_code, 200, r.content)
+        row = next(i for i in r.json()["items"] if i["id"] == a)
+        self.assertEqual((row["hr"]["action"], row["review"], r.json()["counts"]["pending"]), (None, "pending", 1))
+        # a kept request waits for the MD (no pre-filled decision), as before
+        self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": ids})
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        self.assertEqual({i["md"]["decision"] for i in md["items"]}, {None})
+        # the MD reopens a decision of theirs: back to waiting
+        self.patch_(f"/api/md/settlement/items/{a}", {"decision": "approved"}, self.md)
+        r = self.patch_(f"/api/md/settlement/items/{a}", {"decision": ""}, self.md)
+        self.assertEqual(next(i["review"] for i in r.json()["items"] if i["id"] == a), "pending")
+        self.post(f"/api/md/settlement/batches/{bid}/bulk", {"itemIds": [a, b], "decision": "approved"}, self.md)
+        r = self.post(f"/api/md/settlement/batches/{bid}/confirm", {"mode": "hr"}, self.md)
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "hr_final"), r.content)
+        # HR Final: Rework clears the final decision; Finalize waits for it
+        r = self.post(f"/api/settlement-automation/items/{b}/rework")
+        row = next(i for i in r.json()["items"] if i["id"] == b)
+        self.assertEqual((row["final"]["decision"], row["review"]), (None, "pending"))
+        r = self.post(f"/api/settlement-automation/batches/{bid}/finalize", {})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "undecided"))
+        self.patch_(f"/api/settlement-automation/items/{b}/final", {"decision": "approved"})
+        r = self.post(f"/api/settlement-automation/batches/{bid}/finalize", {})
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "auditor_send"), r.content)
+        # no Rework once the stage is completed
+        r = self.post(f"/api/settlement-automation/items/{b}/rework")
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "stage"))
+
+    def test_md_return_keep_and_second_round(self):
+        bid, ids, items = self.forwarded()
+        a, b = items[ids[0]], items[ids[1]]
+        self.patch_(f"/api/settlement-automation/items/{a}", {"action": "reduce", "amount": 4000, "hrNote": "Cap 4k"})
+        self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": ids})
+        # nothing to rework: refused without a change, a remark or a note
+        r = self.post(f"/api/md/settlement/batches/{bid}/return", {}, self.md)
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "no_changes"))
+        # HR's proposal pre-filled for the MD is no change; the MD lowers it further: a change
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        row = next(i for i in md["items"] if i["id"] == a)
+        self.assertEqual((row["md"]["fromHr"], row["mdChanged"], row["review"]), (True, False, "pending"))
+        self.patch_(f"/api/md/settlement/items/{a}", {"decision": "approved", "amount": 3000, "remark": "3k only"}, self.md)
+        self.patch_(f"/api/md/settlement/items/{b}", {"decision": "approved"}, self.md)
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        self.assertEqual((md["counts"]["mdChanges"], md["actions"]["canConfirmMd"]), (1, False))
+        r = self.post(f"/api/md/settlement/batches/{bid}/return", {"note": "See SA1"}, self.md)
+        self.assertEqual(r.status_code, 200, r.content)
+        rows = {i["id"]: i for i in r.json()["items"]}
+        self.assertEqual((rows[a]["rework"], rows[b]["rework"]), ("md", None))
+        self.assertEqual([t["role"] for t in rows[a]["trail"]], ["hr", "md"])
+        self.assertEqual(r.json()["flow"]["mdReturn"]["note"], "See SA1")
+        # HR stands by its 4,000 (keep): on resubmission the MD sees HR's proposal again, waiting for them
+        r = self.post(f"/api/settlement-automation/items/{a}/resolve", {"how": "keep"})
+        self.assertEqual(r.status_code, 200, r.content)
+        r = self.post(f"/api/settlement-automation/batches/{bid}/resubmit-md", {})
+        self.assertEqual((r.status_code, r.json()["mdRound"]), (200, 2), r.content)
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        rows = {i["id"]: i for i in md["items"]}
+        self.assertEqual(
+            (rows[a]["md"]["amount"], rows[a]["md"]["fromHr"], rows[a]["review"], rows[b]["review"]),
+            (4000.0, True, "pending", "approved"),
+        )
+        steps = {t["key"]: t for t in md["tracker"]}
+        self.assertEqual(
+            (steps["md_review"]["state"], steps["md_review"]["round"], steps["md_changes"]["state"]),
+            ("current", 2, "done"),
+        )
+        self.assertIn("round 2", steps["md_review"]["action"])
+        # the MD accepts HR's 4,000 now: no change, approve
+        r = self.post(f"/api/md/settlement/batches/{bid}/confirm", {"mode": "hr"}, self.md)
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "hr_final"), r.content)
+
+    def test_auditor_returns_with_a_remark_only_and_explicit_approvals(self):
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        import re
+
+        bid, ids, items = self.forwarded()
+        a, b = items[ids[0]], items[ids[1]]
+        self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": ids})
+        self.post(f"/api/md/settlement/batches/{bid}/bulk", {"itemIds": [a, b], "decision": "approved"}, self.md)
+        self.post(f"/api/md/settlement/batches/{bid}/confirm", {}, self.md)
+        self.post(f"/api/settlement-automation/batches/{bid}/finalize", {})
+        pdf = SimpleUploadedFile("r.pdf", b"%PDF", content_type="application/pdf")
+        xlsx = SimpleUploadedFile("r.xlsx", b"PK", content_type="application/vnd.ms-excel")
+        with patch("api.email_service.send_email", side_effect=_sent) as sent:
+            self.client.post(f"/api/settlement-automation/batches/{bid}/send-auditor", {"pdf": pdf, "xlsx": xlsx}, **self.hr)
+        token = re.search(r"/auditor-review/([A-Za-z0-9_-]+)", sent.call_args.kwargs["report_html"]).group(1)
+        url = f"/api/auditor-review/{token}"
+        body = self.client.get(url).json()
+        self.assertEqual(({i["review"] for i in body["items"]}, body["totals"]["pending"]), ({"pending"}, 2))
+        r = self.client.patch(f"{url}/items/{a}", {"action": "approve"}, content_type="application/json")
+        self.assertEqual(next(i["review"] for i in r.json()["items"] if i["id"] == a), "approved")
+        r = self.client.patch(f"{url}/items/{a}", {"action": ""}, content_type="application/json")  # Rework
+        self.assertEqual(next(i["review"] for i in r.json()["items"] if i["id"] == a), "pending")
+        # nothing changed and nothing said: no return
+        r = self.client.post(f"{url}/submit", {"decision": "changes_forward_hr"})
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "no_changes"))
+        # a reduction is open in the portal: HR cannot confirm the review by hand
+        self.client.patch(f"{url}/items/{b}", {"action": "reject", "remark": "Test"}, content_type="application/json")
+        r = self.post(f"/api/settlement-automation/batches/{bid}/auditor-done", {})
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "auditor_changes_open"))
+        self.client.patch(f"{url}/items/{b}", {"action": "approve", "remark": "Check the bank IFSC"}, content_type="application/json")
+        r = self.client.post(f"{url}/submit", {"decision": "changes_forward_hr", "note": "One correction"})
+        self.assertEqual((r.status_code, r.json()["settlement"]["stage"]), (200, "auditor_changes"), r.content)
+        batch = self.month()["batches"][0]
+        rows = {i["id"]: i for i in batch["items"]}
+        self.assertEqual((rows[a]["rework"], rows[b]["rework"]), (None, "auditor"))
+        self.assertEqual((rows[a]["review"], rows[b]["review"]), ("approved", "pending"))
+        # nothing can go to Accounts while HR reworks
+        bank = SimpleUploadedFile("Bank.xlsx", b"PK", content_type="application/vnd.ms-excel")
+        r = self.client.post(f"/api/settlement-automation/batches/{bid}/send-accounts", {"bank": bank}, **self.hr)
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "stage"))

@@ -44,6 +44,7 @@ import {
   portalTotals,
   refusalReloads,
   requestsWord,
+  reviewRound,
   reviewStatus,
 } from "./logic";
 import OverviewSection from "./OverviewSection";
@@ -142,6 +143,14 @@ function Problem({ error, onRetry }: { error: unknown; onRetry: () => void }) {
           <p className="text-sm text-slate-600" data-testid="portal-problem-text">
             {p.text}
           </p>
+          {p.hint && (
+            <p
+              className="rounded-xl bg-slate-50 px-3 py-2 text-[12.5px] text-slate-500"
+              data-testid="portal-problem-hint"
+            >
+              {p.hint}
+            </p>
+          )}
           {p.kind === "unavailable" && (
             <Button
               variant="outline"
@@ -188,6 +197,7 @@ function Header({ data, tabs }: { data: PortalData; tabs: ReactNode }) {
   const status = reviewStatus(data);
   const t = portalTotals(data);
   const left = linkValidity(data.link.expiresAt);
+  const round = reviewRound(data);
   const sub = [c.tagline, c.address, c.contact].filter(Boolean).join(" · ");
   return (
     <header data-testid="portal-header">
@@ -220,7 +230,14 @@ function Header({ data, tabs }: { data: PortalData; tabs: ReactNode }) {
         <div className={cn(CARD, "shadow-[0_14px_44px_-18px_rgba(0,38,61,0.4)]")}>
           <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between sm:p-6">
             <div className="min-w-0">
-              <p className="text-xs font-semibold text-[#006496]">{s.typeLabel} settlement · Audit</p>
+              <p className="text-xs font-semibold text-[#006496]" data-testid="portal-eyebrow">
+                {s.typeLabel} settlement · Audit
+                {round > 1 && (
+                  <span className="ml-2 inline-flex items-center rounded-full bg-violet-50 px-2 py-px text-[11px] font-semibold text-violet-700 ring-1 ring-violet-200">
+                    Revised · round {round}
+                  </span>
+                )}
+              </p>
               <h1
                 className="mt-1 text-[24px] font-bold leading-tight text-slate-900 sm:text-[30px]"
                 style={{ fontFamily: HEADING_FONT }}
@@ -442,8 +459,10 @@ export default function AuditorReview() {
             <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-emerald-700" aria-hidden />
             <p>
               <b>Review submitted on {formatDateTime(data.link.submittedAt)}</b>
-              {data.link.decision ? ` — ${DECISION_LABEL[data.link.decision]}` : ""}. Thank you. The settlement is shown
-              read-only.
+              {data.link.decision ? ` — ${DECISION_LABEL[data.link.decision]}` : ""}. Thank you.{" "}
+              {data.link.decision === "changes_forward_hr"
+                ? "HR reworks it and sends you the revised settlement with a new link for your approval. This one is shown read-only."
+                : "The settlement is shown read-only."}
             </p>
           </div>
         )}

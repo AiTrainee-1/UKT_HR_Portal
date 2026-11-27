@@ -1,22 +1,34 @@
 import { describe, expect, it } from "vitest";
+import { sortByReview } from "@/lib/reviewOrder";
 import {
   CARD_FILTERS,
+  answerText,
+  auditorAnswerOf,
   filterCounts,
   filterItems,
   focusView,
   hrProposalPayload,
   hrProposalProblems,
+  hrProposalText,
+  mdAnswerOf,
+  mdDiffers,
+  mdRemarkOf,
   outcomeOf,
   parseFocus,
+  pendingGroupLabel,
   remarksOf,
   requestColumns,
   requestFigures,
   requestsShown,
+  reviewStateOf,
+  reworkFlag,
+  reworkProgress,
   skippedText,
   standingOf,
   trailOf,
 } from "./focus";
-import { batchAt, item, withAuditor } from "./test-fixtures";
+import { batchAt, item, trackerFor, withAuditor } from "./test-fixtures";
+import { trackerWhere } from "./Tracker";
 
 // Round 5 (owner 2026-11-27): what a click on a tracker stage or a summary card lists, where each request stands, the
 // table's columns, HR's proposal and the bulk steps' words.
@@ -164,14 +176,17 @@ describe("the Requests table", () => {
   });
 
   it("the less needed columns show from a wider screen on, so the table fits a laptop (All Employees' way)", () => {
-    const from = (type: "general" | "term") =>
+    const from = (type: "general" | "term", actions = false) =>
       Object.fromEntries(
-        requestColumns(type, { select: true, actions: true })
+        requestColumns(type, { select: actions, actions })
           .filter((c) => c.from)
           .map((c) => [c.key, c.from]),
       );
     expect(from("general")).toEqual({ fixedSalary: "2xl", workingDays: "2xl", earned: "xl", remarks: "wide" });
     expect(from("term")).toEqual({ fixedSalary: "2xl", months: "xl", emi: "xl", firstEmi: "2xl", remarks: "wide" });
+    // with the row actions (up to five icons since Rework) the xl ones wait for 1400 px
+    expect(from("general", true)).toEqual({ fixedSalary: "2xl", workingDays: "2xl", earned: "xl2", remarks: "wide" });
+    expect(from("term", true)).toMatchObject({ months: "xl2", emi: "xl2", firstEmi: "2xl" });
   });
 
   it("a Salary Advance's earned figures, a Term Loan's limit, months, EMI and first EMI", () => {
@@ -252,5 +267,156 @@ describe("HR's proposal at HR Review", () => {
       hrNote: "Too many leaves",
       action: "reject",
     });
+  });
+});
+
+// ───────────────────── re-approval cycles (owner 2026-11-27) ─────────────────────
+
+describe("where a request stands with the stage's reviewer (service.review_state)", () => {
+  it("takes the server's review, else works it out per stage the same way", () => {
+    expect(reviewStateOf(item(1, { review: "rejected" }), "hr_review")).toBe("rejected");
+    // HR Review: not reviewed = waiting; kept as asked / reduced = approved; rejected
+    expect(reviewStateOf(item(1), "hr_review")).toBe("pending");
+    expect(reviewStateOf(item(1, { hr: { action: "approve" } }), "hr_review")).toBe("approved");
+    expect(reviewStateOf(item(1, { hr: { action: "reduce", amount: 6000 } }), "hr_review")).toBe("approved");
+    expect(reviewStateOf(item(1, { hr: { action: "reject" } }), "hr_review")).toBe("rejected");
+    // MD Review: HR's pre-filled proposal waits for the MD's own click
+    expect(reviewStateOf(item(1, { md: { decision: "rejected", fromHr: true } }), "md_review")).toBe("pending");
+    expect(reviewStateOf(item(1, { md: { decision: "rejected", decidedAt: "x" } }), "md_review")).toBe("rejected");
+    // HR Rework (MD Changes): a flag waits; answered = HR's proposal
+    const mdc = batchAt("md_changes");
+    expect(mdc.items.map((i) => reviewStateOf(i, "md_changes"))).toEqual(["approved", "pending", "pending"]);
+    // HR Final Settlement / HR Rework (Auditor Changes): no final decision, or a flag, waits
+    const fin = batchAt("hr_final");
+    expect(fin.items.map((i) => reviewStateOf(i, "hr_final"))).toEqual(["approved", "approved", "rejected"]);
+    expect(reviewStateOf({ ...fin.items[0], rework: "auditor" }, "auditor_changes")).toBe("pending");
+    // Auditor Review: waiting until the auditor answers it
+    const aud = batchAt("auditor_review");
+    expect(reviewStateOf(aud.items[0], "auditor_review")).toBe("pending");
+    expect(reviewStateOf(withAuditor(aud.items[0], { action: "approve" }), "auditor_review")).toBe("approved");
+    expect(reviewStateOf(aud.items[2], "auditor_review")).toBe("rejected");
+  });
+
+  it("orders a list waiting first, then approved, then rejected, keeping each group's own order", () => {
+    const b = batchAt("hr_review");
+    b.items[0] = { ...b.items[0], review: "rejected" };
+    b.items[1] = { ...b.items[1], review: "approved" };
+    expect(ids(sortByReview(b.items, (i) => reviewStateOf(i, b.stage)))).toEqual([3, 2, 1]);
+  });
+
+  it("names the waiting group by who it waits for", () => {
+    expect(pendingGroupLabel("hr_review")).toBe("Waiting for your review");
+    expect(pendingGroupLabel("md_changes")).toBe("Waiting for your answer to the MD");
+    expect(pendingGroupLabel("hr_final")).toBe("Waiting for your final decision");
+    expect(pendingGroupLabel("auditor_changes")).toBe("Waiting for your answer to the auditor");
+    expect(pendingGroupLabel("md_review")).toBe("Waiting for the MD");
+  });
+
+  it("at HR Review a request HR has not looked at is not reviewed yet; later it went as asked", () => {
+    expect(hrProposalText(item(1), "hr_review")).toBe("Not reviewed yet");
+    expect(hrProposalText(item(1, { hr: { action: "approve" } }), "hr_review")).toBe("Keep as asked");
+    expect(hrProposalText(item(1), "md_review")).toBe("Keep as asked");
+    expect(trailOf(item(1), batchAt("hr_review"))[0]).toMatchObject({ text: "Not reviewed yet", tone: "warning" });
+  });
+});
+
+describe("HR's answers to the MD and the auditor", () => {
+  it("the MD's change and the MD's own remark, as the server says them", () => {
+    const [asha, ravi, meena] = batchAt("md_changes").items;
+    expect(mdDiffers(ravi)).toBe(true);
+    expect(mdDiffers(asha)).toBe(false); // the MD approved what HR kept as asked
+    expect(mdRemarkOf(meena)).toBe("Too many leaves");
+    // an older server: worked out from the decisions; HR's remark carried over is not the MD's
+    const older = item(1, {
+      hrNote: "Limit",
+      hr: { action: "reduce", amount: 6000 },
+      md: { decision: "approved", amount: 5000, remark: "Limit", decidedAt: "x" },
+    });
+    expect(mdDiffers(older)).toBe(true);
+    expect(mdRemarkOf(older)).toBe("");
+    expect(mdDiffers({ ...older, md: { ...older.md, amount: 6000 } })).toBe(false);
+  });
+
+  it("the flag on a row, the answer given, and how many still wait", () => {
+    const b = batchAt("md_changes");
+    expect(reworkFlag(b.items[1], "md_changes")).toEqual({ text: "MD changed this", tone: "caution" });
+    expect(reworkFlag(b.items[0], "md_changes")).toBeNull();
+    expect(reworkFlag({ ...b.items[0], rework: "md" }, "md_changes")).toEqual({ text: "Reopened", tone: "accent" });
+    expect(reworkFlag({ ...b.items[1], mdChanged: false }, "md_changes")).toEqual({
+      text: "MD's remark",
+      tone: "info",
+    });
+    expect(mdAnswerOf(b.items[1])).toBe("waiting");
+    // answered: kept (still differs from the MD) or accepted (the MD's decision is HR's now)
+    expect(mdAnswerOf({ ...b.items[1], rework: null })).toBe("kept");
+    expect(mdAnswerOf({ ...b.items[2], rework: null, mdChanged: false })).toBe("accepted");
+    expect(answerText("kept", "md")).toBe("You kept your proposal");
+    expect(reworkProgress(b)).toEqual({ waiting: 2, flagged: 2 });
+
+    const a = batchAt("auditor_changes");
+    const cut = {
+      ...withAuditor(a.items[0], { action: "reduce", amount: 5000, remark: "Two absent days" }),
+      rework: "auditor" as const,
+    };
+    expect(reworkFlag(cut, "auditor_changes")).toEqual({ text: "Auditor changed this", tone: "caution" });
+    expect(auditorAnswerOf(cut)).toBe("waiting");
+    expect(auditorAnswerOf({ ...cut, rework: null })).toBe("kept"); // HR's final is still 6,000
+    const accepted = { ...cut, rework: null, final: { ...cut.final, amount: 5000 } };
+    expect(auditorAnswerOf(accepted)).toBe("accepted");
+    expect(answerText("accepted", "auditor")).toBe("You accepted the auditor's change");
+  });
+
+  it("in a rework stage the row's amount is what HR sends back, not the reviewer's", () => {
+    const [, ravi] = batchAt("md_changes").items;
+    expect(standingOf(ravi, "md_changes")).toMatchObject({
+      decision: "approved",
+      amount: 30000,
+      label: "HR's proposal",
+      source: "asked",
+    });
+    expect(standingOf(ravi)).toMatchObject({ amount: 25000, source: "md" });
+    const cut = withAuditor(batchAt("auditor_changes").items[0], { action: "reduce", amount: 5000 });
+    expect(standingOf(cut, "auditor_changes")).toMatchObject({ amount: 6000, label: "HR's final" });
+    expect(standingOf(cut)).toMatchObject({ amount: 5000, label: "after the audit" });
+    // the auditor's line says what is paid only once it is the settlement, not while HR answers
+    expect(trailOf(cut, batchAt("auditor_changes")).find((t) => t.step === "auditor")?.note).toBeUndefined();
+    expect(trailOf(cut, batchAt("accounts_send")).find((t) => t.step === "auditor")?.note).toBe("pays ₹5,000");
+  });
+
+  it("a click on a rework stage lists the requests the reviewer flagged, or says why there are none", () => {
+    expect(parseFocus("md_changes")).toBe("md_changes");
+    const mdc = focusView(batchAt("md_changes"), "md_changes");
+    expect(mdc).toMatchObject({ kind: "md_changes" });
+    expect(ids(mdc.items)).toEqual([2, 3]);
+    expect(focusView(batchAt("hr_final"), "md_changes")).toMatchObject({
+      items: [],
+      empty: "The MD approved it without returning it to HR: no rework was needed.",
+    });
+    expect(focusView(batchAt("md_review"), "md_changes").empty).toBe("The MD has not returned this batch to HR.");
+    const aud = batchAt("auditor_changes");
+    aud.items[0] = { ...withAuditor(aud.items[0], { action: "reject", remark: "No" }), rework: "auditor" };
+    expect(ids(focusView(aud, "auditor_changes").items)).toEqual([1]);
+    expect(focusView(aud, "auditor_changes").title).toBe(
+      "HR Rework (Auditor Changes): the requests the auditor flagged",
+    );
+    expect(focusView(batchAt("accounts_send"), "auditor_changes").empty).toBe(
+      "The auditor approved it without returning it to HR: no rework was needed.",
+    );
+  });
+});
+
+describe("the tracker at a glance (the Overview)", () => {
+  it("counts the eight steps, not the rework loops, and says when HR reworks or which round it is", () => {
+    expect(trackerWhere(trackerFor("hr_final"))).toBe("Step 4 of 8 · HR Final Settlement");
+    expect(trackerWhere(trackerFor("md_changes", "x", { mdCycles: 1 }))).toBe(
+      "Rework after step 3 of 8 · HR Rework (MD Changes)",
+    );
+    expect(trackerWhere(trackerFor("md_review", "x", { mdCycles: 1, mdRound: 2 }))).toBe(
+      "Step 3 of 8 · MD Review & Approval · round 2",
+    );
+    expect(trackerWhere(trackerFor("completed", "", { mdCycles: 1, auditorCycles: 1 }))).toBe(
+      "All 8 steps done · 2 rework cycles",
+    );
+    expect(trackerWhere([])).toBe("Not started");
   });
 });

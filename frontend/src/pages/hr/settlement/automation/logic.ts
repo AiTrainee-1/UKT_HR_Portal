@@ -45,6 +45,8 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 export const STAGE_ORDER: readonly SettlementStage[] = [
   "hr_review",
   "md_review",
+  // the MD's rework loop (2026-11-27): after the MD's review, before HR Final Settlement
+  "md_changes",
   "hr_final",
   "auditor_send",
   "auditor_review",
@@ -53,7 +55,7 @@ export const STAGE_ORDER: readonly SettlementStage[] = [
   "completed",
 ];
 
-/** 0 for HR Review ... 7 for Completed. */
+/** 0 for HR Review ... 8 for Completed. */
 export const stageIndex = (stage: SettlementStage): number => STAGE_ORDER.indexOf(stage);
 
 /** The batch has reached `stage` (or gone past it). */
@@ -64,10 +66,11 @@ export const reached = (batch: Pick<SettlementBatch, "stage">, stage: Settlement
 export const STAGE_TITLE: Record<SettlementStage, string> = {
   hr_review: "HR Review",
   md_review: "Waiting for the MD",
+  md_changes: "HR Rework (MD Changes)",
   hr_final: "HR Final Settlement",
   auditor_send: "Send to Auditor",
   auditor_review: "Waiting for the Auditor's Review",
-  auditor_changes: "HR Review of Auditor Changes",
+  auditor_changes: "HR Rework (Auditor Changes)",
   accounts_send: "Send Bank File to Accounts",
   completed: "Settlement Workflow Completed",
 };
@@ -394,35 +397,15 @@ export const batchBankFileName = (batch: Pick<SettlementBatch, "advanceType" | "
 
 // ─── History ─────────────────────────────────────────────────────────────────────
 
-const HISTORY_LABEL: Record<string, string> = {
-  forwarded: "Forwarded to the MD",
-  md_confirmed: "MD confirmed the decisions",
-  finalized: "Settlement finalized",
-  auditor_sent: "Sent to the auditor",
-  auditor_resent: "Sent to the auditor again",
-  auditor_confirmed: "Auditor review confirmed by HR (by hand)",
-  auditor_approved: "Approved by the auditor",
-  auditor_changes: "The auditor sent changes to HR",
-  auditor_changes_accepted: "HR accepted the auditor's changes",
-  accounts_failed_from_auditor: "The auditor's e-mail to Accounts did not go",
-  accounts_sent: "Bank file sent to Accounts",
-  accounts_resent: "Bank file sent to Accounts again",
-  completed: "Workflow completed",
-  completed_no_payments: "Completed without a bank file (nothing approved)",
-};
-
-export const historyLabel = (entry: Pick<SettlementHistoryEntry, "action" | "via" | "direct">): string =>
-  entry.action === "md_confirmed" && entry.direct
-    ? "MD confirmed the decisions (Direct to Auditor)"
-    : entry.action === "finalized" && entry.via === "md"
-      ? "Settlement finalized by the MD (direct to auditor)"
-      : (HISTORY_LABEL[entry.action] ?? entry.action.replace(/_/g, " "));
+// The words of every history action are the branching tracker's own (components/settlement-flow/WorkflowFlow.tsx
+// `historyLabel`), so the History tab and the tracker's approval history read the same.
 
 /** The figures an entry carries, in words ("3 requests", "2 approved · 1 rejected · ₹18,000", "To a@x.com · CC b@x.com"). */
 export function historyDetail(entry: SettlementHistoryEntry): string {
   const parts: string[] = [];
   if (typeof entry.count === "number") parts.push(plural(entry.count, "request"));
   if (typeof entry.changes === "number") parts.push(plural(entry.changes, "change"));
+  if (typeof entry.remarks === "number" && entry.remarks > 0) parts.push(plural(entry.remarks, "remark"));
   if (entry.via === "approved_send_accounts") parts.push("Sent the bank file to Accounts");
   if (entry.via === "approved_forward_hr") parts.push("Left the bank file to HR");
   if (entry.via === "auditor") parts.push("Sent by the auditor");

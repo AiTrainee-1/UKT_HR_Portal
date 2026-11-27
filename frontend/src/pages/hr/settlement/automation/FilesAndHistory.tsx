@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Download, FileSpreadsheet, FileText, History, Landmark, Loader2, Paperclip } from "lucide-react";
+import { historyLabel } from "@/components/settlement-flow/WorkflowFlow";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -8,10 +9,11 @@ import {
   type SettlementBatchFile,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
 import { EMAIL_STATUS_TONE } from "@/lib/statusTones";
+import { cn } from "@/lib/utils";
 import { serverError } from "../logic";
 import { Chip } from "../parts";
 import { formatDateTime } from "../shared";
-import { historyDetail, historyLabel, historyNewestFirst, sizeText } from "./logic";
+import { historyDetail, historyNewestFirst, sizeText } from "./logic";
 
 const FILE_ICON: Record<SettlementBatchFile["kind"], typeof FileText> = {
   report_pdf: FileText,
@@ -94,7 +96,11 @@ export function FilesSent({ batch }: { batch: SettlementBatch }) {
   );
 }
 
-/** The batch's history, newest first: the page's "History" tab. */
+/** A history entry's dot: a return for rework amber, an approval green, a send indigo. */
+const DOT = { good: "bg-emerald-500", rework: "bg-amber-500", send: "bg-indigo-400", plain: "bg-slate-300" } as const;
+
+/** The batch's history, newest first: the page's "History" tab, in the branching tracker's own words (the returns for
+ *  rework and the resubmissions with their round, 2026-11-27). */
 export function BatchHistory({ batch }: { batch: SettlementBatch }) {
   const history = historyNewestFirst(batch.history ?? []);
   return (
@@ -108,21 +114,27 @@ export function BatchHistory({ batch }: { batch: SettlementBatch }) {
         </p>
       ) : (
         <ol className="space-y-3 border-l-2 border-slate-100 pl-4" data-testid="auto-history">
-          {history.map((h, i) => (
-            <li key={`${h.at}-${h.action}-${i}`} className="relative">
-              <span
-                aria-hidden
-                className="absolute -left-[1.4rem] top-1 h-2.5 w-2.5 rounded-full border-2 border-white bg-indigo-400"
-              />
-              <p className="text-[13px] font-semibold text-slate-800">{historyLabel(h)}</p>
-              <p className="text-[11px] text-slate-500">
-                {formatDateTime(h.at)}
-                {h.by ? ` · ${h.by}` : ""}
-              </p>
-              {historyDetail(h) && <p className="text-[11px] text-slate-600">{historyDetail(h)}</p>}
-              {h.note && <p className="mt-0.5 text-[12px] italic text-slate-700">&ldquo;{h.note}&rdquo;</p>}
-            </li>
-          ))}
+          {history.map((h, i) => {
+            const label = historyLabel(h);
+            return (
+              <li key={`${h.at}-${h.action}-${i}`} className="relative" data-tone={label.tone}>
+                <span
+                  aria-hidden
+                  className={cn(
+                    "absolute -left-[1.4rem] top-1 h-2.5 w-2.5 rounded-full border-2 border-white",
+                    DOT[label.tone],
+                  )}
+                />
+                <p className="text-[13px] font-semibold text-slate-800">{label.text}</p>
+                <p className="text-[11px] text-slate-500">
+                  {formatDateTime(h.at)}
+                  {h.by ? ` · ${h.by}` : ""}
+                </p>
+                {historyDetail(h) && <p className="text-[11px] text-slate-600">{historyDetail(h)}</p>}
+                {h.note && <p className="mt-0.5 text-[12px] italic text-slate-700">&ldquo;{h.note}&rdquo;</p>}
+              </li>
+            );
+          })}
         </ol>
       )}
     </section>

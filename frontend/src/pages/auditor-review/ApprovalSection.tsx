@@ -2,15 +2,16 @@ import { useState, type ComponentType, type ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowRight,
-  ArrowRightLeft,
   Ban,
   CheckCircle2,
+  Clock3,
   FileSpreadsheet,
   Landmark,
   Loader2,
   Lock,
   MessageSquareText,
   PencilLine,
+  RotateCcw,
   Scissors,
   Send,
   UserCheck,
@@ -28,19 +29,22 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { REMARK_MAX } from "@/pages/hr/settlement/logic";
+import { REMARK_MAX, REMARK_MIN } from "@/pages/hr/settlement/logic";
 import { formatDateTime, formatMoney } from "@/pages/hr/settlement/shared";
 import type { PortalData, PortalDecision, PortalItem } from "./api";
 import {
+  CHANGED_TEXT,
   DECISION_LABEL,
   bankLines,
   bankMissing,
   bankTotal,
   modifications,
   openDecisions,
+  pendingApprovalText,
   portalTotals,
   refusalText,
   requestsWord,
+  returnBlocked,
   sendBlocked,
 } from "./logic";
 import { CARD, HEADING_FONT, Panel } from "./parts";
@@ -48,13 +52,13 @@ import { CARD, HEADING_FONT, Panel } from "./parts";
 const CONFIRM_TITLE: Record<PortalDecision, string> = {
   approved_send_accounts: "Approve the settlement and send the bank file to Accounts?",
   approved_forward_hr: "Approve the settlement and forward it to HR?",
-  changes_forward_hr: "Forward your changes to HR?",
+  changes_forward_hr: "Return the settlement to HR for rework?",
 };
 
 const ACTION_LABEL: Record<PortalDecision, string> = {
   approved_send_accounts: "Approve & Send to Accounts",
   approved_forward_hr: "Approve & Forward to HR",
-  changes_forward_hr: "Forward changes to HR",
+  changes_forward_hr: "Return to HR for rework",
 };
 
 type IconType = ComponentType<{ size?: number; className?: string; "aria-hidden"?: boolean }>;
@@ -73,10 +77,10 @@ const OPTION_LOOK: Record<PortalDecision, { icon: IconType; badge: string; butto
     ring: "border-[#006496]/25 hover:border-[#006496]/40",
   },
   changes_forward_hr: {
-    icon: ArrowRightLeft,
-    badge: "bg-amber-50 text-amber-700",
-    button: "bg-amber-600 hover:bg-amber-700",
-    ring: "border-amber-200 hover:border-amber-300",
+    icon: RotateCcw,
+    badge: "bg-violet-50 text-violet-700",
+    button: "bg-violet-600 hover:bg-violet-700",
+    ring: "border-violet-200 hover:border-violet-300",
   },
 };
 
@@ -139,8 +143,8 @@ function OutcomeCard({
   return (
     <div
       className={cn(
-        "flex min-w-0 flex-col gap-3 rounded-2xl border-2 bg-white p-4 transition-colors",
-        open ? look.ring : "border-slate-200 bg-slate-50/70",
+        "flex min-w-0 flex-col gap-3 rounded-2xl border-2 p-4 transition-[border-color,box-shadow] duration-150",
+        open ? cn("bg-white/85 backdrop-blur-sm hover:shadow-md", look.ring) : "border-slate-200 bg-slate-50/70",
       )}
       data-testid={OPTION_TEST_ID[decision]}
       data-open={open ? "true" : "false"}
@@ -180,7 +184,14 @@ function OutcomeCard({
       )}
       <div className="mt-auto pt-1">
         <Button
-          className={cn("h-10 w-full gap-2 font-semibold", open && look.button)}
+          className={cn(
+            "h-10 w-full gap-2 font-semibold",
+            open &&
+              cn(
+                look.button,
+                "transition-[background-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:shadow-md active:translate-y-0 active:scale-[0.98] active:shadow-none motion-reduce:transform-none",
+              ),
+          )}
           variant={open ? "default" : "outline"}
           onClick={onChoose}
           disabled={!open}
@@ -189,7 +200,7 @@ function OutcomeCard({
           {decision === "approved_send_accounts" ? (
             <Send size={15} aria-hidden />
           ) : decision === "changes_forward_hr" ? (
-            <ArrowRightLeft size={15} aria-hidden />
+            <RotateCcw size={15} aria-hidden />
           ) : (
             <CheckCircle2 size={15} aria-hidden />
           )}
@@ -211,6 +222,12 @@ function ChangeBadge({ item }: { item: PortalItem }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2 py-0.5 text-[11px] font-semibold text-rose-800">
         <Ban size={11} aria-hidden /> Rejected
+      </span>
+    );
+  if (item.auditor.action === "approve")
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-800">
+        <CheckCircle2 size={11} aria-hidden /> Approved, with a remark
       </span>
     );
   return (
@@ -249,8 +266,10 @@ function ChangeFigures({ item }: { item: PortalItem }) {
  * Approval: the settlement as it will be paid (HR's approved total against the total after the audit), every change the
  * auditor made, an optional note to HR, and the three answers as cards. Without changes the auditor approves, either
  * sending the bank file to Accounts themselves (built here in the Payroll bank-file format from the approved requests;
- * the Accounts addresses are shown to check) or leaving it to HR; with changes the only answer is to forward them to HR.
- * Every answer is confirmed first; once submitted, the review is read-only.
+ * the Accounts addresses are shown to check) or leaving it to HR; requests the auditor has not marked are approved as HR
+ * settled them. With a change (a reduction, a rejection), a remark or a note the auditor returns it to HR for rework
+ * (owner 2026-11-27): HR reworks it and resubmits it for the auditor's approval, and nothing reaches Accounts before
+ * that; with a change it is the only answer. Every answer is confirmed first; once submitted, the review is read-only.
  */
 export default function ApprovalSection({
   data,
@@ -290,8 +309,19 @@ export default function ApprovalSection({
     setConfirming(d);
   };
 
-  const decisions = openDecisions(data);
+  const decisions = openDecisions(data, note);
   const isOpen = (d: PortalDecision) => decisions.includes(d) && (d !== "approved_send_accounts" || !blocked);
+  const returnClosed = returnBlocked(data, note);
+  const unmarked = pendingApprovalText(data);
+  const approving = confirming === "approved_send_accounts" || confirming === "approved_forward_hr";
+  const goesBack =
+    t.changes > 0
+      ? `${requestsWord(t.changes)} you rejected${
+          t.remarks > 0 ? ` and ${t.remarks} ${t.remarks === 1 ? "remark" : "remarks"}` : ""
+        } go back to HR.`
+      : t.remarks > 0
+        ? `Your ${t.remarks === 1 ? "remark goes" : `${t.remarks} remarks go`} back to HR.`
+        : "Your note tells HR what to correct.";
   const payments = `${lines.length} ${lines.length === 1 ? "payment" : "payments"}, ${formatMoney(bankTotal(lines))}`;
 
   return (
@@ -473,11 +503,36 @@ export default function ApprovalSection({
                 maxLength={REMARK_MAX}
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Anything HR should know about your review"
+                placeholder="Anything HR should know about your review, or what HR should correct"
+                aria-describedby="portal-note-hint"
                 className="text-[14px]"
                 data-testid="portal-note"
               />
+              <p id="portal-note-hint" className="text-[11.5px] text-slate-500">
+                {data.hasChanges || t.remarks > 0
+                  ? "HR reads it with your answer."
+                  : `To return the settlement without a change or a remark, write here what HR should correct (at least ${REMARK_MIN} characters).`}
+              </p>
             </div>
+
+            {unmarked && !data.hasChanges && (
+              <p
+                className="flex items-start gap-2 rounded-xl border border-amber-200/80 bg-amber-50/70 px-3.5 py-2.5 text-[12.5px] text-amber-900"
+                data-testid="portal-pending-note"
+              >
+                <Clock3 size={15} className="mt-0.5 shrink-0 text-amber-700" aria-hidden />
+                <span>
+                  {unmarked}{" "}
+                  <button
+                    type="button"
+                    className="font-semibold text-amber-950 underline decoration-amber-400 underline-offset-2 hover:decoration-amber-700"
+                    onClick={onGoOverview}
+                  >
+                    Review them first
+                  </button>
+                </span>
+              </p>
+            )}
 
             <div className="grid gap-3 lg:grid-cols-3">
               <OutcomeCard
@@ -521,19 +576,17 @@ export default function ApprovalSection({
                 title="Approve & Forward to HR"
                 text="Approve the settlement as it stands; HR sends the bank file to Accounts from the HRMS."
                 open={isOpen("approved_forward_hr")}
-                closedReason={data.hasChanges ? "You changed the settlement: forward the changes to HR." : null}
+                closedReason={data.hasChanges ? CHANGED_TEXT : null}
                 onChoose={() => choose("approved_forward_hr")}
               />
               <OutcomeCard
                 decision="changes_forward_hr"
-                title="Forward changes to HR"
-                text={
-                  data.hasChanges
-                    ? `${requestsWord(t.changes)} reduced or rejected by you go back to HR, who reviews them and finalizes the revised settlement before the bank file goes to Accounts.`
-                    : "When you reduce or reject a request, your changes go back to HR to finalize the revised settlement."
-                }
+                title="Return to HR for rework"
+                text={`${
+                  returnClosed ? "Reject a request, or leave a remark or a note, to send it back." : goesBack
+                } HR reworks the settlement and resubmits it for your approval; nothing reaches Accounts before you approve it.`}
                 open={isOpen("changes_forward_hr")}
-                closedReason={data.hasChanges ? null : "You made no changes: approve the settlement instead."}
+                closedReason={returnClosed}
                 onChoose={() => choose("changes_forward_hr")}
               />
             </div>
@@ -576,8 +629,16 @@ export default function ApprovalSection({
                   </p>
                 )}
                 {confirming === "approved_forward_hr" && <p>HR then sends the bank file to Accounts.</p>}
+                {approving && unmarked && (
+                  <p className="font-medium text-amber-900" data-testid="portal-confirm-pending">
+                    {unmarked}
+                  </p>
+                )}
                 {confirming === "changes_forward_hr" && (
-                  <p>HR reviews your changes and finalizes the revised settlement.</p>
+                  <p data-testid="portal-confirm-return">
+                    {goesBack} HR reworks the settlement and resubmits it to you for approval with a new link. Nothing
+                    goes to Accounts before you approve it.
+                  </p>
                 )}
                 {note.trim() && (
                   <p className="rounded-lg border border-slate-200 px-3 py-2 text-[12.5px]">

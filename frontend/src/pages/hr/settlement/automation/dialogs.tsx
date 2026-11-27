@@ -18,6 +18,7 @@ import type {
   SettlementBatch,
   SettlementBatchItem,
   SettlementFinalInput,
+  SettlementStage,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
 import { cn } from "@/lib/utils";
 import { LeaveChip } from "../LeaveChip";
@@ -25,6 +26,7 @@ import { REMARK_MAX, REMARK_MIN, TYPE_LABEL, cleanRemark, serverError } from "..
 import { MONTHS, formatMoney } from "../shared";
 import { useLoanAdvanceRules } from "../rules";
 import {
+  auditorChangeText,
   auditorReview,
   finalChanged,
   finalEmiText,
@@ -38,7 +40,7 @@ import {
   requestsText,
   type FinalEdit,
 } from "./logic";
-import { hrProposalProblems, type HrProposalEdit } from "./focus";
+import { answerText, auditorAnswerOf, hrProposalProblems, mdRemarkOf, type HrProposalEdit } from "./focus";
 
 type Refusal = { text: string; code: string | null };
 
@@ -165,6 +167,86 @@ export function NoteActionDialog({
   );
 }
 
+// ─── A step without a note: several requests' answers in a rework stage ─────────
+
+/** Confirms a step that needs no note (accept / keep several requests' answers at once), stays open while it saves and
+ *  shows the server's own words when it is refused. */
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel,
+  busyLabel = "Saving…",
+  tone = "emerald",
+  onConfirm,
+  onCancel,
+  testId,
+}: {
+  open: boolean;
+  title: string;
+  description: ReactNode;
+  confirmLabel: string;
+  busyLabel?: string;
+  tone?: "emerald" | "blue";
+  onConfirm: () => Promise<void>;
+  onCancel: () => void;
+  testId: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<Refusal | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setBusy(false);
+      setRefusal(null);
+    }
+  }, [open]);
+
+  const confirm = async () => {
+    setBusy(true);
+    setRefusal(null);
+    try {
+      await onConfirm();
+    } catch (err) {
+      setRefusal(serverError(err, "This could not be saved."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <AlertDialog open={open} onOpenChange={(o) => !o && !busy && onCancel()}>
+      <AlertDialogContent data-view-safe data-testid={testId}>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2 text-sm text-muted-foreground">{description}</div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <RefusalBox refusal={refusal} testId={`${testId}-error`} />
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={busy} data-testid={`${testId}-cancel`}>
+            Cancel
+          </AlertDialogCancel>
+          <Button
+            type="button"
+            onClick={() => void confirm()}
+            disabled={busy}
+            className={cn(
+              "gap-2",
+              tone === "emerald" ? "bg-emerald-600 hover:bg-emerald-700" : "bg-blue-600 hover:bg-blue-700",
+            )}
+            data-testid={`${testId}-confirm`}
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            {busy ? busyLabel : confirmLabel}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
 // ─── HR Review: the note to the MD on one request ───────────────────────────────
 
 export function HrNoteDialog({
@@ -257,10 +339,13 @@ export function HrProposalDialog({
   target,
   onSave,
   onCancel,
+  stage,
 }: {
   target: { item: SettlementBatchItem; action: "reduce" | "reject" } | null;
   onSave: (item: SettlementBatchItem, edit: HrProposalEdit) => Promise<void>;
   onCancel: () => void;
+  /** HR Rework (MD Changes): the proposal is HR's answer to the MD, shown beside the MD's own decision. */
+  stage?: SettlementStage;
 }) {
   const [edit, setEdit] = useState<HrProposalEdit>({ action: "reduce", amount: "", remark: "" });
   const [busy, setBusy] = useState(false);
@@ -314,8 +399,25 @@ export function HrProposalDialog({
                 {a && `${TYPE_LABEL[a.advanceType]}: ${formatMoney(item?.requestedAmount)} asked for`}
                 {a?.purpose ? `, for ${a.purpose}` : ""}.
               </p>
+              {stage === "md_changes" && item && (
+                <p className="text-gray-700" data-testid="hr-proposal-md">
+                  The MD{" "}
+                  {item.md.decision === "approved" ? (
+                    <>
+                      approved <b className="text-gray-900">{formatMoney(item.md.amount)}</b>
+                    </>
+                  ) : item.md.decision === "rejected" ? (
+                    <b className="text-red-700">rejected it</b>
+                  ) : (
+                    "has not decided it"
+                  )}
+                  {mdRemarkOf(item) ? `: "${mdRemarkOf(item)}"` : "."}
+                </p>
+              )}
               <p className="text-xs">
-                Your proposal and remark reach the MD as their starting decision on this request; the MD decides.
+                {stage === "md_changes"
+                  ? "This is your answer to the MD: your proposal and remark go back to the MD when you resubmit; the MD decides."
+                  : "Your proposal and remark reach the MD as their starting decision on this request; the MD decides."}
               </p>
             </div>
           </AlertDialogDescription>
@@ -391,10 +493,13 @@ export function FinalDecisionDialog({
   item,
   onSave,
   onCancel,
+  stage,
 }: {
   item: SettlementBatchItem | null;
   onSave: (item: SettlementBatchItem, body: SettlementFinalInput) => Promise<void>;
   onCancel: () => void;
+  /** HR Rework (Auditor Changes): the decision is HR's answer to the auditor, shown beside the auditor's change. */
+  stage?: SettlementStage;
 }) {
   const [edit, setEdit] = useState<FinalEdit | null>(null);
   const [busy, setBusy] = useState(false);
@@ -459,6 +564,12 @@ export function FinalDecisionDialog({
                 )}
                 {item?.md.remark ? `: "${item.md.remark}"` : "."}
               </p>
+              {stage === "auditor_changes" && item && (auditorChangeText(item) || item.auditor?.remark) && (
+                <p className="text-gray-700" data-testid="final-auditor">
+                  The auditor: <b className="text-orange-800">{auditorChangeText(item) ?? "no change"}</b>
+                  {item.auditor?.remark ? `: "${item.auditor.remark}"` : "."}
+                </p>
+              )}
               <p className="text-xs">
                 You can only stay within the MD&apos;s decision: lower the amount, move the first deduction month
                 {a?.advanceType === "term" ? ", change the repayment months" : ""} or reject. A change from the
@@ -723,8 +834,8 @@ export function FinalizeReview({ batch }: { batch: SettlementBatch }) {
 // ─── HR Review of Auditor Changes: every change, the remarks and the totals ──────
 
 /** The auditor's changes (2026-11-27): every request reduced or rejected (from -> to), every auditor remark, the
- *  auditor's note to HR, and HR's final total against what is paid after the audit. Shown on the stage card and in the
- *  Accept changes dialog. */
+ *  auditor's note to HR, HR's final total against the total with the auditor's changes, and (in HR's rework) HR's answer
+ *  on each. Shown on the HR Rework (Auditor Changes) stage card. */
 export function AuditorChangesReview({
   batch,
   testId = "auditor-changes",
@@ -733,11 +844,16 @@ export function AuditorChangesReview({
   testId?: string;
 }) {
   const review = auditorReview(batch);
+  const rework = batch.stage === "auditor_changes";
   return (
     <div className="space-y-3" data-testid={testId}>
       <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
         <Figure label="HR final approved" value={formatMoney(review.hrApproved)} tone="slate" />
-        <Figure label="After the audit" value={formatMoney(review.payable)} tone="green" />
+        <Figure
+          label={rework ? "With the auditor's changes" : "After the audit"}
+          value={formatMoney(review.payable)}
+          tone="green"
+        />
         <Figure
           label="Changed by the auditor"
           value={String(review.changes)}
@@ -750,7 +866,7 @@ export function AuditorChangesReview({
           className="rounded-xl border border-sky-100 bg-sky-50 px-3 py-2 text-[13px] text-sky-900"
           data-testid={`${testId}-note`}
         >
-          <p className="text-[11px] font-bold uppercase tracking-wider text-sky-600">The auditor&apos;s note to HR</p>
+          <p className="text-[11.5px] font-semibold text-sky-700">The auditor&apos;s note to HR</p>
           <p>{batch.auditor.submittedNote}</p>
         </div>
       )}
@@ -764,6 +880,7 @@ export function AuditorChangesReview({
                 <th className="px-3 py-2">Employee</th>
                 <th className="px-3 py-2">HR final</th>
                 <th className="px-3 py-2">Auditor</th>
+                {rework && <th className="px-3 py-2">Your answer</th>}
               </tr>
             </thead>
             <tbody>
@@ -790,6 +907,15 @@ export function AuditorChangesReview({
                     )}
                     {remark && <p className="text-[11px] italic text-slate-600">“{remark}”</p>}
                   </td>
+                  {rework && (
+                    <td className="px-3 py-2 text-[12px]" data-testid={`${testId}-answer-${item.id}`}>
+                      {auditorAnswerOf(item) === "waiting" ? (
+                        <span className="font-semibold text-amber-700">Waiting for your answer</span>
+                      ) : (
+                        <span className="text-slate-600">{answerText(auditorAnswerOf(item), "auditor") || "-"}</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -810,7 +936,7 @@ const FIGURE_TONE = {
 function Figure({ label, value, tone }: { label: string; value: string; tone: keyof typeof FIGURE_TONE }) {
   return (
     <div className={cn("rounded-xl px-3 py-2", FIGURE_TONE[tone])}>
-      <p className="text-[10px] font-semibold uppercase tracking-wide opacity-70">{label}</p>
+      <p className="text-[11px] font-semibold opacity-70">{label}</p>
       <p className="text-sm font-bold">{value}</p>
     </div>
   );

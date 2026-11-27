@@ -9,14 +9,19 @@ import { LeaveButton } from "../LeaveCalendarButton";
 import { formatMoney } from "../shared";
 import { CardField, FIRST, LAST, PersonCell, Pill } from "../table-kit";
 import {
+  answerText,
+  auditorAnswerOf,
   countText,
   focusView,
   hrProposalText,
+  mdAnswerOf,
+  mdRemarkOf,
   outcomeOf,
   requestFigures,
   trailOf,
   type FocusKey,
   type FocusKind,
+  type ReworkAnswer,
 } from "./focus";
 import { auditorChangeText, changesFromMd, effectiveOf, finalEmiText, finalMonthsOf } from "./logic";
 
@@ -58,6 +63,16 @@ function StepChip({ item, batch, step }: { item: SettlementBatchItem; batch: Set
   );
 }
 
+/** HR's answer to the reviewer on a request (a rework stage): waiting in amber, given in quiet words. */
+function Answer({ answer, who }: { answer: ReworkAnswer; who: "md" | "auditor" }) {
+  if (!answer) return dash;
+  return answer === "waiting" ? (
+    <Pill tone="warning">Waiting for your answer</Pill>
+  ) : (
+    <span className="whitespace-nowrap text-[12px] font-medium text-slate-600">{answerText(answer, who)}</span>
+  );
+}
+
 /** The columns each kind of list shows (after the employee). */
 function columnsOf(kind: FocusKind, batch: SettlementBatch, onLeave: (item: SettlementBatchItem) => void): Col[] {
   const requested: Col = {
@@ -76,9 +91,29 @@ function columnsOf(kind: FocusKind, batch: SettlementBatch, onLeave: (item: Sett
     case "md":
       return [
         requested,
-        { key: "hr", header: "HR proposal", render: (i) => <span className="text-[12px]">{hrProposalText(i)}</span> },
+        {
+          key: "hr",
+          header: "HR proposal",
+          render: (i) => <span className="text-[12px]">{hrProposalText(i, batch.stage)}</span>,
+        },
         { key: "md", header: "MD decision", render: (i) => <StepChip item={i} batch={batch} step="md" /> },
         { key: "remark", header: "MD remark", render: (i) => quote(i.md.remark) },
+      ];
+    case "md_changes":
+      return [
+        requested,
+        {
+          key: "hr",
+          header: "HR proposal",
+          render: (i) => <span className="text-[12px]">{hrProposalText(i, batch.stage)}</span>,
+        },
+        { key: "md", header: "MD decision", render: (i) => <StepChip item={i} batch={batch} step="md" /> },
+        { key: "remark", header: "MD remark", render: (i) => quote(mdRemarkOf(i)) },
+        {
+          key: "answer",
+          header: "Your answer",
+          render: (i) => <Answer answer={batch.stage === "md_changes" ? mdAnswerOf(i) : null} who="md" />,
+        },
       ];
     case "final":
       return [
@@ -120,17 +155,23 @@ function columnsOf(kind: FocusKind, batch: SettlementBatch, onLeave: (item: Sett
           ),
         },
         { key: "remark", header: "Auditor remark", render: (i) => quote(i.auditor?.remark) },
-        {
-          key: "pays",
-          header: "Pays",
-          right: true,
-          render: (i) =>
-            effectiveOf(i).decision === "approved" ? (
-              <span className="font-semibold tabular-nums">{formatMoney(effectiveOf(i).amount)}</span>
-            ) : (
-              <span className="text-[12px] font-semibold text-red-700">Nothing</span>
-            ),
-        },
+        batch.stage === "auditor_changes"
+          ? {
+              key: "answer",
+              header: "Your answer",
+              render: (i) => <Answer answer={auditorAnswerOf(i)} who="auditor" />,
+            }
+          : {
+              key: "pays",
+              header: "Pays",
+              right: true,
+              render: (i) =>
+                effectiveOf(i).decision === "approved" ? (
+                  <span className="font-semibold tabular-nums">{formatMoney(effectiveOf(i).amount)}</span>
+                ) : (
+                  <span className="text-[12px] font-semibold text-red-700">Nothing</span>
+                ),
+            },
       ];
     case "bank":
       return [

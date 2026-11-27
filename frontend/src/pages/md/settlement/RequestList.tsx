@@ -1,41 +1,51 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import {
   AlertOctagon,
   AlertTriangle,
   BadgeCheck,
   CalendarDays,
   Check,
+  GitCompareArrows,
+  History,
   Loader2,
   Pencil,
+  RotateCcw,
   TrendingDown,
-  Undo2,
   X,
 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { groupByReview } from "@/lib/reviewOrder";
 import { cn } from "@/lib/utils";
 import {
+  changeText,
   decisionKind,
   eligibleLimit,
   finalized,
   hrProposal,
   istDate,
   leaveChip,
+  mdChangedOf,
   money,
   overLimit,
+  pendingLabel,
   requestStatus,
+  reviewOf,
   shortMonth,
   shownIds,
   termText,
+  trailLine,
   typeLabelOf,
   type DraftMode,
   type StatusTone,
 } from "./logic";
-import { DecisionChip } from "./parts";
-import type { SettlementItem, SettlementStage } from "./types";
+import { BTN_MOTION, DecisionChip, GHOST_MOTION, Hint } from "./parts";
+import type { ReviewState, SettlementItem, SettlementStage } from "./types";
 
 export type RowHandlers = {
-  /** The batch's stage (what the Status column says). */
+  /** The batch's stage (what the Status column says, how the list is grouped). */
   stage: SettlementStage;
+  /** The MD's review round (2+ = HR resubmitted a returned settlement): the earlier round's line on a request. */
+  mdRound: number;
   /** The MD may decide (the batch is at MD Review): buttons and checkboxes. */
   canDecide: boolean;
   /** Requests with a decision on its way to the server. */
@@ -50,7 +60,8 @@ export type RowHandlers = {
   onApprove: (item: SettlementItem) => void;
   onConfirmHr: (item: SettlementItem) => void;
   onOpen: (item: SettlementItem, mode?: DraftMode) => void;
-  onUndo: (item: SettlementItem) => void;
+  /** Rework (owner 2026-11-27): reopen a decision (or clear HR's pre-filled proposal) - the request waits again. */
+  onRework: (item: SettlementItem) => void;
   /** Opens the request's Leave calendar. */
   onLeave: (item: SettlementItem) => void;
 };
@@ -72,6 +83,60 @@ const LEAVE_TONE = {
   ok: "border-md-ink/10 bg-white/70 text-md-ink",
   unknown: "border-dashed border-md-ink/15 bg-white/40 text-md-ink-soft",
 } as const;
+
+// ── the groups (owner 2026-11-27): waiting at the top, approved below, rejected below those ─────────────────────────
+
+const GROUP_TONE: Record<ReviewState, { dot: string; text: string; row: string }> = {
+  pending: { dot: "bg-md-wine", text: "text-md-wine-700", row: "bg-md-wine/[0.035]" },
+  approved: { dot: "bg-md-success-600", text: "text-md-success-700", row: "bg-md-success-600/[0.05]" },
+  rejected: { dot: "bg-md-danger-600", text: "text-md-danger-700", row: "bg-md-danger-600/[0.045]" },
+};
+
+function groupLabel(state: ReviewState, stage: SettlementStage): string {
+  return state === "pending" ? pendingLabel(stage) : state === "approved" ? "Approved" : "Rejected";
+}
+
+/** A group's heading: a dot of its colour, its name in sentence case (the MD table heads stay uppercase) and how many. */
+function GroupHeading({ state, stage, count }: { state: ReviewState; stage: SettlementStage; count: number }) {
+  const tone = GROUP_TONE[state];
+  return (
+    <span className="flex items-center gap-2">
+      <span aria-hidden="true" className={cn("h-2 w-2 shrink-0 rounded-full", tone.dot)} />
+      <span className={cn("text-[12px] font-extrabold normal-case tracking-normal", tone.text)}>
+        {groupLabel(state, stage)}
+      </span>
+      <span className="rounded-full border border-md-ink/10 bg-white/70 px-1.5 text-[10.5px] font-bold tabular-nums text-md-ink-soft">
+        {count}
+      </span>
+    </span>
+  );
+}
+
+/** The requests whose group just changed (approved, rejected, reworked back to the top): highlighted for a moment so
+ *  the MD sees where the row went. Worked out from the previous render (no effect needed for that); the highlight is
+ *  cleared after 1.6 s. */
+function useMovedRows(items: SettlementItem[], stage: SettlementStage): ReadonlySet<number> {
+  const sig = items.map((i) => `${i.id}:${reviewOf(i, stage)}`).join(",");
+  const [last, setLast] = useState(() => ({ sig, states: new Map(items.map((i) => [i.id, reviewOf(i, stage)])) }));
+  const [moved, setMoved] = useState<ReadonlySet<number>>(() => new Set());
+  if (last.sig !== sig) {
+    const states = new Map(items.map((i) => [i.id, reviewOf(i, stage)]));
+    const changed = [...states].filter(([id, s]) => last.states.has(id) && last.states.get(id) !== s).map(([id]) => id);
+    setLast({ sig, states });
+    if (changed.length) setMoved(new Set(changed));
+  }
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (moved.size === 0) return;
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setMoved(new Set()), 1600);
+  }, [moved]);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return moved;
+}
+
+/** The moment a row lands in its new group: it fades and slides in on a soft wine wash (still under "reduce motion"). */
+const MOVED = "animate-in fade-in-0 slide-in-from-top-1 duration-500 motion-reduce:animate-none bg-md-wine/[0.07]";
 
 // ── the cells (the same in the table and on the cards) ──────────────────────────────────────────────────────────────
 
@@ -155,11 +220,23 @@ function Proposal({ item, full }: { item: SettlementItem; full?: boolean }) {
           p.kind === "none" && "font-semibold text-md-ink-soft",
         )}
       >
-        {p.text}
+        {full ? (
+          p.text
+        ) : p.kind === "none" ? (
+          <>
+            No change<span className="sr-only"> proposed</span>
+          </>
+        ) : (
+          // the column head says whose proposal it is: the table shows the amount (or Reject) alone
+          <>
+            <span className="sr-only">HR proposes </span>
+            {p.kind === "reject" ? <span className="capitalize">reject</span> : p.text.replace(/^HR proposes /, "")}
+          </>
+        )}
       </p>
       {p.remark && (
         <p
-          className={cn("mt-0.5 text-[11px] leading-snug text-md-ink-soft", !full && "max-w-[8rem] truncate")}
+          className={cn("mt-0.5 text-[11px] leading-snug text-md-ink-soft", !full && "max-w-[6.5rem] truncate")}
           title={p.remark}
         >
           “{p.remark}”
@@ -169,8 +246,75 @@ function Proposal({ item, full }: { item: SettlementItem; full?: boolean }) {
   );
 }
 
+/** "Changed from HR's proposal" (owner 2026-11-27): the MD's own decision differs from HR's, so the settlement goes
+ *  back to HR before the MD can approve it. What HR proposed and what the MD set is the hover text. */
+function ChangedChip({ item, full }: { item: SettlementItem; full?: boolean }) {
+  return (
+    <Hint label={changeText(item)}>
+      <span
+        tabIndex={0}
+        className="md-chip md-chip-warning max-w-full cursor-help focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-md-wine"
+        data-testid="md-settlement-changed"
+      >
+        {full && <GitCompareArrows size={12} aria-hidden="true" className="shrink-0" />}
+        <span className="truncate">Changed from HR's proposal</span>
+      </span>
+    </Hint>
+  );
+}
+
+/** Round 2+ (HR resubmitted): what the MD set in the earlier round and what HR answers now, on one or two short lines
+ *  (they break only at the dot); every earlier round in full is the hover text. */
+function TrailNote({ item, round }: { item: SettlementItem; round: number }) {
+  const line = trailLine(item, round);
+  if (!line) return null;
+  return (
+    <Hint
+      label={
+        <span className="block space-y-0.5">
+          {line.detail.map((d) => (
+            <span key={d} className="block">
+              {d}
+            </span>
+          ))}
+        </span>
+      }
+    >
+      <p
+        tabIndex={0}
+        className="max-w-[14rem] cursor-help text-[11px] font-semibold leading-snug text-md-ink-soft focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-md-wine"
+        data-testid="md-settlement-trail"
+      >
+        <History size={11} aria-hidden="true" className="mr-1 inline align-[-1px]" />
+        <span className="whitespace-nowrap">{line.you}</span> ·{" "}
+        <span
+          className={cn(
+            "whitespace-nowrap",
+            line.hr === "HR accepted it" ? "text-md-success-700" : "text-md-warning-800",
+          )}
+        >
+          {line.hr}
+        </span>
+      </p>
+    </Hint>
+  );
+}
+
+type Tint = "warning" | "danger" | "wine";
+
+/** On hover each action takes its own tint on a soft wash of it (the HRMS row actions' recipe, in the MD's colours);
+ *  `!` because the skin's md-btn rules are unlayered (see BTN_MOTION). Approve / Confirm keep the wine glass. */
+const TINT: Record<Tint, string> = {
+  warning:
+    "enabled:hover:[--btn-fg:var(--color-md-warning-800)]! enabled:hover:[--btn-bg:rgba(246,234,201,0.95)]! enabled:hover:[--btn-line:rgba(185,130,32,0.38)]!",
+  danger:
+    "enabled:hover:[--btn-fg:var(--color-md-danger-800)]! enabled:hover:[--btn-bg:rgba(250,221,219,0.96)]! enabled:hover:[--btn-line:rgba(183,45,51,0.42)]!",
+  wine: "enabled:hover:[--btn-fg:var(--color-md-wine-700)]! enabled:hover:[--btn-bg:rgba(127,1,31,0.08)]! enabled:hover:[--btn-line:rgba(127,1,31,0.22)]!",
+};
+
 /** One action of a table row: a round MD-glass icon button with its hover label (the shared Radix tooltip, drawn above
- *  the page, so the table's scroll box never cuts it off; the MD skin dresses it). */
+ *  the page, so the table's scroll box never cuts it off; the MD skin dresses it). Hover: its tint, a pixel's lift and a
+ *  shadow; pressed it sinks; the wine focus ring; a spinner while it saves. */
 function IconAction({
   label,
   aria,
@@ -178,6 +322,7 @@ function IconAction({
   disabled,
   saving,
   tone,
+  tint,
   icon,
   testId,
 }: {
@@ -187,6 +332,7 @@ function IconAction({
   disabled: boolean;
   saving: boolean;
   tone: "primary" | "soft" | "danger" | "ghost";
+  tint?: Tint;
   icon: ReactNode;
   testId: string;
 }) {
@@ -197,17 +343,24 @@ function IconAction({
           <span className="inline-flex">
             <button
               type="button"
-              className={cn("md-btn md-btn-icon", `md-btn-${tone}`)}
+              className={cn(
+                // 2rem rather than the skin's 2.25rem: three on one line keep the table inside a 1366 screen
+                "md-btn md-btn-icon size-8!",
+                `md-btn-${tone}`,
+                tone === "ghost" ? GHOST_MOTION : BTN_MOTION,
+                tint && TINT[tint],
+              )}
               onClick={onClick}
-              disabled={disabled}
+              disabled={disabled || saving}
               aria-label={aria}
+              aria-busy={saving || undefined}
               data-testid={testId}
             >
               {saving ? <Loader2 size={15} className="animate-spin" aria-hidden="true" /> : icon}
             </button>
           </span>
         </TooltipTrigger>
-        <TooltipContent side="top" sideOffset={6} collisionPadding={8}>
+        <TooltipContent side="top" sideOffset={6} collisionPadding={8} data-testid={`${testId}-tip`}>
           {saving ? "Saving…" : label}
         </TooltipContent>
       </Tooltip>
@@ -215,8 +368,11 @@ function IconAction({
   );
 }
 
+const REWORK_TIP = "Rework — reopen this decision";
+const REWORK_HR_TIP = "Rework — clear HR's proposal and decide it yourself";
+
 /** The table's Actions column: Approve / Reduce / Reject an open request; Confirm (HR's pre-filled proposal) / Change /
- *  Undo a decided one - icon buttons on one line, as the HRMS tables (owner 2026-11-27). */
+ *  Rework a decided one - icon buttons on one line, as the HRMS tables (owner 2026-11-27). */
 function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const saving = h.busy.has(item.id);
   const name = who(item);
@@ -227,7 +383,7 @@ function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
           label="Approve"
           aria={`Approve ${money(item.requestedAmount)} for ${name}`}
           onClick={() => h.onApprove(item)}
-          disabled={saving}
+          disabled={false}
           saving={saving}
           tone="primary"
           icon={<Check size={15} aria-hidden="true" />}
@@ -240,6 +396,7 @@ function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
           disabled={saving}
           saving={false}
           tone="soft"
+          tint="warning"
           icon={<TrendingDown size={15} aria-hidden="true" />}
           testId="md-settlement-reduce"
         />
@@ -250,20 +407,22 @@ function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
           disabled={saving}
           saving={false}
           tone="danger"
+          tint="danger"
           icon={<X size={15} aria-hidden="true" />}
           testId="md-settlement-reject"
         />
       </div>
     );
   }
+  const fromHr = !!item.md.fromHr;
   return (
     <div className="flex items-center justify-end gap-0.5" data-testid="md-settlement-actions">
-      {item.md.fromHr && (
+      {fromHr && (
         <IconAction
           label="Confirm HR's proposal"
           aria={`Confirm HR's proposal for ${name} as your decision`}
           onClick={() => h.onConfirmHr(item)}
-          disabled={saving}
+          disabled={false}
           saving={saving}
           tone="primary"
           icon={<BadgeCheck size={15} aria-hidden="true" />}
@@ -277,25 +436,31 @@ function IconActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
         disabled={saving}
         saving={false}
         tone="ghost"
+        tint="wine"
         icon={<Pencil size={14} aria-hidden="true" />}
         testId="md-settlement-change"
       />
       <IconAction
-        label="Undo the decision"
-        aria={`Undo the decision on ${name}'s request`}
-        onClick={() => h.onUndo(item)}
+        label={fromHr ? REWORK_HR_TIP : REWORK_TIP}
+        aria={
+          fromHr
+            ? `Rework: clear HR's proposal on ${name}'s request`
+            : `Rework: reopen your decision on ${name}'s request`
+        }
+        onClick={() => h.onRework(item)}
         disabled={saving}
-        saving={!item.md.fromHr && saving}
+        saving={!fromHr && saving}
         tone="ghost"
-        icon={<Undo2 size={14} aria-hidden="true" />}
-        testId="md-settlement-undo"
+        tint="warning"
+        icon={<RotateCcw size={14} aria-hidden="true" />}
+        testId="md-settlement-rework"
       />
     </div>
   );
 }
 
 /** Approve (the full amount, at once) / Reduce… / Reject… for an open request; Confirm (HR's pre-filled proposal) /
- *  Change… / Undo for a decided one: labelled buttons, on a request's card. */
+ *  Change… / Rework for a decided one: labelled buttons, on a request's card. */
 function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const saving = h.busy.has(item.id);
   const name = who(item);
@@ -304,9 +469,10 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
       <div className="flex flex-wrap gap-1.5" data-testid="md-settlement-actions">
         <button
           type="button"
-          className="md-btn md-btn-primary md-btn-sm"
+          className={cn("md-btn md-btn-primary md-btn-sm", BTN_MOTION)}
           onClick={() => h.onApprove(item)}
           disabled={saving}
+          aria-busy={saving || undefined}
           aria-label={`Approve ${money(item.requestedAmount)} for ${name}`}
           data-testid="md-settlement-approve"
         >
@@ -314,7 +480,7 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
         </button>
         <button
           type="button"
-          className="md-btn md-btn-soft md-btn-sm"
+          className={cn("md-btn md-btn-soft md-btn-sm", BTN_MOTION, TINT.warning)}
           onClick={() => h.onOpen(item, "reduce")}
           disabled={saving}
           aria-label={`Approve a smaller amount for ${name}`}
@@ -324,7 +490,7 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
         </button>
         <button
           type="button"
-          className="md-btn md-btn-danger md-btn-sm"
+          className={cn("md-btn md-btn-danger md-btn-sm", BTN_MOTION, TINT.danger)}
           onClick={() => h.onOpen(item, "reject")}
           disabled={saving}
           aria-label={`Reject (cancel) ${name}'s request`}
@@ -335,14 +501,16 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
       </div>
     );
   }
+  const fromHr = !!item.md.fromHr;
   return (
     <div className="flex flex-wrap gap-1.5" data-testid="md-settlement-actions">
-      {item.md.fromHr && (
+      {fromHr && (
         <button
           type="button"
-          className="md-btn md-btn-primary md-btn-sm"
+          className={cn("md-btn md-btn-primary md-btn-sm", BTN_MOTION)}
           onClick={() => h.onConfirmHr(item)}
           disabled={saving}
+          aria-busy={saving || undefined}
           aria-label={`Confirm HR's proposal for ${name} as your decision`}
           data-testid="md-settlement-confirm-hr"
         >
@@ -351,7 +519,7 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
       )}
       <button
         type="button"
-        className="md-btn md-btn-ghost md-btn-sm"
+        className={cn("md-btn md-btn-ghost md-btn-sm", GHOST_MOTION, TINT.wine)}
         onClick={() => h.onOpen(item)}
         disabled={saving}
         aria-label={`Change the decision on ${name}'s request`}
@@ -361,19 +529,26 @@ function RowActions({ item, h }: { item: SettlementItem; h: RowHandlers }) {
       </button>
       <button
         type="button"
-        className="md-btn md-btn-ghost md-btn-sm"
-        onClick={() => h.onUndo(item)}
+        className={cn("md-btn md-btn-ghost md-btn-sm", GHOST_MOTION, TINT.warning)}
+        onClick={() => h.onRework(item)}
         disabled={saving}
-        aria-label={`Undo the decision on ${name}'s request`}
-        data-testid="md-settlement-undo"
+        aria-busy={(!fromHr && saving) || undefined}
+        title={fromHr ? REWORK_HR_TIP : REWORK_TIP}
+        aria-label={
+          fromHr
+            ? `Rework: clear HR's proposal on ${name}'s request`
+            : `Rework: reopen your decision on ${name}'s request`
+        }
+        data-testid="md-settlement-rework"
       >
-        <Undo2 size={13} aria-hidden="true" /> {!item.md.fromHr && saving ? "Saving…" : "Undo"}
+        <RotateCcw size={13} aria-hidden="true" /> {!fromHr && saving ? "Saving…" : "Rework"}
       </button>
     </div>
   );
 }
 
-/** The MD's decision: its chip, "From HR — not yet confirmed by you" for a pre-filled proposal, the remark, the buttons. */
+/** The MD's decision on a card: its chip, "From HR — not yet confirmed by you" for a pre-filled proposal, "Changed from
+ *  HR's proposal", the earlier round, the remark, the buttons. */
 function Decision({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const kind = decisionKind(item);
   const flagged = h.highlight.has(item.id) && kind === "undecided";
@@ -394,6 +569,12 @@ function Decision({ item, h }: { item: SettlementItem; h: RowHandlers }) {
           From HR — not yet confirmed by you
         </p>
       )}
+      {h.stage === "md_review" && mdChangedOf(item) && (
+        <div>
+          <ChangedChip item={item} full />
+        </div>
+      )}
+      <TrailNote item={item} round={h.mdRound} />
       {kind !== "undecided" && item.md.remark && (
         <p className="text-[11px] leading-snug text-md-ink-soft" data-testid="md-settlement-remark">
           <span className="font-bold text-md-ink">Remark:</span> “{item.md.remark}”
@@ -405,13 +586,14 @@ function Decision({ item, h }: { item: SettlementItem; h: RowHandlers }) {
 }
 
 /** The table's "Your decision" column (owner 2026-11-27: one value per column, no stacked buttons): the decision chip and,
- *  under it, where the request stands (To decide, from HR - not yet confirmed by you, decided by you, with HR, final) and
- *  the remark on one line; the buttons are the Actions column. */
+ *  under it, where the request stands (to decide, from HR - not yet confirmed by you, changed from HR's proposal, decided
+ *  by you, with HR, final), the earlier round and the remark on one line each; the buttons are the Actions column. */
 function DecisionCell({ item, h }: { item: SettlementItem; h: RowHandlers }) {
   const kind = decisionKind(item);
   const flagged = h.highlight.has(item.id) && kind === "undecided";
   const s = requestStatus(item, h.stage);
   const fromHr = kind !== "undecided" && item.md.fromHr;
+  const changed = h.stage === "md_review" && kind !== "undecided" && mdChangedOf(item);
   const start =
     finalized(h.stage) && (item.effective?.decision ?? item.final.decision) === "approved"
       ? shortMonth(item.final.startMonth, item.final.startYear)
@@ -425,7 +607,11 @@ function DecisionCell({ item, h }: { item: SettlementItem; h: RowHandlers }) {
         </p>
       )}
       {kind !== "undecided" && <DecisionChip item={item} />}
-      {asChip ? (
+      {changed ? (
+        <div>
+          <ChangedChip item={item} />
+        </div>
+      ) : asChip ? (
         <span className={cn(STATUS_CHIP[s.tone], "max-w-full")} data-testid="md-settlement-status">
           <span className="truncate">{s.text}</span>
         </span>
@@ -438,14 +624,18 @@ function DecisionCell({ item, h }: { item: SettlementItem; h: RowHandlers }) {
         </p>
       )}
       {fromHr && (
-        <p className="whitespace-nowrap text-[11px] font-bold text-md-warning-800" data-testid="md-settlement-from-hr">
+        <p
+          className="max-w-[11rem] text-balance text-[11px] font-bold leading-snug text-md-warning-800"
+          data-testid="md-settlement-from-hr"
+        >
           From HR — not yet confirmed by you
         </p>
       )}
+      <TrailNote item={item} round={h.mdRound} />
       {start && <p className="whitespace-nowrap text-[11px] text-md-ink-soft">First deduction {start}</p>}
       {kind !== "undecided" && item.md.remark && (
         <p
-          className="max-w-[14rem] truncate text-[11px] text-md-ink-soft"
+          className="max-w-[11rem] truncate text-[11px] text-md-ink-soft"
           title={item.md.remark}
           data-testid="md-settlement-remark"
         >
@@ -530,7 +720,7 @@ function Remarks({ item, full }: { item: SettlementItem; full?: boolean }) {
       {lines.map((l) => (
         <p
           key={l.label}
-          className={cn("text-[11px] leading-snug text-md-ink-soft", !full && "max-w-[10rem] truncate")}
+          className={cn("text-[11px] leading-snug text-md-ink-soft", !full && "max-w-[8rem] truncate")}
           title={full ? undefined : `${l.label}: ${l.text}`}
           data-testid={l.testId}
         >
@@ -577,17 +767,32 @@ function SelectAll({ items, h, label }: { items: SettlementItem[]; h: RowHandler
 
 // ── the table (a wide screen) ───────────────────────────────────────────────────────────────────────────────────────
 
-const TH = "whitespace-nowrap px-3 py-2.5 align-bottom";
-const TD = "px-3 py-3 align-middle";
+const TH = "whitespace-nowrap px-2.5 py-2.5 align-bottom";
+const TD = "px-2.5 py-3 align-middle";
 /** Remarks show from a wide card on (the purpose and every remark are also each one's hover text). */
 const WIDE = "hidden @6xl:table-cell";
 
 /**
  * The table (owner 2026-11-27: "the same quality as the HRMS tables"): one value per column, each on one or two short
  * lines (the longer detail is the hover text), the decision and where the request stands in one column, and the buttons
- * as round icon buttons on one line in their own column - no stacked buttons, no wrapping columns.
+ * as round icon buttons on one line in their own column - no stacked buttons, no wrapping columns. The rows come in
+ * three groups under a divider row each: waiting for the MD, approved, rejected (a reworked request goes back to the top).
  */
-function RequestTable({ items, h, label }: { items: SettlementItem[]; h: RowHandlers; label: string }) {
+function RequestTable({
+  items,
+  h,
+  label,
+  moved,
+}: {
+  items: SettlementItem[];
+  h: RowHandlers;
+  label: string;
+  moved: ReadonlySet<number>;
+}) {
+  const groups = groupByReview(items, (i) => reviewOf(i, h.stage));
+  // the divider spans the columns always shown; the Remarks (wide only) and Actions cells follow it, so the row has
+  // exactly the table's columns at every width
+  const lead = (h.canDecide ? 1 : 0) + 6;
   return (
     <div className="md-panel hidden overflow-x-auto @5xl:block" data-testid="md-settlement-table">
       <table className="w-full border-collapse text-left text-xs">
@@ -629,53 +834,70 @@ function RequestTable({ items, h, label }: { items: SettlementItem[]; h: RowHand
           </tr>
         </thead>
         <tbody>
-          {items.map((item) => {
-            const flagged = h.highlight.has(item.id) && decisionKind(item) === "undecided";
-            return (
+          {groups.map((g) => (
+            <Fragment key={g.state}>
               <tr
-                key={item.id}
-                className={cn(
-                  "border-b border-md-line last:border-b-0",
-                  flagged && "bg-md-danger-50/70",
-                  h.selected.has(item.id) && "bg-md-wine/[0.04]",
-                )}
-                data-testid={`md-settlement-row-${item.id}`}
-                data-flagged={flagged || undefined}
+                className={cn("border-b border-md-line", GROUP_TONE[g.state].row)}
+                data-testid={`md-settlement-group-${g.state}`}
               >
-                {h.canDecide && (
-                  <td className={TD}>
-                    <RowCheck item={item} h={h} />
-                  </td>
-                )}
-                <td className={cn(TD, "max-w-[11rem]")}>
-                  <Employee item={item} />
-                </td>
-                <td className={cn(TD, "text-right")}>
-                  <Requested item={item} />
-                </td>
-                <td className={cn(TD, "text-right")}>
-                  <Limit item={item} />
-                </td>
-                <td className={TD}>
-                  <Proposal item={item} />
-                </td>
-                <td className={TD}>
-                  <DecisionCell item={item} h={h} />
-                </td>
-                <td className={cn(TD, "whitespace-nowrap")}>
-                  <Leave item={item} h={h} />
-                </td>
-                <td className={cn(TD, WIDE)}>
-                  <Remarks item={item} />
-                </td>
-                {h.canDecide && (
-                  <td className={cn(TD, "text-right")}>
-                    <IconActions item={item} h={h} />
-                  </td>
-                )}
+                <th scope="colgroup" colSpan={lead} className="px-2.5 py-1.5 text-left font-normal">
+                  <GroupHeading state={g.state} stage={h.stage} count={g.rows.length} />
+                </th>
+                <td className={WIDE} aria-hidden="true" />
+                {h.canDecide && <td aria-hidden="true" />}
               </tr>
-            );
-          })}
+              {g.rows.map((item) => {
+                const flagged = h.highlight.has(item.id) && decisionKind(item) === "undecided";
+                return (
+                  <tr
+                    key={item.id}
+                    className={cn(
+                      "border-b border-md-line transition-colors duration-700 last:border-b-0",
+                      flagged && "bg-md-danger-50/70",
+                      h.selected.has(item.id) && "bg-md-wine/[0.04]",
+                      moved.has(item.id) && MOVED,
+                    )}
+                    data-testid={`md-settlement-row-${item.id}`}
+                    data-review={g.state}
+                    data-moved={moved.has(item.id) || undefined}
+                    data-flagged={flagged || undefined}
+                  >
+                    {h.canDecide && (
+                      <td className={TD}>
+                        <RowCheck item={item} h={h} />
+                      </td>
+                    )}
+                    <td className={cn(TD, "max-w-[10rem]")}>
+                      <Employee item={item} />
+                    </td>
+                    <td className={cn(TD, "text-right")}>
+                      <Requested item={item} />
+                    </td>
+                    <td className={cn(TD, "text-right")}>
+                      <Limit item={item} />
+                    </td>
+                    <td className={TD}>
+                      <Proposal item={item} />
+                    </td>
+                    <td className={TD}>
+                      <DecisionCell item={item} h={h} />
+                    </td>
+                    <td className={cn(TD, "whitespace-nowrap")}>
+                      <Leave item={item} h={h} />
+                    </td>
+                    <td className={cn(TD, WIDE)}>
+                      <Remarks item={item} />
+                    </td>
+                    {h.canDecide && (
+                      <td className={cn(TD, "text-right")}>
+                        <IconActions item={item} h={h} />
+                      </td>
+                    )}
+                  </tr>
+                );
+              })}
+            </Fragment>
+          ))}
         </tbody>
       </table>
     </div>
@@ -693,7 +915,18 @@ function Field({ label, children, wide }: { label: string; children: ReactNode; 
   );
 }
 
-function RequestCards({ items, h, label }: { items: SettlementItem[]; h: RowHandlers; label: string }) {
+function RequestCards({
+  items,
+  h,
+  label,
+  moved,
+}: {
+  items: SettlementItem[];
+  h: RowHandlers;
+  label: string;
+  moved: ReadonlySet<number>;
+}) {
+  const groups = groupByReview(items, (i) => reviewOf(i, h.stage));
   return (
     <div className="space-y-3 @5xl:hidden">
       {h.canDecide && items.length > 0 && (
@@ -702,69 +935,84 @@ function RequestCards({ items, h, label }: { items: SettlementItem[]; h: RowHand
           Select all ({items.length})
         </label>
       )}
-      <ul
-        className="grid grid-cols-1 items-start gap-3 @2xl:grid-cols-2"
-        aria-label={label}
-        data-testid="md-settlement-cards"
-      >
-        {items.map((item) => {
-          const flagged = h.highlight.has(item.id) && decisionKind(item) === "undecided";
-          return (
-            <li key={item.id}>
-              <article
-                className={cn(
-                  "rounded-2xl border border-white/80 bg-white/55 p-4 shadow-sm",
-                  flagged && "ring-2 ring-md-danger-400",
-                  h.selected.has(item.id) && "ring-2 ring-md-wine/40",
-                )}
-                aria-label={`${typeLabelOf(item.advance)} request from ${who(item)}`}
-                data-testid={`md-settlement-card-${item.id}`}
-                data-flagged={flagged || undefined}
-              >
-                <div className="flex items-start gap-3">
-                  {h.canDecide && (
-                    <div className="pt-0.5">
-                      <RowCheck item={item} h={h} />
+      {groups.map((g) => (
+        <section
+          key={g.state}
+          className="space-y-2"
+          aria-label={`${groupLabel(g.state, h.stage)}: ${g.rows.length}`}
+          data-testid={`md-settlement-card-group-${g.state}`}
+        >
+          <div className={cn("rounded-xl px-3 py-1.5", GROUP_TONE[g.state].row)}>
+            <GroupHeading state={g.state} stage={h.stage} count={g.rows.length} />
+          </div>
+          <ul
+            className="grid grid-cols-1 items-start gap-3 @2xl:grid-cols-2"
+            aria-label={`${label}: ${groupLabel(g.state, h.stage)}`}
+            data-testid="md-settlement-cards"
+          >
+            {g.rows.map((item) => {
+              const flagged = h.highlight.has(item.id) && decisionKind(item) === "undecided";
+              return (
+                <li key={item.id}>
+                  <article
+                    className={cn(
+                      "rounded-2xl border border-white/80 bg-white/55 p-4 shadow-sm transition-colors duration-700",
+                      flagged && "ring-2 ring-md-danger-400",
+                      h.selected.has(item.id) && "ring-2 ring-md-wine/40",
+                      moved.has(item.id) && MOVED,
+                    )}
+                    aria-label={`${typeLabelOf(item.advance)} request from ${who(item)}`}
+                    data-testid={`md-settlement-card-${item.id}`}
+                    data-review={g.state}
+                    data-flagged={flagged || undefined}
+                  >
+                    <div className="flex items-start gap-3">
+                      {h.canDecide && (
+                        <div className="pt-0.5">
+                          <RowCheck item={item} h={h} />
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <Employee item={item} full />
+                      </div>
                     </div>
-                  )}
-                  <div className="min-w-0 flex-1">
-                    <Employee item={item} full />
-                  </div>
-                </div>
-                <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-md-line pt-3">
-                  <Field label="Requested">
-                    <Requested item={item} />
-                  </Field>
-                  <Field label="Eligible limit">
-                    <Limit item={item} full />
-                  </Field>
-                  <Field label="HR's proposal">
-                    <Proposal item={item} full />
-                  </Field>
-                  <Field label="Leave (1st–20th)">
-                    <Leave item={item} h={h} />
-                  </Field>
-                  <Field label="Your decision" wide>
-                    <Decision item={item} h={h} />
-                  </Field>
-                  <Field label="Status">
-                    <Status item={item} stage={h.stage} />
-                  </Field>
-                  <Field label="Remarks">
-                    <Remarks item={item} full />
-                  </Field>
-                </dl>
-              </article>
-            </li>
-          );
-        })}
-      </ul>
+                    <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 border-t border-md-line pt-3">
+                      <Field label="Requested">
+                        <Requested item={item} />
+                      </Field>
+                      <Field label="Eligible limit">
+                        <Limit item={item} full />
+                      </Field>
+                      <Field label="HR's proposal">
+                        <Proposal item={item} full />
+                      </Field>
+                      <Field label="Leave (1st–20th)">
+                        <Leave item={item} h={h} />
+                      </Field>
+                      <Field label="Your decision" wide>
+                        <Decision item={item} h={h} />
+                      </Field>
+                      <Field label="Status">
+                        <Status item={item} stage={h.stage} />
+                      </Field>
+                      <Field label="Remarks">
+                        <Remarks item={item} full />
+                      </Field>
+                    </dl>
+                  </article>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }
 
 /** The batch's requests: a table on a wide screen, cards on a phone (the same handlers drive both), every value under
- *  its own header: employee, requested, eligible limit, HR's proposal, your decision, leave, status, remarks. */
+ *  its own header: employee, requested, eligible limit, HR's proposal, your decision, leave, status, remarks. Both are
+ *  grouped the same way: waiting for the MD at the top, then approved, then rejected (owner 2026-11-27). */
 export default function RequestList({
   items,
   handlers,
@@ -774,10 +1022,11 @@ export default function RequestList({
   handlers: RowHandlers;
   label: string;
 }) {
+  const moved = useMovedRows(items, handlers.stage);
   return (
     <>
-      <RequestTable items={items} h={handlers} label={label} />
-      <RequestCards items={items} h={handlers} label={label} />
+      <RequestTable items={items} h={handlers} label={label} moved={moved} />
+      <RequestCards items={items} h={handlers} label={label} moved={moved} />
     </>
   );
 }

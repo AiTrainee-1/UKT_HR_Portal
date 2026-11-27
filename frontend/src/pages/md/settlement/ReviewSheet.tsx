@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { ArrowLeft, FileCheck2, Send, Undo2 } from "lucide-react";
+import { ArrowLeft, CornerUpLeft, FileCheck2, GitCompareArrows, Send, Undo2 } from "lucide-react";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/sheet";
 import { REJECT_REMARK_MAX } from "@/lib/reject-remark";
 import { cn } from "@/lib/utils";
@@ -15,7 +15,7 @@ import {
   type DecisionKind,
   type ReviewSummary,
 } from "./logic";
-import { LeaveChip } from "./parts";
+import { BTN_MOTION, GHOST_MOTION, LeaveChip } from "./parts";
 import type { ConfirmMode, SettlementBatch } from "./types";
 
 const GROUP_TONE: Record<DecisionKind, string> = {
@@ -36,10 +36,14 @@ function Count({ label, value, testId, tone }: { label: string; value: number; t
 
 /**
  * Review decisions: every request with what the MD decided (approved, reduced from -> to, rejected; "from HR" when it is
- * still HR's pre-filled proposal) and the remark, the counts and totals, the MD's note, and the two ways on (owner
- * 2026-11-27), each explained: Forward to HR (HR finalizes) or Direct to Auditor (the MD finalizes; HR Final Settlement is
- * skipped). Both stay off until every request is decided. When the server still finds open requests (another tab cleared
- * one), they are listed first and marked on the page.
+ * still HR's pre-filled proposal; "changed" when it differs from HR's proposal) and the remark, the counts and totals, the
+ * MD's note, and the ways on (owner 2026-11-27), each explained:
+ * - no change from HR's proposals: approve - Forward to HR (HR finalizes) or Direct to Auditor (the MD finalizes; HR
+ *   Final Settlement is skipped), both off until every request is decided; Return to HR for rework stays possible with
+ *   written instructions (corrections);
+ * - changes: Return to HR for rework is the way on (HR reworks and resubmits; the MD approves the revised settlement); the
+ *   approve options are off, saying why.
+ * When the server still finds open requests (another tab cleared one), they are listed first and marked on the page.
  */
 export default function ReviewSheet({
   open,
@@ -49,6 +53,7 @@ export default function ReviewSheet({
   note,
   onNote,
   onConfirm,
+  onReturn,
   confirming,
   error,
 }: {
@@ -60,6 +65,8 @@ export default function ReviewSheet({
   onNote: (note: string) => void;
   /** Forward to HR ("hr") or Direct to Auditor ("direct"). */
   onConfirm: (mode: ConfirmMode) => void;
+  /** Return to HR for rework: opens its dialog (the instructions are the note). */
+  onReturn: () => void;
   /** The option on its way to the server, if any. */
   confirming: ConfirmMode | null;
   error: string | null;
@@ -67,6 +74,34 @@ export default function ReviewSheet({
   const noteId = useId();
   const state = confirmState(batch, summary);
   const groups = reviewGroups(summary);
+  const changes = summary.changed;
+  const canReturn = batch.actions.canReturnMd ?? (batch.stage === "md_review" && batch.actions.canDecideMd);
+  const returnPanel = (primary: boolean) => (
+    <div
+      className={cn("space-y-2 p-3.5", primary ? "md-panel-sand" : "md-panel")}
+      data-testid="md-settlement-option-return"
+      data-primary={primary || undefined}
+    >
+      <p className="flex items-center gap-2 text-[13px] font-extrabold text-md-ink">
+        <CornerUpLeft size={15} aria-hidden="true" className={primary ? "text-md-warning-700" : "text-md-wine"} />{" "}
+        Return to HR for rework
+      </p>
+      <p className="text-xs leading-relaxed text-md-ink-soft">
+        {primary
+          ? `You changed ${plural(changes, "request")} from HR's proposal. HR reviews your changes and instructions, corrects the settlement and resubmits it to you; you approve the revised settlement then.`
+          : "Nothing differs from HR's proposals. To ask HR for corrections, return it with your instructions (required); HR resubmits it for your approval."}
+      </p>
+      <button
+        type="button"
+        className={cn("md-btn w-full sm:w-auto", primary ? "md-btn-primary" : "md-btn-soft", BTN_MOTION)}
+        onClick={onReturn}
+        disabled={!canReturn || confirming !== null}
+        data-testid="md-settlement-return-open"
+      >
+        <CornerUpLeft size={15} aria-hidden="true" /> Return to HR for rework
+      </button>
+    </div>
+  );
   return (
     <Sheet open={open} onOpenChange={(next) => !next && onClose()}>
       <SheetContent
@@ -147,6 +182,11 @@ export default function ReviewSheet({
                     <div className="flex flex-wrap items-center gap-2">
                       <LeaveChip check={r.leave} />
                       {r.fromHr && <span className="md-chip md-chip-sand">From HR</span>}
+                      {r.changed && (
+                        <span className="md-chip md-chip-warning" data-testid="md-settlement-review-changed">
+                          <GitCompareArrows size={12} aria-hidden="true" /> Changed from HR's proposal
+                        </span>
+                      )}
                       {r.remark && <p className="min-w-0 text-[11.5px] text-md-ink-soft">“{r.remark}”</p>}
                     </div>
                   </li>
@@ -167,8 +207,12 @@ export default function ReviewSheet({
 
           <div>
             <label htmlFor={noteId} className="block text-xs font-bold text-md-ink">
-              Your note{" "}
-              <span className="font-medium text-md-ink-soft">(optional: instructions for HR, or for the record)</span>
+              {changes > 0 ? "Instructions to HR" : "Your note"}{" "}
+              <span className="font-medium text-md-ink-soft">
+                {changes > 0
+                  ? "(optional: what HR should look at in your changes)"
+                  : "(optional: instructions for HR, or for the record)"}
+              </span>
             </label>
             <textarea
               id={noteId}
@@ -184,6 +228,16 @@ export default function ReviewSheet({
 
           <section aria-label="How to proceed" className="space-y-2.5" data-testid="md-settlement-confirm-options">
             <p className="text-[11px] font-extrabold uppercase tracking-wide text-md-ink-soft">How to proceed</p>
+            {changes > 0 && returnPanel(true)}
+            {changes > 0 && (
+              <p
+                className="flex items-start gap-1.5 text-xs font-semibold text-md-warning-800"
+                data-testid="md-settlement-approve-blocked"
+              >
+                <GitCompareArrows size={14} aria-hidden="true" className="mt-px shrink-0" />
+                {state.reason}
+              </p>
+            )}
             <div className="md-panel space-y-2 p-3.5" data-testid="md-settlement-option-hr">
               <p className="flex items-center gap-2 text-[13px] font-extrabold text-md-ink">
                 <Undo2 size={15} aria-hidden="true" className="text-md-wine" /> Forward to HR
@@ -194,7 +248,7 @@ export default function ReviewSheet({
               </p>
               <button
                 type="button"
-                className="md-btn md-btn-primary w-full sm:w-auto"
+                className={cn("md-btn w-full sm:w-auto", changes > 0 ? "md-btn-soft" : "md-btn-primary", BTN_MOTION)}
                 onClick={() => onConfirm("hr")}
                 disabled={!state.enabled || confirming !== null}
                 data-testid="md-settlement-confirm-hr-mode"
@@ -214,7 +268,7 @@ export default function ReviewSheet({
               </p>
               <button
                 type="button"
-                className="md-btn md-btn-ink w-full sm:w-auto"
+                className={cn("md-btn md-btn-ink w-full sm:w-auto", BTN_MOTION)}
                 onClick={() => onConfirm("direct")}
                 disabled={!state.enabled || confirming !== null}
                 data-testid="md-settlement-confirm-direct"
@@ -223,6 +277,7 @@ export default function ReviewSheet({
                 {confirming === "direct" ? "Finalizing and sending…" : "Finalize & send to auditor"}
               </button>
             </div>
+            {changes === 0 && returnPanel(false)}
           </section>
 
           {error && (
@@ -237,14 +292,23 @@ export default function ReviewSheet({
         </div>
 
         <div className="sticky bottom-0 mt-auto border-t border-md-line bg-md-vanilla/95 px-5 py-3 backdrop-blur sm:px-6">
-          {state.reason && (
+          {state.reason && changes === 0 && (
             <p className="mb-2 text-xs font-semibold text-md-ink-soft" data-testid="md-settlement-confirm-reason">
               {state.reason}
             </p>
           )}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-[11px] text-md-ink-soft">Either way, your decisions can't be changed afterwards.</p>
-            <button type="button" className="md-btn md-btn-ghost" onClick={onClose} disabled={confirming !== null}>
+            <p className="text-[11px] text-md-ink-soft">
+              {changes > 0
+                ? "After the return, you approve the settlement once HR resubmits it."
+                : "Once approved, your decisions can't be changed."}
+            </p>
+            <button
+              type="button"
+              className={cn("md-btn md-btn-ghost", GHOST_MOTION)}
+              onClick={onClose}
+              disabled={confirming !== null}
+            >
               <ArrowLeft size={15} aria-hidden="true" /> Back to the list
             </button>
           </div>

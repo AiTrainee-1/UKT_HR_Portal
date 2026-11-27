@@ -1,12 +1,14 @@
 import { useRef, type ComponentType, type KeyboardEvent, type ReactNode } from "react";
-import { AlertOctagon, AlertTriangle, Ban, CalendarDays, CheckCircle2, Scissors, XCircle } from "lucide-react";
+import { AlertOctagon, AlertTriangle, CalendarDays, History } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AdvanceLeaveCheck } from "@/lib/api-client";
-import { TONE } from "@/lib/statusTones";
+import { TONE, type Tone } from "@/lib/statusTones";
 import { cn } from "@/lib/utils";
 import { leaveChipOf, leaveDaysText } from "@/pages/hr/settlement/leave";
 import { formatMoney } from "@/pages/hr/settlement/shared";
+import { Pill } from "@/pages/hr/settlement/table-kit";
 import type { PortalItem } from "./api";
-import { rowStatus, type RowStatus } from "./logic";
+import { rowStatus, trailLines, type RowState, type TrailLine, type TrailOutcome } from "./logic";
 
 // The Auditor Review Portal's own small pieces (owner 2026-11-27 redesign): a financial-review look in the HRMS colours
 // (deep blue #006496 with indigo accents on slate neutrals), white cards on a cool grey page, tabular figures.
@@ -111,41 +113,116 @@ export function Panel({
   );
 }
 
-const STATUS_VIEW: Record<RowStatus, { text: string; by?: string; className: string; icon: IconType }> = {
-  approved: { text: "Approved", className: "border-emerald-200 bg-emerald-50 text-emerald-800", icon: CheckCircle2 },
-  reduced: { text: "Reduced", className: "border-amber-200 bg-amber-50 text-amber-800", icon: Scissors },
-  rejected_by_auditor: {
-    text: "Rejected",
-    by: "by you",
-    className: "border-rose-200 bg-rose-50 text-rose-800",
-    icon: Ban,
-  },
-  rejected_by_hr: {
-    text: "Rejected",
-    by: "by HR",
-    className: "border-slate-200 bg-slate-100 text-slate-600",
-    icon: XCircle,
-  },
+const STATUS_VIEW: Record<RowState, { text: string; by?: string; tone: Tone }> = {
+  pending: { text: "Waiting", by: "for you", tone: "warning" },
+  approved: { text: "Approved", tone: "success" },
+  reduced: { text: "Reduced", tone: "caution" },
+  rejected_by_auditor: { text: "Rejected", by: "by you", tone: "danger" },
+  rejected_by_hr: { text: "Rejected", by: "by HR", tone: "neutral" },
 };
 
-/** The request's state in words and an icon (never the colour alone). `short` (a table column that already says whose
- *  decision it is) keeps "by HR" / "by you" for screen readers only. */
-export function StatusTag({ status, short, className }: { status: RowStatus; short?: boolean; className?: string }) {
+/** The request's state as the HRMS status pill (its dot and its words, never the colour alone). `short` (a column that
+ *  already says whose decision it is) keeps "by HR" / "by you" for screen readers only. */
+export function StatusTag({ status, short, className }: { status: RowState; short?: boolean; className?: string }) {
   const v = STATUS_VIEW[status];
-  const Icon = v.icon;
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-semibold",
-        v.className,
-        className,
-      )}
-      data-status={status}
-    >
-      <Icon size={11} aria-hidden />
-      {v.text}
-      {v.by && <span className={short ? "sr-only" : undefined}> {v.by}</span>}
+    <span className="inline-flex" data-status={status}>
+      <Pill tone={v.tone} className={className}>
+        <span>
+          {v.text}
+          {v.by && <span className={short ? "sr-only" : undefined}> {v.by}</span>}
+        </span>
+      </Pill>
     </span>
+  );
+}
+
+const TRAIL_TONE: Record<TrailOutcome, string> = {
+  accepted: "border-emerald-200 bg-emerald-50/80 text-emerald-800 hover:bg-emerald-100/80",
+  kept: "border-amber-200 bg-amber-50/80 text-amber-800 hover:bg-amber-100/80",
+  changed: "border-amber-200 bg-amber-50/80 text-amber-800 hover:bg-amber-100/80",
+  rejected: "border-rose-200 bg-rose-50/80 text-rose-800 hover:bg-rose-100/80",
+  settled: "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100",
+};
+
+function TrailDetail({ lines }: { lines: TrailLine[] }) {
+  return (
+    <div className="max-w-xs space-y-2 text-left">
+      {lines.map((l) => (
+        <div key={l.round} className="space-y-0.5">
+          <p className="font-semibold text-white">{l.text}</p>
+          {l.yourRemark && <p className="text-slate-300">Your remark: {l.yourRemark}</p>}
+          {l.hrRemark && <p className="text-slate-300">HR&apos;s remark: {l.hrRemark}</p>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * A revised settlement's earlier round on one request (owner 2026-11-27): the latest of the auditor's changes and HR's
+ * answer as a small chip (the round over "HR accepted"); the whole line, every round and both remarks in the shared tooltip
+ * (drawn above the page, so the table never scrolls sideways for it). Nothing when the request has no earlier change.
+ */
+export function TrailChip({ item, testId }: { item: PortalItem; testId?: string }) {
+  const lines = trailLines(item);
+  if (lines.length === 0) return null;
+  const last = lines[lines.length - 1];
+  return (
+    <TooltipProvider delayDuration={120}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex max-w-[9.5rem] flex-col items-start rounded-lg border px-2 py-1 text-left leading-tight transition-colors",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-300",
+              TRAIL_TONE[last.outcome],
+            )}
+            aria-label={lines.map((l) => l.text).join(". ")}
+            data-testid={testId}
+            data-outcome={last.outcome}
+            data-text={last.text}
+          >
+            <span className="inline-flex items-center gap-1 text-[10.5px] font-medium opacity-80">
+              <History size={10} aria-hidden className="shrink-0" />
+              Round {last.round}
+            </span>
+            <span className="sr-only"> · </span>
+            <span className="max-w-full truncate whitespace-nowrap text-[11px] font-semibold">{last.answer}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          collisionPadding={8}
+          className="rounded-lg border-0 bg-slate-900 px-3 py-2 text-[11.5px] leading-snug text-white shadow-xl"
+          data-testid={testId ? `${testId}-tip` : undefined}
+        >
+          <TrailDetail lines={lines} />
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+/** The same rounds written out in full (a phone card has the room). */
+export function TrailList({ item, testId }: { item: PortalItem; testId?: string }) {
+  const lines = trailLines(item);
+  if (lines.length === 0) return null;
+  return (
+    <div className="rounded-xl border border-violet-200/70 bg-violet-50/50 px-3 py-2" data-testid={testId}>
+      <p className="mb-1 flex items-center gap-1 text-[11px] font-medium text-violet-800">
+        <History size={11} aria-hidden /> Earlier rounds
+      </p>
+      <ul className="space-y-1 text-[12px] text-slate-700">
+        {lines.map((l) => (
+          <li key={l.round}>
+            <span className="font-medium text-slate-900">{l.text}</span>
+            {l.hrRemark && <span className="block text-[11.5px] text-slate-500">HR: {l.hrRemark}</span>}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

@@ -2,7 +2,7 @@
 // like service.timecard_json (api/settlement_automation/service.py).
 
 import type { LeaveCalendarData } from "@/components/leave-calendar/LeaveCalendar";
-import type { PortalData, PortalItem, TimeCard } from "./api";
+import type { PortalData, PortalItem, PortalReviewState, PortalTrailEntry, TimeCard } from "./api";
 
 const earnings = (fixed: number, days: number, earned: number) => ({
   month: 11,
@@ -16,7 +16,8 @@ const earnings = (fixed: number, days: number, earned: number) => ({
   limit: Math.floor(earned / 2),
 });
 
-/** The effective settlement of an item from HR's final decision and the auditor's change (service.effective). */
+/** The effective settlement of an item from HR's final decision and the auditor's change (service.effective), and
+ *  where it stands with the auditor (service.review_state at Auditor Review). */
 export function settle(i: PortalItem): PortalItem {
   const a = i.auditor;
   const effective =
@@ -25,7 +26,13 @@ export function settle(i: PortalItem): PortalItem {
       : i.final.decision === "approved" && a.action === "reduce" && a.amount != null
         ? { decision: "approved" as const, amount: a.amount, remark: a.remark }
         : { decision: i.final.decision, amount: i.final.amount, remark: i.final.remark };
-  return { ...i, effective };
+  const review: PortalReviewState =
+    i.final.decision === "rejected" || a.action === "reject"
+      ? "rejected"
+      : a.action === "approve" || a.action === "reduce"
+        ? "approved"
+        : "pending";
+  return { ...i, effective, review };
 }
 
 export function portalItem(
@@ -116,7 +123,16 @@ export function portalData(over: Partial<PortalData> = {}): PortalData {
       mdNote: "",
     },
     items,
-    totals: { requests: 0, approved: 0, rejected: 0, approvedAmount: 0, hrApprovedAmount: 0, changes: 0, remarks: 0 },
+    totals: {
+      requests: 0,
+      approved: 0,
+      rejected: 0,
+      approvedAmount: 0,
+      hrApprovedAmount: 0,
+      changes: 0,
+      remarks: 0,
+      pending: 0,
+    },
     accounts: { to: ["accounts@uktextiles.in"], cc: ["md@uktextiles.in"] },
     link: { expiresAt: "2026-12-01T05:30:00Z", submittedAt: null, decision: null },
     canReview: true,
@@ -219,6 +235,72 @@ export function termPortalData(over: Partial<PortalData> = {}): PortalData {
   });
 }
 
+const step = (
+  role: PortalTrailEntry["role"],
+  round: number,
+  action: string,
+  amount: number | null,
+  remark: string,
+): PortalTrailEntry => ({
+  at: role === "hr_final" ? "2026-11-24T05:30:00Z" : "2026-11-25T09:00:00Z",
+  by: role === "hr_final" ? "Priya HR" : "Auditor",
+  role,
+  round,
+  action,
+  amount,
+  remark,
+});
+
+/**
+ * Round 2 (owner 2026-11-27: the auditor returned round 1 to HR, HR reworked it and resubmitted it; every request waits
+ * for the auditor again). Round 1: Asha - HR ₹6,000, the auditor reduced it to ₹3,000, HR accepted (now ₹3,000); Ravi -
+ * HR ₹7,500.4, the auditor rejected it, HR kept ₹7,500.4 with its reason; Meena - rejected by HR (no trail); Karthik - HR
+ * ₹5,000, the auditor left a remark only, HR changed it to ₹4,000.
+ */
+export function round2PortalData(over: Partial<PortalData> = {}): PortalData {
+  const base = portalData();
+  const [asha, ravi, meena] = base.items;
+  const karthik = portalItem(4, {
+    code: "S104",
+    name: "Karthik Raja",
+    final: "approved",
+    amount: 4000,
+    requested: 5000,
+  });
+  return recount({
+    ...base,
+    settlement: {
+      ...base.settlement,
+      round: 2,
+      resubmittedAt: "2026-11-26T04:30:00Z",
+      resubmittedBy: "Priya HR",
+      resubmitNote: "Took your reduction for Asha; Ravi's earlier loan is closed, so his advance stays.",
+    },
+    items: [
+      {
+        ...asha,
+        final: { ...asha.final, amount: 3000, remark: "Only 8 days worked" },
+        trail: [step("hr_final", 1, "approved", 6000, ""), step("auditor", 1, "reduce", 3000, "Only 8 days worked")],
+      },
+      {
+        ...ravi,
+        final: { ...ravi.final, remark: "The earlier loan closed in October" },
+        trail: [
+          step("hr_final", 1, "approved", 7500.4, ""),
+          step("auditor", 1, "reject", null, "Loan already running"),
+        ],
+      },
+      meena,
+      {
+        ...karthik,
+        final: { ...karthik.final, remark: "Corrected to the days worked" },
+        trail: [step("hr_final", 1, "approved", 5000, ""), step("auditor", 1, "", null, "Check the days worked")],
+      },
+    ],
+    ...over,
+  });
+}
+
 /** The leave calendar of Ravi's request (GET /api/auditor-review/<token>/leave/2): 3 days of leave in the 1st-20th. */
 export const LEAVE_CALENDAR: LeaveCalendarData = {
   employee: { code: "S102", name: "Ravi Shankar" },
@@ -249,8 +331,9 @@ export function recount(d: PortalData): PortalData {
       rejected: items.length - paid.length,
       approvedAmount: paid.reduce((s, i) => s + (i.effective.amount ?? 0), 0),
       hrApprovedAmount: items.reduce((s, i) => s + (i.final.decision === "approved" ? (i.final.amount ?? 0) : 0), 0),
-      changes: items.filter((i) => i.auditor.action).length,
+      changes: items.filter((i) => i.auditor.action === "reduce" || i.auditor.action === "reject").length,
       remarks: items.filter((i) => i.auditor.remark.trim()).length,
+      pending: items.filter((i) => i.review === "pending").length,
     },
     hasChanges: items.some((i) => i.auditor.action === "reduce" || i.auditor.action === "reject"),
   };

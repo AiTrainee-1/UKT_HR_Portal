@@ -1,24 +1,23 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   Ban,
   BadgeCheck,
   CalendarDays,
+  Check,
   CheckCheck,
   FileText,
   Info,
   Loader2,
   MessageSquarePlus,
-  MinusCircle,
   PencilLine,
+  RotateCcw,
   Scale,
   Search,
-  Undo2,
   X,
   XCircle,
 } from "lucide-react";
 import { LeaveCalendarDialog } from "@/components/leave-calendar/LeaveCalendar";
-import { PersonCell, RowAction, RowActions } from "@/pages/hr/settlement/table-kit";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -29,11 +28,24 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { groupByReview, reviewGroupLabel, type ReviewState } from "@/lib/reviewOrder";
 import { cn } from "@/lib/utils";
 import { REMARK_MAX, formatDays } from "@/pages/hr/settlement/logic";
-import { formatMoney } from "@/pages/hr/settlement/shared";
+import { formatDateTime, formatMoney } from "@/pages/hr/settlement/shared";
+import {
+  FIRST,
+  FLASH,
+  GroupRow,
+  LAST,
+  PersonCell,
+  RowAction,
+  RowActions,
+  useFlash,
+  type ActionColor,
+} from "@/pages/hr/settlement/table-kit";
 import {
   fetchLeaveCalendar,
   type PortalBulkInput,
@@ -44,21 +56,27 @@ import {
 import ChangeDialog from "./ChangeDialog";
 import {
   ROW_FILTERS,
-  UNDO_BODY,
+  approveBody,
   asRowFilter,
   bulkBody,
   bulkProblem,
   bulkSelectable,
   bulkSummary,
+  canRework,
   chosenItems,
   filterItems,
   firstEmiMonth,
   hrApproved,
-  isChanged,
   isTermSettlement,
+  lastRoundSummary,
+  pendingCount,
   portalTotals,
   refusalText,
   requestsWord,
+  reviewOf,
+  reviewRound,
+  reworkBody,
+  rowState,
   rowStatus,
   selectionState,
   termEmi,
@@ -69,16 +87,39 @@ import {
   type ChangeMode,
   type RowFilter,
 } from "./logic";
-import { AfterAudit, CARD, FOCUS, HEADING_FONT, HrAmount, LeaveCount, RemarkText, StatCard, StatusTag } from "./parts";
+import {
+  AfterAudit,
+  CARD,
+  FOCUS,
+  HEADING_FONT,
+  HrAmount,
+  LeaveCount,
+  RemarkText,
+  StatCard,
+  StatusTag,
+  TrailChip,
+  TrailList,
+} from "./parts";
 
-// The HRMS table look (owner 2026-11-27: "the All Employees table is the reference"): quiet sentence-case headings, one
-// value per column, the employee as initials + name over the code and department.
-const TH =
-  "sticky top-0 z-10 whitespace-nowrap border-b border-slate-200 bg-slate-50 px-2 py-2.5 text-left align-bottom text-xs font-medium text-slate-500";
-const TD = "border-b border-slate-100 px-2 py-3 align-middle";
+// The HRMS table look (owner 2026-11-27: "the All Employees table is the reference"): the shared Table with its quiet
+// sentence-case headings, one value per column, the employee as initials + name over the code and department, money
+// right-aligned in tabular figures, the row actions as icon buttons with their label drawn above the page. The requests
+// are grouped: waiting for the auditor at the top, approved below, rejected below those.
+
 const NUM = "text-right tabular-nums";
+/** A heading cell: on the bottom line, so a heading over two lines and a one-line heading read along one baseline. */
+const HEAD_CELL = "h-auto py-2.5 align-bottom leading-tight";
 const dash = <span className="text-slate-300">—</span>;
 const money = (n: number | null | undefined) => (n != null ? formatMoney(n) : dash);
+
+/** The group headings of the auditor's list. */
+const groupLabel = (state: ReviewState) => reviewGroupLabel(state, "Waiting for your review");
+
+const GROUP_DOT: Record<ReviewState, string> = {
+  pending: "bg-amber-500",
+  approved: "bg-emerald-500",
+  rejected: "bg-red-500",
+};
 
 type Column = {
   key: string;
@@ -88,7 +129,7 @@ type Column = {
   /** The card's shorter label. */
   short?: string;
   className?: string;
-  cell: (item: PortalItem, sno: number) => ReactNode;
+  cell: (item: PortalItem) => ReactNode;
   total?: ReactNode;
 };
 
@@ -130,14 +171,32 @@ function After({ item, term, align }: { item: PortalItem; term: boolean; align?:
 function Employee({ item }: { item: PortalItem }) {
   const a = item.advance;
   return (
-    <div className="max-w-[15rem]" title={a.employeeDesignation ?? undefined}>
+    <div className="max-w-[13rem] 2xl:max-w-[15rem]" title={a.employeeDesignation ?? undefined}>
       <PersonCell name={a.employeeName} code={a.employeeCode} department={a.employeeDepartment} />
     </div>
   );
 }
 
+/** The auditor's remark, and on a revised settlement what happened to the auditor's earlier change (a chip with the
+ *  detail in its tooltip). */
+function Remarks({ item }: { item: PortalItem }) {
+  const remark = (item.auditor.remark ?? "").trim();
+  const chip = <TrailChip item={item} testId={`portal-trail-${item.id}`} />;
+  return (
+    <div className="flex max-w-[12rem] flex-col items-start gap-1">
+      {chip}
+      {(remark || !item.trail?.length) && (
+        <div className="min-w-0" data-testid={`portal-remark-text-${item.id}`}>
+          <RemarkText item={item} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The columns of the settlement's type: a Salary Advance batch in the Salary Advance report's figures (earned to
- *  Settings' day, 50 % limit), a Term Loan batch in the Term Loan report's (fixed salary, eligible limit, months, EMI). */
+ *  Settings' day, Settings' % limit), a Term Loan batch in the Term Loan report's (fixed salary, eligible limit, months,
+ *  EMI). */
 function columnsFor(data: PortalData, leave: (item: PortalItem) => ReactNode): Column[] {
   const t = portalTotals(data);
   const term = isTermSettlement(data);
@@ -165,18 +224,8 @@ function columnsFor(data: PortalData, leave: (item: PortalItem) => ReactNode): C
   };
   const figures: Column[] = term
     ? [
-        {
-          key: "fixedSalary",
-          header: "Fixed salary",
-          figure: true,
-          cell: (i) => money(termFixedSalary(i)),
-        },
-        {
-          key: "termLimit",
-          header: "Eligible limit",
-          figure: true,
-          cell: (i) => money(i.advance.termLimit),
-        },
+        { key: "fixedSalary", header: "Fixed salary", figure: true, cell: (i) => money(termFixedSalary(i)) },
+        { key: "termLimit", header: "Eligible limit", figure: true, cell: (i) => money(i.advance.termLimit) },
         requested,
         hr,
         {
@@ -208,19 +257,9 @@ function columnsFor(data: PortalData, leave: (item: PortalItem) => ReactNode): C
           figure: true,
           cell: (i) => (i.advance.earnings ? formatDays(i.advance.earnings.workingDays) : dash),
         },
-        {
-          key: "earned",
-          header: "Earned",
-          figure: true,
-          cell: (i) => money(i.advance.earnings?.earnedAmount),
-        },
+        { key: "earned", header: "Earned", figure: true, cell: (i) => money(i.advance.earnings?.earnedAmount) },
         requested,
-        {
-          key: "limit",
-          header: "Eligible limit",
-          figure: true,
-          cell: (i) => money(i.advance.earnings?.limit),
-        },
+        { key: "limit", header: "Eligible limit", figure: true, cell: (i) => money(i.advance.earnings?.limit) },
         hr,
       ];
   const tail: Column[] = [
@@ -229,7 +268,7 @@ function columnsFor(data: PortalData, leave: (item: PortalItem) => ReactNode): C
       key: "after",
       header: "After audit",
       figure: true,
-      className: "min-w-[7rem]",
+      className: "min-w-[5.5rem]",
       cell: (i) => <After item={i} term={term} />,
       total: (
         <span className="flex flex-col items-end">
@@ -240,184 +279,214 @@ function columnsFor(data: PortalData, leave: (item: PortalItem) => ReactNode): C
         </span>
       ),
     },
-    { key: "remarks", header: "Remarks", className: "min-w-[7rem] pr-3", cell: (i) => <RemarkText item={i} /> },
+    { key: "remarks", header: "Remarks", className: "min-w-[7rem]", cell: (i) => <Remarks item={i} /> },
   ];
   return [...head, ...figures, ...tail];
 }
 
-/** The row's look: a change is tinted and edged (words say it too: the status tag), a chosen row in the brand tint. */
-function rowLook(item: PortalItem, chosen: boolean): { bg: string; edge: string } {
+/** The row's tint (the words say it too: the status pill and the from -> to): a change of the auditor's in its colour,
+ *  a chosen row in the selection's, HR's rejection muted. */
+function rowTint(item: PortalItem, chosen: boolean): string {
   const s = rowStatus(item);
-  const bg =
-    s === "rejected_by_auditor"
-      ? "bg-rose-50"
-      : s === "reduced"
-        ? "bg-amber-50"
-        : chosen
-          ? "bg-[#eef6fb]"
-          : s === "rejected_by_hr"
-            ? "bg-slate-50 text-slate-500"
-            : "bg-white group-hover:bg-slate-50";
-  const edge =
-    s === "rejected_by_auditor"
-      ? "shadow-[inset_3px_0_0_#e11d48]"
-      : s === "reduced"
-        ? "shadow-[inset_3px_0_0_#d97706]"
-        : chosen
-          ? "shadow-[inset_3px_0_0_#006496]"
-          : "";
-  return { bg, edge };
+  if (chosen) return "bg-sky-50/80 hover:bg-sky-50";
+  if (s === "rejected_by_auditor") return "bg-rose-50/50 hover:bg-rose-50/80";
+  if (s === "reduced") return "bg-amber-50/50 hover:bg-amber-50/80";
+  if (s === "rejected_by_hr") return "text-slate-500";
+  return "";
 }
 
-/** The row's own actions while the review is open: Reduce and Reject on what HR approved, a Remark on any, Undo. */
-function Actions({
-  item,
-  onOpen,
-  onUndo,
-  busy,
-  prefix,
-  compact,
-}: {
+/** The edge of a changed row's first cell (reduced: amber, rejected by the auditor: rose). */
+function rowEdge(item: PortalItem): string {
+  const s = rowStatus(item);
+  return s === "rejected_by_auditor"
+    ? "shadow-[inset_3px_0_0_#e11d48]"
+    : s === "reduced"
+      ? "shadow-[inset_3px_0_0_#d97706]"
+      : "";
+}
+
+type Quick = { id: number; what: "approve" | "rework" } | null;
+
+type ActionProps = {
   item: PortalItem;
+  /** The row's own quick action being saved (Approve, Rework): its button spins, the others wait. */
+  busy: "approve" | "rework" | null;
+  /** Another row is saving: every button waits. */
+  locked: boolean;
+  onApprove: (item: PortalItem) => void;
   onOpen: (item: PortalItem, mode: ChangeMode) => void;
-  onUndo: (item: PortalItem) => void;
-  busy: boolean;
-  prefix: string;
-  compact?: boolean;
-}) {
+  onRework: (item: PortalItem) => void;
+};
+
+/** The table row's actions (icon buttons with their hover label, one line, as All Employees): Approve and Reject on a
+ *  request HR approved that waits for the auditor; a Remark on any (to ask HR for a change - the auditor does not reduce
+ *  amounts, owner 2026-11-27); Rework on one the auditor answered. */
+function TableActions({ item, busy, locked, onApprove, onOpen, onRework }: ActionProps) {
   const who = `${item.advance.employeeName}'s request`;
-  const undoable = isChanged(item) || !!(item.auditor.remark ?? "").trim();
-  if (compact) {
-    // the table: icon buttons with their hover label on one line, as the HRMS tables (the label is drawn above the page,
-    // so the table's own scroll box never cuts it off)
-    return (
-      <RowActions>
-        {hrApproved(item) && (
-          <>
-            <RowAction
-              label="Reduce the approved amount"
-              icon={<MinusCircle size={15} />}
-              color="amber"
-              onClick={() => onOpen(item, "reduce")}
-              disabled={busy}
-              aria={`Reduce ${who}`}
-              testId={`${prefix}-reduce-${item.id}`}
-            />
-            <RowAction
-              label="Reject the request"
-              icon={<XCircle size={15} />}
-              color="red"
-              onClick={() => onOpen(item, "reject")}
-              disabled={busy}
-              aria={`Reject ${who}`}
-              testId={`${prefix}-reject-${item.id}`}
-            />
-          </>
-        )}
-        <RowAction
-          label="Add a remark"
-          icon={<MessageSquarePlus size={15} />}
-          color="blue"
-          onClick={() => onOpen(item, "remark")}
-          disabled={busy}
-          aria={`Remark on ${who}`}
-          testId={`${prefix}-remark-${item.id}`}
-        />
-        {undoable ? (
-          <RowAction
-            label="Undo your change"
-            icon={busy ? <Loader2 size={15} className="animate-spin" /> : <Undo2 size={15} />}
-            color="blue"
-            onClick={() => onUndo(item)}
-            disabled={busy}
-            aria={`Undo your change on ${who}`}
-            testId={`${prefix}-undo-${item.id}`}
-          />
-        ) : (
-          <span className="w-8 shrink-0" aria-hidden />
-        )}
-      </RowActions>
-    );
-  }
-  const base = cn(
-    "inline-flex items-center justify-center rounded-lg border font-semibold transition-colors disabled:pointer-events-none disabled:opacity-50",
-    compact ? "h-7 gap-1 text-[11.5px]" : "h-8 gap-1.5 text-[12px]",
-    FOCUS,
-    "focus-visible:ring-offset-1",
-  );
-  // in the table the labels show from 2xl on (below it the buttons are icons with their names as tooltips)
-  const pad = compact ? "w-7 px-0 2xl:w-auto 2xl:px-2" : "px-2.5";
-  const label = compact ? "hidden 2xl:inline" : undefined;
-  const icon = compact ? "w-7 px-0" : "px-2.5";
+  const waiting = reviewOf(item) === "pending" && hrApproved(item);
+  const off = locked || busy !== null;
   return (
-    <div className={cn("flex items-center", compact ? "justify-end gap-1" : "flex-wrap gap-1.5")}>
-      {hrApproved(item) && (
+    <RowActions>
+      {waiting && (
         <>
-          <button
-            type="button"
-            className={cn(
-              base,
-              pad,
-              "border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-900",
-            )}
-            onClick={() => onOpen(item, "reduce")}
-            disabled={busy}
-            aria-label={`Reduce ${who}`}
-            title="Reduce the approved amount"
-            data-testid={`${prefix}-reduce-${item.id}`}
-          >
-            <MinusCircle size={13} aria-hidden />
-            <span className={label}>Reduce</span>
-          </button>
-          <button
-            type="button"
-            className={cn(base, pad, "border-slate-200 bg-white text-rose-700 hover:border-rose-300 hover:bg-rose-50")}
+          <RowAction
+            label="Approve as HR settled it"
+            icon={<Check size={15} />}
+            color="emerald"
+            onClick={() => onApprove(item)}
+            busy={busy === "approve"}
+            disabled={off}
+            aria={`Approve ${who}`}
+            testId={`portal-approve-${item.id}`}
+          />
+          <RowAction
+            label="Reject the request"
+            icon={<XCircle size={15} />}
+            color="red"
             onClick={() => onOpen(item, "reject")}
-            disabled={busy}
-            aria-label={`Reject ${who}`}
-            title="Reject the request"
-            data-testid={`${prefix}-reject-${item.id}`}
-          >
-            <XCircle size={13} aria-hidden />
-            <span className={label}>Reject</span>
-          </button>
+            disabled={off}
+            aria={`Reject ${who}`}
+            testId={`portal-reject-${item.id}`}
+          />
         </>
       )}
-      <button
-        type="button"
-        className={cn(
-          base,
-          icon,
-          "border-slate-200 bg-white text-slate-600 hover:border-[#006496]/40 hover:bg-[#006496]/5 hover:text-[#006496]",
-        )}
+      <RowAction
+        label={(item.auditor.remark ?? "").trim() ? "Edit your remark" : "Add a remark"}
+        icon={<MessageSquarePlus size={15} />}
+        color="blue"
         onClick={() => onOpen(item, "remark")}
-        disabled={busy}
-        aria-label={`Remark on ${who}`}
-        title="Add a remark"
-        data-testid={`${prefix}-remark-${item.id}`}
-      >
-        <MessageSquarePlus size={14} aria-hidden />
-        {!compact && "Remark"}
-      </button>
-      {undoable ? (
-        <button
-          type="button"
-          className={cn(
-            base,
-            icon,
-            "border-transparent bg-transparent text-slate-500 hover:bg-slate-100 hover:text-slate-800",
-          )}
-          onClick={() => onUndo(item)}
-          disabled={busy}
-          aria-label={`Undo your change on ${who}`}
-          title="Undo your change"
-          data-testid={`${prefix}-undo-${item.id}`}
-        >
-          {busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : <Undo2 size={14} aria-hidden />}
-          {!compact && "Undo"}
-        </button>
-      ) : (
-        compact && <span className="w-7 shrink-0" aria-hidden />
+        disabled={off}
+        aria={`Remark on ${who}`}
+        testId={`portal-remark-${item.id}`}
+      />
+      {canRework(item) && (
+        <RowAction
+          label="Rework — reopen this decision"
+          icon={<RotateCcw size={15} />}
+          color="violet"
+          onClick={() => onRework(item)}
+          busy={busy === "rework"}
+          disabled={off}
+          aria={`Rework ${who}: reopen your decision`}
+          testId={`portal-rework-${item.id}`}
+        />
+      )}
+    </RowActions>
+  );
+}
+
+const CARD_BUTTON = cn(
+  "inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border bg-white px-3 text-[12.5px] font-semibold",
+  "shadow-[0_1px_0_rgba(15,23,42,0.03)] transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out",
+  "hover:-translate-y-px hover:shadow-sm active:translate-y-0 active:scale-[0.97] active:shadow-none",
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+  "disabled:pointer-events-none disabled:opacity-50 motion-reduce:transform-none motion-reduce:transition-none",
+);
+
+/** The bulk bar's buttons: they lift with a coloured glow on hover and sink when pressed. */
+const BULK_BUTTON = cn(
+  "h-9 flex-1 gap-1.5 font-semibold sm:flex-none",
+  "transition-[background-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:shadow-lg",
+  "active:translate-y-0 active:scale-[0.97] active:shadow-none",
+  "focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900",
+  "motion-reduce:transform-none motion-reduce:transition-none",
+);
+
+const CARD_TONE: Record<ActionColor, string> = {
+  emerald:
+    "border-emerald-200 text-emerald-800 hover:border-emerald-300 hover:bg-emerald-50 focus-visible:ring-emerald-300",
+  amber:
+    "border-slate-200 text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-amber-900 focus-visible:ring-amber-300",
+  red: "border-slate-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50 focus-visible:ring-rose-300",
+  blue: "border-slate-200 text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 focus-visible:ring-blue-300",
+  violet: "border-violet-200 text-violet-700 hover:border-violet-300 hover:bg-violet-50 focus-visible:ring-violet-300",
+};
+
+function CardButton({
+  color,
+  icon,
+  label,
+  onClick,
+  disabled,
+  busy,
+  aria,
+  testId,
+}: {
+  color: ActionColor;
+  icon: ReactNode;
+  label: string;
+  onClick: () => void;
+  disabled: boolean;
+  busy?: boolean;
+  aria: string;
+  testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(CARD_BUTTON, CARD_TONE[color])}
+      onClick={onClick}
+      disabled={disabled || busy}
+      aria-label={aria}
+      aria-busy={busy || undefined}
+      data-testid={testId}
+    >
+      {busy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : icon}
+      {label}
+    </button>
+  );
+}
+
+/** A phone card's actions: the same set with their names on the buttons. */
+function CardActions({ item, busy, locked, onApprove, onOpen, onRework }: ActionProps) {
+  const who = `${item.advance.employeeName}'s request`;
+  const waiting = reviewOf(item) === "pending" && hrApproved(item);
+  const off = locked || busy !== null;
+  return (
+    <div className="grid grid-cols-2 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
+      {waiting && (
+        <>
+          <CardButton
+            color="emerald"
+            icon={<Check size={14} aria-hidden />}
+            label="Approve"
+            onClick={() => onApprove(item)}
+            busy={busy === "approve"}
+            disabled={off}
+            aria={`Approve ${who}`}
+            testId={`portal-card-approve-${item.id}`}
+          />
+          <CardButton
+            color="red"
+            icon={<XCircle size={14} aria-hidden />}
+            label="Reject"
+            onClick={() => onOpen(item, "reject")}
+            disabled={off}
+            aria={`Reject ${who}`}
+            testId={`portal-card-reject-${item.id}`}
+          />
+        </>
+      )}
+      <CardButton
+        color="blue"
+        icon={<MessageSquarePlus size={14} aria-hidden />}
+        label="Remark"
+        onClick={() => onOpen(item, "remark")}
+        disabled={off}
+        aria={`Remark on ${who}`}
+        testId={`portal-card-remark-${item.id}`}
+      />
+      {canRework(item) && (
+        <CardButton
+          color="violet"
+          icon={<RotateCcw size={14} aria-hidden />}
+          label="Rework"
+          onClick={() => onRework(item)}
+          busy={busy === "rework"}
+          disabled={off}
+          aria={`Rework ${who}: reopen your decision`}
+          testId={`portal-card-rework-${item.id}`}
+        />
       )}
     </div>
   );
@@ -483,8 +552,8 @@ function SelectAll({
   );
 }
 
-/** Approve or reject the chosen requests at once: Approve keeps HR's amount (clearing a change of yours; a remark is
- *  optional), Reject gives them all one reason. */
+/** Approve or reject the chosen requests at once: Approve takes HR's settlement (clearing a change of yours; a remark
+ *  is optional), Reject gives them all one reason. */
 function BulkDialog({
   action,
   items,
@@ -571,7 +640,7 @@ function BulkDialog({
           <p className="text-[13px] text-slate-600">
             {reject
               ? "Each request is rejected with this one reason. HR sees it with your change."
-              : "Each request keeps the amount HR approved."}
+              : "Each request is approved as HR settled it."}
             {!reject && s.changed > 0 && (
               <>
                 {" "}
@@ -639,12 +708,82 @@ function BulkDialog({
   );
 }
 
+/** A revised settlement (round 2+): HR reworked the auditor's earlier changes and resubmitted it - when, by whom, what
+ *  HR did with the changes, and HR's note. */
+function RoundBanner({ data }: { data: PortalData }) {
+  const round = reviewRound(data);
+  if (round < 2) return null;
+  const s = data.settlement;
+  const summary = lastRoundSummary(data);
+  return (
+    <section
+      className="relative overflow-hidden rounded-2xl border border-violet-200/80 bg-gradient-to-r from-violet-50/90 via-white/80 to-sky-50/70 px-4 py-3.5 shadow-[0_10px_30px_-20px_rgba(76,29,149,0.55)] backdrop-blur-md sm:px-5"
+      aria-labelledby="portal-round-title"
+      data-testid="portal-round-banner"
+      data-round={round}
+    >
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-violet-600/10 text-violet-700 ring-1 ring-violet-200">
+          <RotateCcw size={17} aria-hidden />
+        </span>
+        <div className="min-w-0 space-y-1">
+          <h2
+            id="portal-round-title"
+            className="text-[14.5px] font-bold text-slate-900"
+            style={{ fontFamily: HEADING_FONT }}
+            data-testid="portal-round-title"
+          >
+            Revised settlement · round {round}
+          </h2>
+          <p className="text-[13px] text-slate-700" data-testid="portal-round-text">
+            HR reworked your earlier changes and resubmitted it
+            {s.resubmittedAt ? ` on ${formatDateTime(s.resubmittedAt)}` : ""}
+            {s.resubmittedBy ? ` (${s.resubmittedBy})` : ""}. Review it again: only your approval sends it to Accounts.
+          </p>
+          {summary && (
+            <p className="text-[12.5px] text-slate-600" data-testid="portal-round-summary">
+              {summary} Each request says what happened under Remarks.
+            </p>
+          )}
+          {s.resubmitNote && (
+            <p
+              className="mt-1.5 rounded-lg border-l-[3px] border-violet-400 bg-white/75 px-3 py-1.5 text-[12.5px] text-slate-700"
+              data-testid="portal-round-note"
+            >
+              <b className="font-semibold text-slate-900">HR&apos;s note:</b> {s.resubmitNote}
+            </p>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/** A phone list's group heading (the table's GroupRow as a line). */
+function CardGroupHeading({ state, count }: { state: ReviewState; count: number }) {
+  return (
+    <p
+      className="flex items-center gap-2 px-1 pt-1 text-[12px] font-semibold text-slate-600"
+      data-group={state}
+      data-testid={`portal-card-group-${state}`}
+    >
+      <span className={cn("h-1.5 w-1.5 rounded-full", GROUP_DOT[state])} aria-hidden />
+      {groupLabel(state)}
+      <span className="rounded-full bg-white px-1.5 py-px text-[10.5px] font-bold tabular-nums text-slate-500 ring-1 ring-slate-200">
+        {count}
+      </span>
+    </p>
+  );
+}
+
 /**
  * Overview: the settlement's figures (summary cards), then every request as HR finalized it in the Loan & Advance
  * report's columns for the batch's type (a Term Loan batch in the Term Loan columns), with the leave check (opens the
- * employee's leave calendar), what is paid after the audit and the auditor's remark. While the review is open each request
- * can be reduced, rejected or given a remark, and undone; several can be chosen (Select All) and approved or rejected at
- * once. Changes are highlighted (from -> to, rejected rows) and saved as they are made.
+ * employee's leave calendar), what is paid after the audit and the auditor's remark. The requests are grouped (owner
+ * 2026-11-27): waiting for the auditor at the top, approved below, rejected below those; a request the auditor answers
+ * moves to its group and glows there for a moment, and Rework sends it back to the top. While the review is open each
+ * request HR approved can be approved or rejected; any can get a remark; several can be chosen (Select All) and
+ * approved or rejected at once. A revised settlement (round 2+) says what HR did with the auditor's earlier changes.
  */
 export default function OverviewSection({
   data,
@@ -663,7 +802,8 @@ export default function OverviewSection({
 }) {
   const { toast } = useToast();
   const [editing, setEditing] = useState<{ item: PortalItem; mode: ChangeMode } | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [quick, setQuick] = useState<Quick>(null);
+  const [flashId, flash] = useFlash();
   const [leaveFor, setLeaveFor] = useState<PortalItem | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<RowFilter>("all");
@@ -672,9 +812,10 @@ export default function OverviewSection({
   const t = portalTotals(data);
   const term = isTermSettlement(data);
   const review = data.canReview;
+  const pending = pendingCount(data);
 
   const shown = useMemo(() => filterItems(data.items, filter, query), [data.items, filter, query]);
-  const sno = useMemo(() => new Map(data.items.map((i, n) => [i.id, n + 1])), [data.items]);
+  const groups = useMemo(() => groupByReview(shown, reviewOf), [shown]);
   const picked = review ? chosenItems(shown, chosen) : [];
   const selState = selectionState(shown, chosen);
   const selectable = shown.filter(bulkSelectable).length;
@@ -693,20 +834,33 @@ export default function OverviewSection({
   const save = async (item: PortalItem, body: PortalChangeInput) => {
     await onChange(item, body);
     setEditing(null);
+    flash(item.id);
   };
-  const undo = async (item: PortalItem) => {
-    setBusyId(item.id);
+  /** Approve (as HR settled it) or Rework (reopen): saved at once, no dialog. */
+  const runQuick = async (item: PortalItem, what: "approve" | "rework") => {
+    setQuick({ id: item.id, what });
     try {
-      await onChange(item, UNDO_BODY);
-      toast({ title: "Change undone", description: `${item.advance.employeeName}'s request is as HR finalized it.` });
+      await onChange(item, what === "approve" ? approveBody(item) : reworkBody(item));
+      flash(item.id);
+      toast(
+        what === "approve"
+          ? { title: "Approved", description: `${item.advance.employeeName}'s request, as HR settled it.` }
+          : {
+              title: "Reopened for your review",
+              description: `${item.advance.employeeName}'s request is back at the top, waiting for your decision.`,
+            },
+      );
     } catch (err) {
       toast({
-        title: "Could not undo",
-        description: refusalText(err, "The change could not be undone.").text,
+        title: what === "approve" ? "Could not approve" : "Could not reopen",
+        description: refusalText(
+          err,
+          what === "approve" ? "The request could not be approved." : "The request could not be reopened.",
+        ).text,
         variant: "destructive",
       });
     } finally {
-      setBusyId(null);
+      setQuick(null);
     }
   };
   const runBulk = async (action: BulkAction, remark: string) => {
@@ -714,12 +868,21 @@ export default function OverviewSection({
     await onBulk(body);
     setBulk(null);
     setChosen(new Set());
+    if (body.itemIds.length === 1) flash(body.itemIds[0]);
     toast({
       title: `${requestsWord(body.itemIds.length)} ${action === "reject" ? "rejected" : "approved"}`,
-      description: action === "reject" ? "Your reason was saved on each." : "Each keeps the amount HR approved.",
+      description: action === "reject" ? "Your reason was saved on each." : "Each is approved as HR settled it.",
     });
   };
   const open = (item: PortalItem, mode: ChangeMode) => setEditing({ item, mode });
+  const actionProps = (item: PortalItem) => ({
+    item,
+    busy: quick?.id === item.id ? quick.what : null,
+    locked: quick !== null && quick.id !== item.id,
+    onApprove: (it: PortalItem) => void runQuick(it, "approve"),
+    onOpen: open,
+    onRework: (it: PortalItem) => void runQuick(it, "rework"),
+  });
 
   const leaveButton =
     (prefix: string) =>
@@ -743,14 +906,30 @@ export default function OverviewSection({
   const columns = columnsFor(data, leaveButton("portal"));
   const cardLeave = leaveButton("portal-card");
   const cardFigures = columns.filter((c) => c.figure && c.key !== "after");
+  const colCount = columns.length + (review ? 2 : 0);
+  const lastCol = columns[columns.length - 1]?.key;
 
   return (
     <div className={cn("space-y-5", picked.length > 0 && "pb-28")} data-testid="portal-overview">
+      <RoundBanner data={data} />
+
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-5">
         <StatCard
           label="Requests"
           value={String(t.requests)}
-          sub={`${formatMoney(t.requested)} requested`}
+          sub={
+            <>
+              {formatMoney(t.requested)} requested
+              {review && (
+                <span
+                  className={cn("block font-medium", pending > 0 ? "text-amber-800" : "text-emerald-700")}
+                  data-testid="portal-total-pending"
+                >
+                  {pending > 0 ? `${pending} waiting for your review` : "All reviewed"}
+                </span>
+              )}
+            </>
+          }
           icon={FileText}
           testId="portal-total-requests"
         />
@@ -798,20 +977,21 @@ export default function OverviewSection({
 
       {review && (
         <div
-          className="flex flex-col gap-3 rounded-2xl border border-[#006496]/15 bg-[#006496]/[0.04] px-4 py-3 text-[13px] text-slate-700 sm:flex-row sm:items-center sm:justify-between"
+          className="flex flex-col gap-3 rounded-2xl border border-[#006496]/15 bg-white/70 px-4 py-3 text-[13px] text-slate-700 shadow-[0_1px_2px_rgba(15,23,42,0.04)] backdrop-blur-md sm:flex-row sm:items-center sm:justify-between"
           data-testid="portal-guide"
         >
           <p className="flex items-start gap-2">
             <Info size={16} className="mt-0.5 shrink-0 text-[#006496]" aria-hidden />
             <span>
-              Check each request: reduce or reject what HR approved (a remark is required), or leave a remark for HR.
-              Your changes save as you go; nothing is final until you submit on the Approval tab.
+              Check each request: approve it, reject it (a reason is required), or leave a remark for HR. To have an
+              amount changed, write a remark and return the settlement to HR for rework. Rework reopens a decision. Your
+              answers save as you go; nothing is final until you submit on the Approval tab.
             </span>
           </p>
           <Button
             variant="outline"
             size="sm"
-            className="h-8 shrink-0 gap-1.5 self-start border-[#006496]/30 bg-white text-[#006496] hover:bg-[#006496]/5 sm:self-auto"
+            className="h-8 shrink-0 gap-1.5 self-start border-[#006496]/30 bg-white text-[#006496] transition-[background-color,box-shadow,transform] hover:-translate-y-px hover:bg-[#006496]/5 hover:shadow-sm active:translate-y-0 active:scale-[0.97] sm:self-auto"
             onClick={onGoApproval}
             data-testid="portal-go-approval"
           >
@@ -857,7 +1037,7 @@ export default function OverviewSection({
               <select
                 value={filter}
                 onChange={(e) => setFilter(asRowFilter(e.target.value))}
-                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-[13px] text-slate-900 outline-none focus:border-[#006496] focus:ring-2 focus:ring-[#006496]/20 sm:w-48"
+                className="h-9 w-full rounded-lg border border-slate-300 bg-white px-2.5 text-[13px] text-slate-900 outline-none focus:border-[#006496] focus:ring-2 focus:ring-[#006496]/20 sm:w-52"
                 data-testid="portal-filter"
               >
                 {ROW_FILTERS.map((f) => (
@@ -888,126 +1068,138 @@ export default function OverviewSection({
           </div>
         ) : (
           <>
-            {/* wide screens: the report's table, its heading row stays in view */}
-            <div
-              className="relative hidden max-h-[min(72vh,52rem)] overflow-auto xl:block"
-              data-testid="portal-table-scroll"
-            >
-              <table
-                className="w-full border-separate border-spacing-0 text-[13px] text-slate-800"
+            {/* wide screens: the report's table in the HRMS look */}
+            <div className="hidden xl:block" data-testid="portal-table-scroll">
+              <Table
+                className="text-[13px] text-slate-800"
                 data-testid="portal-items-table"
                 data-type={term ? "term" : "general"}
               >
                 <caption className="sr-only">
                   {data.settlement.title}, {data.settlement.period}: the requests as HR finalized them and after your
-                  review
+                  review, waiting ones first
                 </caption>
-                <thead>
-                  <tr>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
                     {review && (
-                      <th scope="col" className={cn(TH, "w-10 pl-4 pr-0")}>
+                      <TableHead className={cn(FIRST, "w-10 pr-0")}>
                         <SelectAll
                           state={selState}
                           onToggle={toggleShown}
                           testId="portal-select-all"
                           label={`Select all ${selectable} requests shown`}
                         />
-                      </th>
+                      </TableHead>
                     )}
                     {columns.map((c) => (
-                      <th key={c.key} scope="col" className={cn(TH, c.figure && "text-right")}>
-                        {c.header}
-                      </th>
-                    ))}
-                    {review && (
-                      <th scope="col" className={cn(TH, "right-0 z-20 pr-4 text-right")}>
-                        Actions
-                      </th>
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {shown.map((item) => {
-                    const isChosen = review && bulkSelectable(item) && chosen.has(item.id);
-                    const look = rowLook(item, isChosen);
-                    return (
-                      <tr
-                        key={item.id}
-                        className="group"
-                        data-testid={`portal-row-${item.id}`}
-                        data-status={rowStatus(item)}
-                        data-selected={isChosen ? "true" : "false"}
-                      >
-                        {review && (
-                          <td className={cn(TD, look.bg, look.edge, "w-10 pl-4 pr-0")}>
-                            <SelectBox
-                              item={item}
-                              chosen={chosen.has(item.id)}
-                              onToggle={toggle}
-                              testId={`portal-select-${item.id}`}
-                            />
-                          </td>
-                        )}
-                        {columns.map((c, n) => (
-                          <td
-                            key={c.key}
-                            className={cn(TD, look.bg, !review && n === 0 && look.edge, c.figure && NUM, c.className)}
-                            data-col={c.key}
-                            data-testid={
-                              c.key === "hr"
-                                ? `portal-hr-${item.id}`
-                                : c.key === "after"
-                                  ? `portal-after-${item.id}`
-                                  : c.key === "remarks"
-                                    ? `portal-remark-text-${item.id}`
-                                    : undefined
-                            }
-                          >
-                            {c.cell(item, sno.get(item.id) ?? 0)}
-                          </td>
-                        ))}
-                        {review && (
-                          <td className={cn(TD, look.bg, "pr-4")}>
-                            <Actions
-                              item={item}
-                              onOpen={open}
-                              onUndo={(it) => void undo(it)}
-                              busy={busyId === item.id}
-                              prefix="portal"
-                              compact
-                            />
-                          </td>
-                        )}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr data-testid="portal-totals-row">
-                    {review && (
-                      <td className="sticky bottom-0 z-10 border-t-2 border-slate-200 bg-slate-50 px-3 py-3" />
-                    )}
-                    {columns.map((c) => (
-                      <td
+                      <TableHead
                         key={c.key}
                         className={cn(
-                          "sticky bottom-0 z-10 border-t-2 border-slate-200 bg-slate-50 px-3 py-3 font-semibold",
-                          c.figure && NUM,
+                          HEAD_CELL,
+                          // two short words over two lines below 2xl, so every figure fits a laptop without a
+                          // sideways scroll
+                          c.figure && c.header.includes(" ")
+                            ? "whitespace-normal 2xl:whitespace-nowrap"
+                            : "whitespace-nowrap",
+                          c.figure && "text-right",
+                          c.key === "employee" && !review && FIRST,
+                          !review && c.key === lastCol && LAST,
                         )}
+                        data-column={c.key}
+                      >
+                        {c.header}
+                      </TableHead>
+                    ))}
+                    {review && (
+                      <TableHead className={cn(HEAD_CELL, LAST, "whitespace-nowrap text-right")}>Actions</TableHead>
+                    )}
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {groups.map((g) => (
+                    <Fragment key={g.state}>
+                      <GroupRow
+                        state={g.state}
+                        label={groupLabel(g.state)}
+                        count={g.rows.length}
+                        colSpan={colCount}
+                        testId={`portal-group-${g.state}`}
+                      />
+                      {g.rows.map((item) => {
+                        const isChosen = review && bulkSelectable(item) && chosen.has(item.id);
+                        const edge = rowEdge(item);
+                        return (
+                          <TableRow
+                            key={item.id}
+                            className={cn(rowTint(item, isChosen), flashId === item.id && FLASH)}
+                            data-state={isChosen ? "selected" : undefined}
+                            data-testid={`portal-row-${item.id}`}
+                            data-status={rowStatus(item)}
+                            data-review={reviewOf(item)}
+                            data-selected={isChosen ? "true" : "false"}
+                          >
+                            {review && (
+                              <TableCell className={cn(FIRST, "w-10 pr-0", edge)}>
+                                <SelectBox
+                                  item={item}
+                                  chosen={chosen.has(item.id)}
+                                  onToggle={toggle}
+                                  testId={`portal-select-${item.id}`}
+                                />
+                              </TableCell>
+                            )}
+                            {columns.map((c) => (
+                              <TableCell
+                                key={c.key}
+                                className={cn(
+                                  "py-3",
+                                  c.key === "employee" && !review && cn(FIRST, edge),
+                                  !review && c.key === lastCol && LAST,
+                                  c.figure && NUM,
+                                  c.className,
+                                )}
+                                data-col={c.key}
+                                data-testid={
+                                  c.key === "hr"
+                                    ? `portal-hr-${item.id}`
+                                    : c.key === "after"
+                                      ? `portal-after-${item.id}`
+                                      : undefined
+                                }
+                              >
+                                {c.cell(item)}
+                              </TableCell>
+                            ))}
+                            {review && (
+                              <TableCell className={cn(LAST, "text-right")}>
+                                <TableActions {...actionProps(item)} />
+                              </TableCell>
+                            )}
+                          </TableRow>
+                        );
+                      })}
+                    </Fragment>
+                  ))}
+                </TableBody>
+                <TableFooter className="bg-slate-50">
+                  <TableRow className="hover:bg-transparent" data-testid="portal-totals-row">
+                    {review && <TableCell className={FIRST} />}
+                    {columns.map((c) => (
+                      <TableCell
+                        key={c.key}
+                        className={cn("py-3 font-semibold", c.key === "employee" && !review && FIRST, c.figure && NUM)}
                         data-col={c.key}
                       >
                         {c.total ?? null}
-                      </td>
+                      </TableCell>
                     ))}
-                    {review && (
-                      <td className="sticky bottom-0 z-10 border-t-2 border-slate-200 bg-slate-50 px-3 py-3" />
-                    )}
-                  </tr>
-                </tfoot>
-              </table>
+                    {review && <TableCell className={LAST} />}
+                  </TableRow>
+                </TableFooter>
+              </Table>
             </div>
 
-            {/* phones and tablets: a card per request */}
+            {/* phones and tablets: a card per request, in the same groups */}
             <div className="space-y-3 bg-slate-50/60 p-3 sm:p-4 xl:hidden" data-testid="portal-items-cards">
               {review && selectable > 0 && (
                 <label className="flex items-center gap-2.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-[13px] font-semibold text-slate-700">
@@ -1020,93 +1212,89 @@ export default function OverviewSection({
                   Select all ({selectable})
                 </label>
               )}
-              {shown.map((item) => {
-                const a = item.advance;
-                const isChosen = review && bulkSelectable(item) && chosen.has(item.id);
-                const status = rowStatus(item);
-                return (
-                  <article
-                    key={item.id}
-                    className={cn(
-                      "space-y-3 rounded-2xl border bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)]",
-                      status === "rejected_by_auditor"
-                        ? "border-rose-200 bg-rose-50/60"
-                        : status === "reduced"
-                          ? "border-amber-200 bg-amber-50/60"
-                          : isChosen
-                            ? "border-[#006496]/40 bg-[#eef6fb]"
-                            : "border-slate-200",
-                    )}
-                    aria-label={`${a.employeeName}, ${a.employeeCode}`}
-                    data-testid={`portal-card-${item.id}`}
-                    data-status={status}
-                  >
-                    <div className="flex items-start gap-3">
-                      {review && (
-                        <div className="pt-0.5">
-                          <SelectBox
-                            item={item}
-                            chosen={chosen.has(item.id)}
-                            onToggle={toggle}
-                            testId={`portal-card-select-${item.id}`}
-                          />
+              {groups.map((g) => (
+                <div key={g.state} className="space-y-2.5">
+                  <CardGroupHeading state={g.state} count={g.rows.length} />
+                  {g.rows.map((item) => {
+                    const a = item.advance;
+                    const isChosen = review && bulkSelectable(item) && chosen.has(item.id);
+                    const status = rowStatus(item);
+                    return (
+                      <article
+                        key={item.id}
+                        className={cn(
+                          "space-y-3 rounded-2xl border bg-white p-3.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] transition-colors",
+                          status === "rejected_by_auditor"
+                            ? "border-rose-200 bg-rose-50/60"
+                            : status === "reduced"
+                              ? "border-amber-200 bg-amber-50/60"
+                              : isChosen
+                                ? "border-[#006496]/40 bg-[#eef6fb]"
+                                : "border-slate-200",
+                          flashId === item.id && cn(FLASH, "ring-2 ring-sky-200"),
+                        )}
+                        aria-label={`${a.employeeName}, ${a.employeeCode}`}
+                        data-testid={`portal-card-${item.id}`}
+                        data-status={status}
+                        data-review={reviewOf(item)}
+                      >
+                        <div className="flex items-start gap-3">
+                          {review && (
+                            <div className="pt-1">
+                              <SelectBox
+                                item={item}
+                                chosen={chosen.has(item.id)}
+                                onToggle={toggle}
+                                testId={`portal-card-select-${item.id}`}
+                              />
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <PersonCell
+                                name={a.employeeName}
+                                code={a.employeeCode}
+                                department={a.employeeDepartment}
+                              />
+                              <StatusTag status={rowState(item)} />
+                            </div>
+                          </div>
                         </div>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-start justify-between gap-2">
-                          <p className="min-w-0 font-semibold text-slate-900">
-                            <span className="mr-1 text-slate-400">{sno.get(item.id)}.</span>
-                            {a.employeeName}
-                          </p>
-                          <StatusTag status={status} />
+                        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-slate-50 px-3 py-2.5 text-[12.5px] sm:grid-cols-3">
+                          {cardFigures.map((c) => (
+                            <div key={c.key} className="min-w-0" data-col={c.key}>
+                              <dt className="text-[11px] font-medium text-slate-500">{c.short ?? c.header}</dt>
+                              <dd className="font-medium tabular-nums text-slate-900">{c.cell(item)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        <div className="flex flex-wrap items-end justify-between gap-3">
+                          <div>
+                            <p className="text-[11px] font-medium text-slate-500">After audit</p>
+                            <After item={item} term={term} align="left" />
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[11px] font-medium text-slate-500">Leave</p>
+                            {cardLeave(item)}
+                          </div>
                         </div>
-                        <p className="text-[12px] text-slate-500">
-                          <span className="font-mono">{a.employeeCode}</span>
-                          {a.employeeDepartment ? ` · ${a.employeeDepartment}` : ""}
-                          {a.employeeDesignation ? ` · ${a.employeeDesignation}` : ""}
-                        </p>
-                      </div>
-                    </div>
-                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 rounded-xl bg-slate-50 px-3 py-2.5 text-[12.5px] sm:grid-cols-3">
-                      {cardFigures.map((c) => (
-                        <div key={c.key} className="min-w-0" data-col={c.key}>
-                          <dt className="text-[11px] font-medium text-slate-500">{c.short ?? c.header}</dt>
-                          <dd className="font-medium tabular-nums text-slate-900">
-                            {c.cell(item, sno.get(item.id) ?? 0)}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                    <div className="flex flex-wrap items-end justify-between gap-3">
-                      <div>
-                        <p className="text-[11px] font-medium text-slate-500">After audit</p>
-                        <After item={item} term={term} align="left" />
-                      </div>
-                      <div className="text-right">
-                        <p className="text-[11px] font-medium text-slate-500">Leave</p>
-                        {cardLeave(item)}
-                      </div>
-                    </div>
-                    {(item.auditor.remark ?? "").trim() && (
-                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                        <p className="text-[11px] font-medium text-slate-500">Your remark</p>
-                        <RemarkText item={item} clamp={false} />
-                      </div>
-                    )}
-                    {review && (
-                      <div className="border-t border-slate-100 pt-3">
-                        <Actions
-                          item={item}
-                          onOpen={open}
-                          onUndo={(it) => void undo(it)}
-                          busy={busyId === item.id}
-                          prefix="portal-card"
-                        />
-                      </div>
-                    )}
-                  </article>
-                );
-              })}
+                        <TrailList item={item} testId={`portal-card-trail-${item.id}`} />
+                        {(item.auditor.remark ?? "").trim() && (
+                          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                            <p className="text-[11px] font-medium text-slate-500">Your remark</p>
+                            <RemarkText item={item} clamp={false} />
+                          </div>
+                        )}
+                        {review && (
+                          <div className="border-t border-slate-100 pt-3">
+                            <CardActions {...actionProps(item)} />
+                          </div>
+                        )}
+                      </article>
+                    );
+                  })}
+                </div>
+              ))}
               <div
                 className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-[13px] font-semibold"
                 data-testid="portal-card-totals"
@@ -1123,7 +1311,7 @@ export default function OverviewSection({
         <div
           role="region"
           aria-label="Bulk actions"
-          className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-3xl rounded-2xl bg-slate-900 p-3 text-white shadow-[0_16px_48px_-12px_rgba(2,6,23,0.55)] sm:px-4"
+          className="fixed inset-x-4 bottom-4 z-40 mx-auto max-w-3xl rounded-2xl bg-slate-900/90 p-3 text-white shadow-[0_16px_48px_-12px_rgba(2,6,23,0.55)] ring-1 ring-white/10 backdrop-blur-md sm:px-4"
           data-testid="portal-bulk-bar"
         >
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5">
@@ -1134,7 +1322,10 @@ export default function OverviewSection({
             <div className="flex w-full gap-2 sm:w-auto">
               <Button
                 size="sm"
-                className="h-9 flex-1 gap-1.5 bg-emerald-500 font-semibold text-emerald-950 hover:bg-emerald-400 sm:flex-none"
+                className={cn(
+                  BULK_BUTTON,
+                  "bg-emerald-500 text-emerald-950 hover:bg-emerald-400 hover:shadow-emerald-500/30 focus-visible:ring-emerald-300",
+                )}
                 onClick={() => setBulk("approve")}
                 data-testid="portal-bulk-approve"
               >
@@ -1142,7 +1333,10 @@ export default function OverviewSection({
               </Button>
               <Button
                 size="sm"
-                className="h-9 flex-1 gap-1.5 bg-rose-500 font-semibold text-white hover:bg-rose-600 sm:flex-none"
+                className={cn(
+                  BULK_BUTTON,
+                  "bg-rose-500 text-white hover:bg-rose-400 hover:shadow-rose-500/30 focus-visible:ring-rose-300",
+                )}
                 onClick={() => setBulk("reject")}
                 data-testid="portal-bulk-reject"
               >
@@ -1151,7 +1345,7 @@ export default function OverviewSection({
               <Button
                 size="sm"
                 variant="ghost"
-                className="h-9 w-9 shrink-0 p-0 text-slate-300 hover:bg-white/10 hover:text-white"
+                className="h-9 w-9 shrink-0 p-0 text-slate-300 transition-[background-color,color,transform] hover:bg-white/10 hover:text-white active:scale-95"
                 onClick={() => setChosen(new Set())}
                 aria-label="Clear the selection"
                 title="Clear the selection"

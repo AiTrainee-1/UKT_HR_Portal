@@ -6,6 +6,7 @@
 
 import type { BankFileLine } from "@/lib/bankFile";
 import { ApiError } from "@/lib/api-client/custom-fetch";
+import type { ReviewState } from "@/lib/reviewOrder";
 import { roundUpRupee } from "@/lib/round-up-rupee";
 import { batchBankFileName, reportSheet } from "@/pages/hr/settlement/automation/logic";
 import { REMARK_MAX, REMARK_MIN, cleanRemark } from "@/pages/hr/settlement/logic";
@@ -25,7 +26,13 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 // ─── When the link does not open ────────────────────────────────────────────────
 
-export type PortalProblem = { kind: "invalid" | "revoked" | "expired" | "unavailable"; title: string; text: string };
+export type PortalProblem = {
+  kind: "invalid" | "revoked" | "expired" | "unavailable";
+  title: string;
+  text: string;
+  /** A second line that says what to do (a replaced link: each review round has a link of its own). */
+  hint?: string;
+};
 
 /** Why the portal cannot be shown, in the server's words where it has them. */
 export function portalProblem(err: unknown): PortalProblem {
@@ -44,6 +51,7 @@ export function portalProblem(err: unknown): PortalProblem {
       kind: "revoked",
       title: "This review link is no longer in use",
       text: said ?? "It was replaced by a newer link or closed by HR. Please use the latest e-mail.",
+      hint: "When HR reworks a settlement and sends it back to you, the revised settlement comes with a new link: open the latest review e-mail.",
     };
   if (code === "link_expired" || (err instanceof ApiError && err.status === 410))
     return {
@@ -77,7 +85,7 @@ export function refusalText(err: unknown, fallback: string): { text: string; cod
 export const DECISION_LABEL: Record<PortalDecision, string> = {
   approved_send_accounts: "Approved and sent to Accounts",
   approved_forward_hr: "Approved and forwarded to HR",
-  changes_forward_hr: "Changes forwarded to HR",
+  changes_forward_hr: "Returned to HR for rework",
 };
 
 export function reviewStatus(data: PortalData): { text: string; tone: "info" | "success" | "neutral" } {
@@ -121,6 +129,201 @@ export function changeText(item: PortalItem): string | null {
     return `Reduced ${formatMoney(item.final.amount)} → ${formatMoney(item.auditor.amount)}`;
   if (item.auditor.action === "reject") return `Rejected (HR approved ${formatMoney(item.final.amount)})`;
   return null;
+}
+
+// ─── Where a request stands with the auditor (owner 2026-11-27) ─────────────────
+// Waiting ones at the top, approved ones below, rejected ones below those (lib/reviewOrder); a request reopened with
+// Rework waits again.
+
+/** service.review_state for the auditor's stage: the server's own `review` when it sends one (an older server does
+ *  not): rejected by HR or by the auditor, approved by the auditor (as HR settled it, or reduced), else waiting. */
+export function reviewOf(item: PortalItem): ReviewState {
+  if (item.review) return item.review;
+  if (!hrApproved(item) || item.auditor.action === "reject") return "rejected";
+  return item.auditor.action === "approve" || item.auditor.action === "reduce" ? "approved" : "pending";
+}
+
+/** The requests not reviewed yet (the server's count when it sends one). */
+export const pendingCount = (data: Pick<PortalData, "items" | "totals">): number =>
+  data.totals.pending ?? data.items.filter((i) => reviewOf(i) === "pending").length;
+
+/** A row's state in one word for its pill: waiting, or the row's status once reviewed. */
+export type RowState = "pending" | RowStatus;
+
+export const rowState = (item: PortalItem): RowState => (reviewOf(item) === "pending" ? "pending" : rowStatus(item));
+
+/** The auditor answered this request (approve, reject; a reduction from before 2026-11-27): Rework can reopen it. HR's own rejection cannot be
+ *  reopened (it only takes a remark). */
+export const canRework = (item: PortalItem): boolean =>
+  hrApproved(item) &&
+  (item.auditor.action === "approve" || item.auditor.action === "reduce" || item.auditor.action === "reject");
+
+/** Approve, as HR settled it (the remark the request has stays). */
+export const approveBody = (item: PortalItem): PortalChangeInput => ({
+  action: "approve",
+  remark: item.auditor.remark ?? "",
+});
+
+/** Rework: the request waits for the auditor's review again (an empty action); the remark stays. */
+export const reworkBody = (item: PortalItem): PortalChangeInput => ({ action: "", remark: item.auditor.remark ?? "" });
+
+// ─── The earlier rounds (a settlement HR reworked and resubmitted) ───────────────
+
+/** What HR did with the auditor's earlier change: took it, kept its own amount, settled it at another amount, rejected
+ *  it, or settled it (no earlier figure to compare with). */
+export type TrailOutcome = "accepted" | "kept" | "changed" | "rejected" | "settled";
+
+export type TrailLine = {
+  round: number;
+  /** "Round 1: you reduced it to ₹3,000 · HR accepted". */
+  text: string;
+  /** "Round 1 · HR accepted" (the table's chip: the round over HR's answer). */
+  short: string;
+  /** HR's answer in a few words, for the chip: "HR accepted", "HR kept ₹6,000", "HR changed to ₹4,000". */
+  answer: string;
+  outcome: TrailOutcome;
+  yourRemark: string;
+  /** HR's remark with its answer, when it says more than the auditor's own. */
+  hrRemark: string;
+  /** false: a request the auditor did not flag that HR changed on its own in the rework (2026-11-27). */
+  flagged: boolean;
+};
+
+const sameMoney = (a: number | null | undefined, b: number | null | undefined) =>
+  a != null && b != null && Math.abs(a - b) < 0.005;
+
+/**
+ * The auditor's earlier changes on a request and HR's answer to each (from `trail`): the auditor's answer of a round
+ * against HR's settlement before it (that round's "hr_final") and after it (the next round's "hr_final", else the
+ * settlement now). Only a change or a remark is listed (a plain approval is not news).
+ */
+export function trailLines(item: PortalItem): TrailLine[] {
+  const trail = item.trail ?? [];
+  const finals = trail.filter((t) => t.role === "hr_final").sort((a, b) => a.round - b.round);
+  const lines = trail
+    .filter(
+      (t) => t.role === "auditor" && (t.action === "reduce" || t.action === "reject" || (t.remark ?? "").trim() !== ""),
+    )
+    .sort((a, b) => a.round - b.round)
+    .map((a) => {
+      const before = finals.find((f) => f.round === a.round) ?? null;
+      const next = finals.find((f) => f.round > a.round);
+      const after = next
+        ? { decision: next.action, amount: next.amount, remark: next.remark ?? "" }
+        : { decision: item.final.decision ?? "", amount: item.final.amount, remark: item.final.remark ?? "" };
+      const you =
+        a.action === "reduce"
+          ? `you reduced it to ${formatMoney(a.amount)}`
+          : a.action === "reject"
+            ? "you rejected it"
+            : "you left a remark";
+      let outcome: TrailOutcome;
+      let hr: string;
+      let answer: string;
+      const amount = formatMoney(after.amount);
+      if (after.decision === "rejected") {
+        outcome = a.action === "reject" ? "accepted" : "rejected";
+        hr = answer = a.action === "reject" ? "HR accepted" : "HR rejected it";
+      } else if (after.decision === "approved") {
+        if (a.action === "reduce" && sameMoney(after.amount, a.amount)) {
+          outcome = "accepted";
+          hr = answer = "HR accepted";
+        } else if (before && sameMoney(after.amount, before.amount)) {
+          outcome = "kept";
+          hr = answer = `HR kept ${amount}`;
+        } else if (before) {
+          outcome = "changed";
+          hr = `HR changed it to ${amount}`;
+          answer = `HR changed to ${amount}`;
+        } else {
+          outcome = "settled";
+          hr = `HR settled it at ${amount}`;
+          answer = `HR settled at ${amount}`;
+        }
+      } else {
+        outcome = "settled";
+        hr = answer = "HR settled it";
+      }
+      const yourRemark = (a.remark ?? "").trim();
+      const hrRemark = after.remark.trim();
+      return {
+        round: a.round,
+        text: `Round ${a.round}: ${you} · ${hr}`,
+        short: `Round ${a.round} · ${answer}`,
+        answer,
+        outcome,
+        yourRemark,
+        hrRemark: hrRemark && hrRemark !== yourRemark ? hrRemark : "",
+        flagged: true,
+      };
+    });
+  // a request the auditor did not flag in a round, but HR changed in that round's rework (the server keeps HR's
+  // settlement of every request when the auditor returns it)
+  const flaggedRounds = new Set(
+    trail
+      .filter(
+        (t) =>
+          t.role === "auditor" && (t.action === "reduce" || t.action === "reject" || (t.remark ?? "").trim() !== ""),
+      )
+      .map((t) => t.round),
+  );
+  const unflagged = finals
+    .filter((f) => !flaggedRounds.has(f.round))
+    .flatMap((f): TrailLine[] => {
+      const next = finals.find((n) => n.round > f.round);
+      const after = next
+        ? { decision: next.action, amount: next.amount, remark: next.remark ?? "" }
+        : { decision: item.final.decision ?? "", amount: item.final.amount, remark: item.final.remark ?? "" };
+      const same = after.decision === f.action && (after.decision === "rejected" || sameMoney(after.amount, f.amount));
+      if (same) return [];
+      const answer = after.decision === "rejected" ? "HR rejected it" : `HR changed to ${formatMoney(after.amount)}`;
+      const hr =
+        after.decision === "rejected"
+          ? "HR rejected it"
+          : `HR changed it from ${formatMoney(f.amount)} to ${formatMoney(after.amount)}`;
+      return [
+        {
+          round: f.round,
+          text: `Round ${f.round}: not flagged by you · ${hr}`,
+          short: `Round ${f.round} · ${answer}`,
+          answer,
+          outcome: after.decision === "rejected" ? "rejected" : "changed",
+          yourRemark: "",
+          hrRemark: after.remark.trim(),
+          flagged: false,
+        },
+      ];
+    });
+  return [...lines, ...unflagged].sort((a, b) => a.round - b.round);
+}
+
+/** The review round (1 = the first review; 2+ = HR reworked it and resubmitted it). */
+export const reviewRound = (data: Pick<PortalData, "settlement">): number => Math.max(1, data.settlement.round ?? 1);
+
+/** HR's answers to the auditor's changes of the round before this one, counted: "HR accepted 1, kept 1 and changed 1."
+ *  ("" when there were none). */
+export function lastRoundSummary(data: PortalData): string {
+  const round = reviewRound(data) - 1;
+  if (round < 1) return "";
+  const all = data.items.flatMap((i) => trailLines(i).filter((l) => l.round === round));
+  const lines = all.filter((l) => l.flagged);
+  const own = all.length - lines.length;
+  const also = own > 0 ? ` HR also changed ${requestsWord(own)} you did not flag.` : "";
+  if (lines.length === 0) return also.trim();
+  const count = (o: TrailOutcome) => lines.filter((l) => l.outcome === o).length;
+  const parts = (
+    [
+      ["accepted", "accepted"],
+      ["kept", "kept"],
+      ["changed", "changed"],
+      ["rejected", "rejected"],
+      ["settled", "settled"],
+    ] as const
+  )
+    .filter(([o]) => count(o) > 0)
+    .map(([o, word]) => `${word} ${count(o)}`);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0];
+  return `You flagged ${requestsWord(lines.length)} in round ${round}: HR ${list}.${also}`;
 }
 
 // ─── A Term Loan's own figures (owner 2026-11-27) ───────────────────────────────
@@ -169,10 +372,11 @@ export function firstEmiMonth(item: PortalItem): string | null {
 
 // ─── Finding and choosing requests ──────────────────────────────────────────────
 
-export type RowFilter = "all" | "approved" | "changed" | "rejected" | "leave" | "remarks";
+export type RowFilter = "all" | "pending" | "approved" | "changed" | "rejected" | "leave" | "remarks";
 
 export const ROW_FILTERS: { value: RowFilter; label: string }[] = [
   { value: "all", label: "All requests" },
+  { value: "pending", label: "Waiting for your review" },
   { value: "approved", label: "Approved, unchanged" },
   { value: "changed", label: "Changed by you" },
   { value: "rejected", label: "Rejected" },
@@ -185,6 +389,8 @@ export const asRowFilter = (raw: string): RowFilter =>
 
 function rowMatches(item: PortalItem, filter: RowFilter): boolean {
   switch (filter) {
+    case "pending":
+      return reviewOf(item) === "pending";
     case "approved":
       return rowStatus(item) === "approved";
     case "changed":
@@ -269,48 +475,31 @@ export function bulkSummary(items: PortalItem[]): { count: number; amount: numbe
 
 // ─── A change ────────────────────────────────────────────────────────────────────
 
-/** Reduce (a smaller amount, a remark), Reject (a remark), or a Remark alone (no change to the amount). */
-export type ChangeMode = "reduce" | "reject" | "remark";
+/** Reject (a remark), or a Remark alone (no change to the amount; how the auditor asks HR for a change). The auditor
+ *  does not reduce amounts (owner 2026-11-27). */
+export type ChangeMode = "reject" | "remark";
 
 export type ChangeProblems = Partial<Record<"amount" | "remark", string>>;
-
-const num = (text: string): number => (text.trim() === "" ? NaN : Number(text.replace(/,/g, "").trim()));
 
 /** What stops a change from being saved (service.auditor_change's checks), field by field. */
 export function changeProblems(item: PortalItem, mode: ChangeMode, amountText: string, remark: string): ChangeProblems {
   const out: ChangeProblems = {};
   const clean = cleanRemark(remark);
-  if (mode === "reduce") {
-    const amount = num(amountText);
-    const approved = item.final.amount ?? 0;
-    if (amountText.trim() === "") out.amount = "Enter the reduced amount.";
-    else if (!Number.isFinite(amount) || amount <= 0) out.amount = "The reduced amount must be more than ₹0.";
-    else if (/\.\d{3,}$/.test(amountText.trim())) out.amount = "Use at most 2 decimal places.";
-    else if (round2(amount) >= round2(approved))
-      out.amount = `A reduced amount must be less than the approved ${formatMoney(approved)}.`;
-  }
-  if ((mode === "reduce" || mode === "reject") && clean.length < REMARK_MIN)
-    out.remark =
-      mode === "reduce"
-        ? "Write a remark for the reduced amount (at least 3 characters)."
-        : "Write the reason for rejecting (at least 3 characters).";
+  if (mode === "reject" && clean.length < REMARK_MIN)
+    out.remark = "Write the reason for rejecting (at least 3 characters).";
   if (clean.length > REMARK_MAX) out.remark = `Keep the remark under ${REMARK_MAX} characters.`;
   return out;
 }
 
-/** The PATCH body of a change. A remark alone keeps the change the row already has (a reduced amount stays). */
+/** The PATCH body of a change. A remark alone keeps the answer the row already has (an approval or a reduced amount
+ *  stays; a request waiting for review keeps waiting). */
 export function changeBody(item: PortalItem, mode: ChangeMode, amountText: string, remark: string): PortalChangeInput {
   const clean = cleanRemark(remark);
-  if (mode === "reduce") return { action: "reduce", amount: round2(num(amountText)), remark: clean };
   if (mode === "reject") return { action: "reject", remark: clean };
-  const action = item.auditor.action ?? "";
-  return action === "reduce" && item.auditor.amount != null
-    ? { action, amount: item.auditor.amount, remark: clean }
-    : { action, remark: clean };
+  // a reduction made before the auditor's Reduce was removed (2026-11-27) cannot be saved again: the remark reopens it
+  const action = item.auditor.action === "reduce" ? "" : (item.auditor.action ?? "");
+  return { action, remark: clean };
 }
-
-/** Undo: the row as HR finalized it, without the auditor's change and remark. */
-export const UNDO_BODY: PortalChangeInput = { action: "", remark: "" };
 
 // ─── The totals and the changes ─────────────────────────────────────────────────
 
@@ -356,9 +545,12 @@ export function modifications(data: PortalData): { item: PortalItem; change: str
 
 // ─── The answer ─────────────────────────────────────────────────────────────────
 
+/** Why the approvals are closed: the auditor rejected a request. */
+export const CHANGED_TEXT = "You changed the settlement: return it to HR for rework.";
+
 /** Why "Approve & Send to Accounts" cannot be used (the server's own refusals), or null. */
 export function sendBlocked(data: PortalData): string | null {
-  if (data.hasChanges) return "You changed the settlement: forward the changes to HR.";
+  if (data.hasChanges) return CHANGED_TEXT;
   if (!data.items.some((i) => i.effective.decision === "approved"))
     return "Nothing is approved, so there is no bank file for Accounts.";
   if (data.accounts.to.length === 0)
@@ -366,9 +558,29 @@ export function sendBlocked(data: PortalData): string | null {
   return null;
 }
 
-/** The decisions open now: with changes only forwarding them to HR; without, both approvals. */
-export const openDecisions = (data: PortalData): PortalDecision[] =>
-  data.hasChanges ? ["changes_forward_hr"] : ["approved_send_accounts", "approved_forward_hr"];
+/** Why "Return to HR for rework" cannot be used (service.auditor_submit's `no_changes`): there is nothing for HR to
+ *  rework without a change, a remark or a note (at least 3 characters) saying what to correct. */
+export function returnBlocked(data: PortalData, note = ""): string | null {
+  if (data.hasChanges || portalTotals(data).remarks > 0 || cleanRemark(note).length >= REMARK_MIN) return null;
+  return "You made no change and wrote no remark: approve the settlement, or write in the note what HR should correct.";
+}
+
+/** The decisions open now: with changes only returning it to HR for rework; without, both approvals, and returning it
+ *  too when there is a remark or a note for HR. */
+export function openDecisions(data: PortalData, note = ""): PortalDecision[] {
+  if (data.hasChanges) return ["changes_forward_hr"];
+  const approvals: PortalDecision[] = ["approved_send_accounts", "approved_forward_hr"];
+  return returnBlocked(data, note) ? approvals : [...approvals, "changes_forward_hr"];
+}
+
+/** "2 requests you have not marked will be approved as HR settled them." ("" when every request is marked). */
+export function pendingApprovalText(data: PortalData): string {
+  const n = pendingCount(data);
+  if (n === 0) return "";
+  return n === 1
+    ? "1 request you have not marked will be approved as HR settled it."
+    : `${n} requests you have not marked will be approved as HR settled them.`;
+}
 
 // ─── The bank file (the Payroll bank-file format, built here) ───────────────────
 

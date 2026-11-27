@@ -11,6 +11,11 @@ Term loans). Company-wide accounts only act: a branch-scoped login sees its bran
     POST  /api/settlement-automation/batches/<id>/finalize          {note}                         -> Send to Auditor
     POST  /api/settlement-automation/batches/<id>/send-auditor      multipart pdf + xlsx           -> Auditor Review
     POST  /api/settlement-automation/batches/<id>/auditor-done      {note}                         -> Send to Accounts
+    POST  /api/settlement-automation/items/<id>/rework              Rework: reopen a request HR decided (2026-11-27)
+    POST  /api/settlement-automation/items/<id>/resolve             {how: accept|keep}  HR's answer to the MD / auditor
+    POST  /api/settlement-automation/batches/<id>/resolve-bulk      {itemIds, how}
+    POST  /api/settlement-automation/batches/<id>/resubmit-md       {note}   HR Rework (MD Changes) -> MD Review again
+    POST  /api/settlement-automation/batches/<id>/resubmit-auditor  {note}   HR Rework (Auditor Changes) -> Send to Auditor
     POST  /api/settlement-automation/batches/<id>/send-accounts     multipart bank                 -> Completed
     POST  /api/settlement-automation/batches/<id>/complete          {note}   (nothing approved: no bank file)
     GET   /api/settlement-automation/files/<id>                     download a file the workflow sent
@@ -23,6 +28,7 @@ MD portal (@require_md, api/md_portal/routes/settlement.py):
     GET   /api/md/settlement/waiting                 the batches waiting for the MD (sidebar badge, landing month)
     PATCH /api/md/settlement/items/<id>              {decision: approved|rejected|"", amount?, remark?}
     POST  /api/md/settlement/batches/<id>/confirm    {note}                           -> HR Final Settlement
+    POST  /api/md/settlement/batches/<id>/return     {note}   changes / corrections -> HR Rework (MD Changes)
 """
 
 from __future__ import annotations
@@ -345,13 +351,61 @@ def auditor_done_view(request: Request, pk: int) -> Response:
 
 @api_view(["POST"])
 @require_hr
-def accept_changes_view(request: Request, pk: int) -> Response:
-    """POST /api/settlement-automation/batches/<id>/accept-auditor-changes {note}: HR finalizes the revised settlement."""
+def resubmit_md_view(request: Request, pk: int) -> Response:
+    """POST .../batches/<id>/resubmit-md {note}: HR answered every request the MD changed -> the MD reviews it again."""
+    return _act(request, pk, lambda b, by: service.resubmit_md(b, request.data.get("note"), by), "resubmitted_to_md")
+
+
+@api_view(["POST"])
+@require_hr
+def resubmit_auditor_view(request: Request, pk: int) -> Response:
+    """POST .../batches/<id>/resubmit-auditor {note}: HR answered every request the auditor changed -> Send to Auditor
+    (the revised settlement and a new review link go out next)."""
     return _act(
         request,
         pk,
-        lambda b, by: service.accept_auditor_changes(b, request.data.get("note"), request, by),
-        "auditor_changes_accepted",
+        lambda b, by: service.resubmit_auditor(b, request.data.get("note"), request, by),
+        "resubmitted_to_auditor",
+    )
+
+
+def _item_step(request: Request, pk: int, fn) -> Response:
+    if (refused := _automation_on()) or (refused := _company_wide(request)):
+        return refused
+    item = SettlementBatchItem.objects.select_related("batch", "advance").filter(pk=pk).first()
+    if item is None:
+        return Response({"error": "Request not found", "code": "not_found"}, status=404)
+    try:
+        fn(item, get_hr_display_name(request))
+    except WorkflowError as exc:
+        return _refusal(exc)
+    return _batch_reply(item.batch)
+
+
+@api_view(["POST"])
+@require_hr
+def item_rework_view(request: Request, pk: int) -> Response:
+    """POST .../items/<id>/rework: reopen a request HR decided (it waits again, at the top of the list)."""
+    return _item_step(request, pk, lambda item, by: service.rework_item(item, by))
+
+
+@api_view(["POST"])
+@require_hr
+def item_resolve_view(request: Request, pk: int) -> Response:
+    """POST .../items/<id>/resolve {how: accept|keep}: HR's answer to the MD's / auditor's change on one request."""
+    data = request.data if hasattr(request.data, "get") else {}
+    return _item_step(request, pk, lambda item, by: service.resolve_item(item, data.get("how"), by))
+
+
+@api_view(["POST"])
+@require_hr
+def resolve_bulk_view(request: Request, pk: int) -> Response:
+    """POST .../batches/<id>/resolve-bulk {itemIds, how: accept|keep}"""
+    return _bulk(
+        request,
+        pk,
+        lambda b, d, by: service.resolve_bulk(b, d.get("itemIds"), d.get("how"), by),
+        "rework_answered",
     )
 
 

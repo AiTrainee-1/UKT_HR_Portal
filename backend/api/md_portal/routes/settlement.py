@@ -5,6 +5,7 @@
     GET   /api/md/settlement/waiting                 the batches waiting for the MD
     PATCH /api/md/settlement/items/<id>              {decision: approved|rejected|"", amount?, remark?}
     POST  /api/md/settlement/batches/<id>/confirm    {note}   Confirm & Proceed -> back to HR (HR Final Settlement)
+    POST  /api/md/settlement/batches/<id>/return     {note}   Return to HR for rework (changes / corrections, 2026-11-27)
 """
 
 from django.urls import path
@@ -188,11 +189,36 @@ def confirm(request: Request, pk: int) -> Response:
     return Response(reply)
 
 
+@api_view(["POST"])
+@require_md
+def return_to_hr(request: Request, pk: int) -> Response:
+    """POST /api/md/settlement/batches/<id>/return {note}: the MD changed amounts, rejected requests or asks for
+    corrections - the settlement goes back to HR for rework; HR resubmits it for the MD's approval (owner 2026-11-27)."""
+    batch = SettlementBatch.objects.filter(pk=pk).first()
+    if batch is None:
+        return Response({"error": "Batch not found", "code": "not_found"}, status=404)
+    data = request.data if hasattr(request.data, "get") else {}
+    try:
+        batch = service.md_return(batch, data.get("note"), _md_name(request))
+    except WorkflowError as exc:
+        return _refusal(exc)
+    log_action(
+        request,
+        "md_returned",
+        "settlement",
+        record_id=batch.pk,
+        description=f"{service.TYPES.get(batch.advance_type, 'Advance')} {service._period(batch)} batch "
+        f"{batch.number}: MD returned it to HR for rework",
+    )
+    return _batch_reply(batch)
+
+
 urlpatterns = [
     path("month", month),
     path("waiting", waiting),
     path("items/<int:pk>", item),
     path("batches/<int:pk>/confirm", confirm),
+    path("batches/<int:pk>/return", return_to_hr),
     path("batches/<int:pk>/bulk", bulk),
     path("items/<int:pk>/leave-calendar", leave_calendar),
 ]

@@ -10,7 +10,7 @@ import type {
 } from "@/lib/api-client/custom-hooks/settlement-automation";
 import Settlement from "../../Settlement";
 import type { SettlementRow } from "../logic";
-import { batchAt, monthOf, overviewOf, overviewType, trackerFor, withAuditor } from "./test-fixtures";
+import { actionsFor, batchAt, monthOf, overviewOf, overviewType, trackerFor, withAuditor } from "./test-fixtures";
 
 // The Loan & Advance pages (the Settlement page renamed 2026-11-27) with Settings -> Loan & Advance's two methods (owner
 // 2026-11-26), against a small fake server: the method decides the pages; the Normal Method's list shows the leave
@@ -70,6 +70,8 @@ let advances: SettlementRow[] = [];
 let writes: [string, string, unknown][] = [];
 /** The answer of the next write (a batch), or the refusal it throws. */
 let nextWrite: SettlementBatch | ApiError | null = null;
+/** The answers of the writes after it, in order (a step that writes twice: resubmit, then send). */
+let laterWrites: (SettlementBatch | ApiError)[] = [];
 
 /** GET /api/advances/<id>/leave-calendar (2026-11-27): Meena's 5 days, one of them the 3rd. */
 const leaveCalendar = (advanceId: number) => ({
@@ -108,7 +110,7 @@ function server(url: string, options?: { method?: string; body?: unknown }) {
   if (url.startsWith("/api/settlement-automation/") && verb !== "GET") {
     const body = options?.body instanceof FormData ? options.body : JSON.parse(String(options?.body ?? "{}"));
     writes.push([verb, url, body]);
-    const answer = nextWrite;
+    const answer = nextWrite ?? laterWrites.shift() ?? null;
     nextWrite = null;
     if (answer instanceof ApiError) return Promise.reject(answer);
     const batch = answer ?? month.batches[0];
@@ -213,6 +215,7 @@ beforeEach(() => {
   advances = [];
   writes = [];
   nextWrite = null;
+  laterWrites = [];
   h.user = null;
   h.fetch.mockImplementation(server);
   h.auditorFiles.mockResolvedValue({
@@ -350,7 +353,7 @@ describe("the Overview with the Automation Method (owner 2026-11-27): both types
     );
     expect(text(q("overview-stage-general"))).toBe("Batch 1 · hr_final");
     expect(text(q("overview-next-general"))).toBe("What to do next: Next action at hr_final.");
-    expect(text(q("overview-tracker-general-where"))).toBe("Step 4 of 9 · HR Final Settlement");
+    expect(text(q("overview-tracker-general-where"))).toBe("Step 4 of 8 · HR Final Settlement");
     expect(text(q("overview-received-general-value"))).toBe("3");
     expect(text(q("overview-approved-general-value"))).toBe("2");
     expect(text(q("overview-rejected-general-value"))).toBe("1");
@@ -382,7 +385,7 @@ describe("the Overview with the Automation Method (owner 2026-11-27): both types
     await flush();
     expect(reads).toEqual(["/api/settlement-automation/overview?month=10&year=2026"]);
     expect(text(q("overview-stage-general"))).toBe("Batch 1 · Completed");
-    expect(text(q("overview-tracker-general-where"))).toBe("All 9 steps done");
+    expect(text(q("overview-tracker-general-where"))).toBe("All 8 steps done");
     expect(text(q("overview-month-term"))).toBe(
       "6 requests in October 2026 · 2 batches · 1 completed · 1 waiting for the MD",
     );
@@ -494,14 +497,17 @@ describe("the workflow tracker", () => {
       "pending",
       "pending",
     ]);
+    // the MD's rework loop was not needed: the MD approved without a return
+    expect(state("md_changes")).toBe("skipped");
+    expect(text(q("tracker-detail-md_changes"))).toBe("No MD changes");
     expect(text(q("tracker-step-received"))).toContain("3 requests");
     expect(text(q("tracker-step-md_review"))).toContain("Priya HR");
     expect(text(q("tracker-step-hr_final"))).toContain("Current step: HR Final Settlement");
     expect(text(q("tracker-step-auditor_review"))).toContain("Auditor Review");
-    expect(text(q("tracker-step-auditor_changes"))).toContain("HR Review of Auditor Changes");
+    expect(text(q("tracker-step-auditor_changes"))).toContain("HR Rework (Auditor Changes)");
     expect(text(q("tracker-next-action"))).toBe("Next: Next action at hr_final.");
     // the phone layout says the same
-    expect(q("tracker-row-hr_final")?.getAttribute("data-state")).toBe("current");
+    expect(q("tracker-step-hr_final-row")?.getAttribute("data-state")).toBe("current");
   });
 
   it("greys a skipped step with why, and says what happened at the audit and at Accounts", async () => {
@@ -513,7 +519,7 @@ describe("the workflow tracker", () => {
     );
     await mount();
     expect(q("tracker-step-auditor_changes")?.getAttribute("data-state")).toBe("skipped");
-    expect(text(q("tracker-step-auditor_changes"))).toContain("Skipped: HR Review of Auditor Changes");
+    expect(text(q("tracker-step-auditor_changes"))).toContain("Skipped: HR Rework (Auditor Changes)");
     expect(text(q("tracker-detail-auditor_changes"))).toBe("No auditor changes");
     expect(text(q("tracker-detail-auditor_review"))).toBe("Approved by the auditor");
     expect(text(q("tracker-detail-accounts_send"))).toBe("Sent by the auditor");
@@ -575,13 +581,14 @@ describe("what can be done at each stage", () => {
   it.each([
     ["hr_review", ["auto-forward", "auto-note-1"]],
     ["md_review", ["auto-waiting-md"]],
+    ["md_changes", ["auto-resubmit-md", "auto-note-1", "auto-open-requests"]],
     ["hr_final", ["auto-finalize", "auto-final-1", "auto-md-note"]],
     ["auditor_send", ["auto-send-auditor", "auto-auditor-recipients", "auto-download-pdf", "auto-download-xlsx"]],
     [
       "auditor_review",
       ["auto-proceed", "auto-resend-auditor", "auto-download-pdf", "auto-download-xlsx", "auto-link-none"],
     ],
-    ["auditor_changes", ["auto-accept-changes"]],
+    ["auditor_changes", ["auto-resubmit-auditor", "auto-final-1", "auto-open-requests"]],
     ["accounts_send", ["auto-send-accounts", "auto-accounts-recipients", "auto-bank-missing", "auto-download-bank"]],
     ["completed", ["auto-completed", "auto-resend-accounts"]],
   ] as const)("%s offers its own step only", async (stage, expected) => {
@@ -609,7 +616,9 @@ describe("what can be done at each stage", () => {
       "auto-proceed",
       "auto-resend-auditor",
       "auto-link-none",
-      "auto-accept-changes",
+      "auto-resubmit-md",
+      "auto-resubmit-auditor",
+      "auto-open-requests",
       "auto-send-accounts",
       "auto-accounts-recipients",
       "auto-bank-missing",
@@ -920,55 +929,50 @@ describe("the steps", () => {
     expect(text(q("auto-link-opened"))).toBe("Not opened yet");
   });
 
-  it("HR Review of Auditor Changes: every change from -> to, the remarks and totals, then Accept changes & finalize", async () => {
-    const b = batchAt("auditor_changes", {
-      tracker: trackerFor("auditor_changes", "Review the auditor's changes.", { auditorChanged: true }),
-    });
-    b.items[0] = withAuditor(b.items[0], { action: "reduce", amount: 5000, remark: "Two absent days" });
-    b.items[1] = withAuditor(b.items[1], { action: "reject", remark: "Loan already running" });
-    b.auditor = {
-      ...b.auditor,
-      outcome: "changes",
-      submittedAt: "2026-11-25T06:00:00Z",
-      submittedNote: "Please check",
-      changes: 2,
-      remarks: 2,
-    };
-    b.amounts = { ...b.amounts, payable: 5000 };
-    atStage(b);
+  it("HR Rework (Auditor Changes): every change from -> to, the remarks and totals, and no Accounts before approval", async () => {
+    atStage(auditorChangesBatch());
     await mount();
-    expect(text(q("auto-stage-title"))).toBe("HR Review of Auditor Changes");
+    expect(text(q("auto-stage-title"))).toBe("HR Rework (Auditor Changes)");
     expect(text(q("auto-auditor-changes-review-line-1"))).toContain("Reduced ₹6,000 -> ₹5,000");
     expect(text(q("auto-auditor-changes-review-line-1"))).toContain("Two absent days");
     expect(text(q("auto-auditor-changes-review-line-2"))).toContain("Rejected (HR approved ₹25,000)");
     expect(text(q("auto-auditor-changes-review-note"))).toContain("Please check");
     expect(text(q("auto-auditor-changes-review"))).toContain("HR final approved₹31,000");
-    expect(text(q("auto-auditor-changes-review"))).toContain("After the audit₹5,000");
+    expect(text(q("auto-auditor-changes-review"))).toContain("With the auditor's changes₹5,000");
+    expect(text(q("auto-auditor-changes-review-answer-1"))).toBe("Waiting for your answer");
+    expect(text(q("auto-no-accounts-yet"))).toBe(
+      "Nothing goes to Accounts until the auditor approves the revised settlement.",
+    );
+    expect(text(q("auto-rework-progress"))).toBe("0 of 2 requests answered · 2 still wait for you");
+    expect((q("auto-resubmit-auditor") as HTMLButtonElement).disabled).toBe(true);
+    expect(text(q("auto-resubmit-auditor-blocked"))).toBe(
+      "2 requests still wait for your answer: accept the auditor's change, keep yours or change it first.",
+    );
+    expect(q("auto-accept-changes")).toBeNull(); // no more "accept and go to Accounts"
     expect(q("tracker-step-auditor_changes")?.getAttribute("data-state")).toBe("current");
 
-    // the Requests tab highlights the auditor's changes
+    // the Requests tab: the flagged requests on top with the auditor's change, the remark and the answers
     await openTab("Requests");
     expect(q("auto-row-1")?.getAttribute("data-auditor-changed")).toBe("true");
+    expect(text(q("auto-flag-1"))).toBe("Auditor changed this");
     expect(text(q("auto-auditor-view-1"))).toContain("Reduced to ₹5,000");
-    expect(text(q("auto-auditor-view-1"))).toContain("pays ₹5,000");
+    expect(text(q("auto-auditor-view-1"))).not.toContain("pays"); // a question to HR, not yet what is paid
+    expect(text(q("auto-reviewer-remark-1"))).toBe("“Two absent days”");
     expect(text(q("auto-auditor-view-2"))).toContain("Rejected by the auditor");
     expect(text(q("auto-auditor-view-3"))).toContain("No change");
-    // the Summary tab says what is paid after the audit
+    expect(q("auto-final-view-1")).not.toBeNull(); // HR's final beside the auditor's change
+    expect(q("auto-hr-view-1")).toBeNull(); // HR's proposal and the MD's decision stay in the trail, not the row
+    // HR's final settlement is what goes back (the Approved column), not the auditor's figure
+    expect(text(q("auto-row-1")?.querySelector('[data-column="approved"]') ?? null)).toContain("₹6,000");
+    expect(q("auto-accept-1")).not.toBeNull();
+    expect(q("auto-keep-own-1")).not.toBeNull();
+    expect(q("auto-final-1")).not.toBeNull();
+    expect(q("auto-rework-1")).toBeNull(); // waiting: nothing to reopen
+    expect(q("auto-rework-3")).not.toBeNull(); // Meena: not flagged, rejected in HR's final settlement
+    expect(q("auto-accept-3")).toBeNull();
+    // the Summary tab says what the auditor changed
     await openTab("Summary");
-    expect(text(q("auto-amount-payable-value"))).toBe("₹5,000");
     expect(text(q("auto-auditor-changes-value"))).toBe("2");
-
-    await openTab("Workflow");
-    nextWrite = batchAt("accounts_send");
-    await click(q("auto-accept-changes"));
-    expect(text(q("accept-review-line-1"))).toContain("Reduced ₹6,000 -> ₹5,000");
-    await type(q("accept-dialog-note"), "Agreed with the auditor");
-    await click(q("accept-dialog-confirm"));
-    expect(writes).toEqual([
-      ["POST", "/api/settlement-automation/batches/7/accept-auditor-changes", { note: "Agreed with the auditor" }],
-    ]);
-    expect(q("auto-stage-panel")?.getAttribute("data-stage")).toBe("accounts_send");
-    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Auditor's changes accepted" }));
   });
 
   it("tells HR when the auditor approved but their e-mail to Accounts did not go", async () => {
@@ -1034,7 +1038,7 @@ describe("the steps", () => {
     expect(q("auto-history")).toBeNull();
     await openTab("History");
     const history = text(q("auto-history"));
-    expect(history.indexOf("Sent to the auditor")).toBeLessThan(history.indexOf("Forwarded to the MD"));
+    expect(history.indexOf("Sent to the auditor")).toBeLessThan(history.indexOf("HR forwarded it to the MD"));
     expect(history).toContain("3 requests");
   });
 });
@@ -1271,7 +1275,9 @@ describe("HR's proposal at HR Review (round 5)", () => {
     await openTab("Requests");
     expect(text(q("auto-hr-view-2"))).toBe("HRProposes ₹20,000");
     expect(text(q("auto-row-2")?.querySelector('[data-column="approved"]') ?? null)).toContain("HR proposes");
-    expect((q("auto-keep-1") as HTMLButtonElement).disabled).toBe(true); // already as asked
+    // not reviewed yet (2026-11-27): Keep as asked is a review of its own
+    expect((q("auto-keep-1") as HTMLButtonElement).disabled).toBe(false);
+    expect(text(q("auto-hr-view-1"))).toBe("HRNot reviewed yet");
     expect(q("auto-reduce-2")?.getAttribute("aria-pressed")).toBe("true");
 
     await click(q("auto-reduce-1"));
@@ -1364,5 +1370,451 @@ describe("MD Direct to Auditor (round 5)", () => {
     expect(q("auto-md-direct-failed")).toBeNull();
     await openTab("Summary");
     expect(text(q("auto-amount-final"))).toContain("finalized by the MD (direct to auditor)");
+  });
+});
+
+// ───────────────────── re-approval cycles (owner 2026-11-27): review order, Rework, answers, resubmissions ─────────
+
+/** HR Rework (Auditor Changes): the auditor cut Asha to ₹5,000 ("Two absent days") and rejected Ravi; both wait for HR's
+ *  answer; Meena (rejected in HR's final settlement) was not flagged. */
+function auditorChangesBatch(over: Partial<SettlementBatch> = {}): SettlementBatch {
+  const b = batchAt("auditor_changes", {
+    tracker: trackerFor("auditor_changes", "Answer the auditor, then resubmit.", { auditorChanged: true }),
+    ...over,
+  });
+  b.items[0] = {
+    ...withAuditor(b.items[0], { action: "reduce", amount: 5000, remark: "Two absent days" }),
+    rework: "auditor",
+  };
+  b.items[1] = { ...withAuditor(b.items[1], { action: "reject", remark: "Loan already running" }), rework: "auditor" };
+  b.auditor = {
+    ...b.auditor,
+    outcome: "changes",
+    submittedAt: "2026-11-25T06:00:00Z",
+    submittedNote: "Please check",
+    changes: 2,
+    remarks: 2,
+  };
+  b.counts = { ...b.counts, rework: 2 };
+  b.amounts = { ...b.amounts, payable: 5000 };
+  return { ...b, ...over };
+}
+
+/** The rows of the Requests table and its group dividers, in the order drawn. */
+const tableOrder = () =>
+  [...q("auto-requests-table")!.querySelectorAll('[data-testid^="auto-row-"], [data-testid^="auto-group-"]')].map((r) =>
+    r.getAttribute("data-testid"),
+  );
+
+describe("the Requests table is ordered by review (owner 2026-11-27): waiting on top, then approved, then rejected", () => {
+  it("groups the rows under quiet dividers with the stage's own words, and flags the reviewer's changes", async () => {
+    const b = batchAt("hr_review");
+    b.items[1] = { ...b.items[1], hr: { action: "reject", amount: null, remark: "No" }, hrNote: "No" };
+    b.items[2] = { ...b.items[2], hr: { action: "approve", amount: null, remark: "" } };
+    atStage(b);
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(tableOrder()).toEqual([
+      "auto-group-pending",
+      "auto-row-1",
+      "auto-group-approved",
+      "auto-row-3",
+      "auto-group-rejected",
+      "auto-row-2",
+    ]);
+    expect(text(q("auto-group-pending"))).toBe("Waiting for your review1");
+    expect(text(q("auto-group-approved"))).toBe("Approved1");
+    expect(text(q("auto-group-rejected"))).toBe("Rejected1");
+    // the phone cards keep the same order
+    expect(
+      [...q("auto-requests-cards")!.querySelectorAll("[data-group], [data-testid^='auto-card-'][data-review]")].map(
+        (el) => el.getAttribute("data-group") ?? el.getAttribute("data-testid"),
+      ),
+    ).toEqual(["pending", "auto-card-1", "approved", "auto-card-3", "rejected", "auto-card-2"]);
+    // Rework on the reviewed ones only; Keep as asked is pressed on the one kept
+    expect(q("auto-rework-1")).toBeNull();
+    expect(q("auto-rework-2")).not.toBeNull();
+    expect(q("auto-keep-3")?.getAttribute("aria-pressed")).toBe("true");
+    expect((q("auto-keep-3") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("takes the server's `review` as it is (the table never second-guesses it)", async () => {
+    const b = batchAt("hr_final");
+    b.items[0] = { ...b.items[0], review: "pending" };
+    b.items[2] = { ...b.items[2], review: "approved" };
+    atStage(b);
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(tableOrder()).toEqual([
+      "auto-group-pending",
+      "auto-row-1",
+      "auto-group-approved",
+      "auto-row-2",
+      "auto-row-3",
+    ]);
+    expect(text(q("auto-group-pending"))).toBe("Waiting for your final decision1");
+  });
+});
+
+describe("Rework: reopen a decision before the stage is completed", () => {
+  it("HR Final Settlement: Rework clears the decision, the row moves back to the top and glows there", async () => {
+    atStage(batchAt("hr_final"));
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(tableOrder()[0]).toBe("auto-group-approved"); // every request has its final decision (the MD's)
+    const reopened = batchAt("hr_final");
+    reopened.items[1] = { ...reopened.items[1], final: { ...reopened.items[1].final, decision: null, amount: null } };
+    nextWrite = reopened;
+    await click(q("auto-rework-2"));
+    expect(writes).toEqual([["POST", "/api/settlement-automation/items/2/rework", {}]]);
+    expect(tableOrder().slice(0, 2)).toEqual(["auto-group-pending", "auto-row-2"]);
+    expect(q("auto-row-2")?.getAttribute("data-flash")).toBe("true");
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Reopened for rework" }));
+  });
+
+  it("says why when the server refuses it", async () => {
+    atStage(batchAt("hr_final"));
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    nextWrite = refusal(400, { error: "The batch is not at a stage HR decides.", code: "stage" });
+    await click(q("auto-rework-1"));
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "The request could not be reopened",
+        description: "The batch is not at a stage HR decides.",
+        variant: "destructive",
+      }),
+    );
+  });
+});
+
+describe("HR Rework (MD Changes): answer the MD, then resubmit", () => {
+  it("shows the MD's instructions, the answers still due, and why Resubmit is not open yet", async () => {
+    atStage(batchAt("md_changes"));
+    await mount();
+    expect(text(q("auto-stage-title"))).toBe("HR Rework (MD Changes)");
+    expect(q("auto-stage-panel")?.getAttribute("data-stage")).toBe("md_changes");
+    expect(text(q("auto-md-return-note"))).toBe("The MD's instructionsRecheck Ravi's loan and Meena's leave");
+    expect(text(q("auto-md-changes"))).toContain("Managing Director");
+    expect(text(q("auto-rework-progress"))).toBe("0 of 2 requests answered · 2 still wait for you");
+    expect((q("auto-resubmit-md") as HTMLButtonElement).disabled).toBe(true);
+    expect(text(q("auto-resubmit-md-blocked"))).toBe(
+      "2 requests still wait for your answer: accept the MD's decision, keep yours or change it first.",
+    );
+    expect(q("tracker-step-md_changes")?.getAttribute("data-state")).toBe("current");
+    // the way to the answers
+    await click(q("auto-open-requests"));
+    expect(window.location.search).toContain("view=requests");
+    expect(q("auto-view-requests")).not.toBeNull();
+  });
+
+  it("lists the flagged requests on top with the MD's decision and remark beside HR's proposal", async () => {
+    atStage(batchAt("md_changes"));
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(tableOrder()).toEqual([
+      "auto-group-pending",
+      "auto-row-2",
+      "auto-row-3",
+      "auto-group-approved",
+      "auto-row-1",
+    ]);
+    expect(text(q("auto-group-pending"))).toBe("Waiting for your answer to the MD2");
+    expect(text(q("auto-flag-2"))).toBe("MD changed this");
+    expect(text(q("auto-hr-view-2"))).toBe("HRKeep as asked");
+    expect(text(q("auto-md-view-2"))).toBe("MDApproved ₹25,000“Reduce”"); // the MD's own remark under it
+    expect(text(q("auto-reviewer-remark-3"))).toBe("“Too many leaves”");
+    // what HR sends back is HR's own proposal (the Approved column), the MD's figure is in the Status beside it
+    expect(text(q("auto-row-2")?.querySelector('[data-column="approved"]') ?? null)).toContain("₹30,000");
+    // waiting rows: Accept the MD's decision / Keep mine, then Reduce / Reject / Remark; answered rows: Rework
+    expect(q("auto-accept-2")).not.toBeNull();
+    expect(q("auto-keep-own-2")).not.toBeNull();
+    expect(q("auto-reduce-2")).not.toBeNull();
+    expect(q("auto-rework-2")).toBeNull();
+    expect(q("auto-accept-1")).toBeNull();
+    expect(q("auto-rework-1")).not.toBeNull();
+    // the hover labels say what each one does (Rework in violet)
+    expect(q("auto-rework-1")?.className).toContain("hover:text-violet-700");
+  });
+
+  it("Accept the MD's decision, Keep mine, and a change of HR's own proposal answer the MD", async () => {
+    atStage(batchAt("md_changes"));
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    const answered = batchAt("md_changes");
+    answered.items[1] = {
+      ...answered.items[1],
+      rework: null,
+      mdChanged: false,
+      hr: { action: "reduce", amount: 25000, remark: "Reduce" },
+    };
+    nextWrite = answered;
+    await click(q("auto-accept-2"));
+    expect(writes).toEqual([["POST", "/api/settlement-automation/items/2/resolve", { how: "accept" }]]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "MD's decision accepted" }));
+    // Ravi moved to the answered ones and glows there
+    expect(tableOrder()).toEqual([
+      "auto-group-pending",
+      "auto-row-3",
+      "auto-group-approved",
+      "auto-row-1",
+      "auto-row-2",
+    ]);
+    expect(q("auto-row-2")?.getAttribute("data-flash")).toBe("true");
+
+    await click(q("auto-keep-own-3"));
+    expect(writes[1]).toEqual(["POST", "/api/settlement-automation/items/3/resolve", { how: "keep" }]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Your proposal kept" }));
+
+    // a change of HR's own proposal is an answer too: the dialog shows the MD's decision beside it
+    await click(q("auto-reduce-3"));
+    expect(text(q("hr-proposal-md"))).toBe('The MD rejected it: "Too many leaves"');
+    await type(q("hr-proposal-amount"), "3000");
+    await type(q("hr-proposal-remark"), "Half, for the leave");
+    await click(q("hr-proposal-confirm"));
+    expect(writes[2]).toEqual([
+      "PATCH",
+      "/api/settlement-automation/items/3",
+      { hrNote: "Half, for the leave", action: "reduce", amount: 3000 },
+    ]);
+  });
+
+  it("answers several at once (resolve-bulk) and names the ones left out", async () => {
+    atStage(batchAt("md_changes"));
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(q("auto-bulk-approve")).toBeNull(); // a rework stage answers, it does not approve
+    await click(q("auto-select-2"));
+    await click(q("auto-select-3"));
+    nextWrite = {
+      ...batchAt("md_changes"),
+      skipped: [{ id: 3, reason: "The MD has not decided this request: there is nothing to accept." }],
+    } as SettlementBatch;
+    await click(q("auto-bulk-accept"));
+    expect(text(q("auto-answer-dialog"))).toContain("Accept the MD's decision on 2 requests?");
+    await click(q("auto-answer-dialog-confirm"));
+    expect(writes).toEqual([
+      ["POST", "/api/settlement-automation/batches/7/resolve-bulk", { itemIds: [2, 3], how: "accept" }],
+    ]);
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "MD's decision accepted on 1 request",
+        description: "Left out: Meena Iyer: The MD has not decided this request: there is nothing to accept.",
+      }),
+    );
+    expect(q("auto-answer-dialog")).toBeNull();
+
+    await click(q("auto-select-2"));
+    await click(q("auto-bulk-keep"));
+    await click(q("auto-answer-dialog-confirm"));
+    expect(writes[1]).toEqual([
+      "POST",
+      "/api/settlement-automation/batches/7/resolve-bulk",
+      { itemIds: [2], how: "keep" },
+    ]);
+  });
+
+  it("Resubmit to the MD: the note goes with it, the MD reviews round 2; a refusal shows the server's words", async () => {
+    const answered = batchAt("md_changes", {
+      actions: actionsFor("md_changes", true, false, true),
+      counts: { ...batchAt("md_changes").counts, rework: 0 },
+    });
+    answered.items = answered.items.map((i) => ({ ...i, rework: null }));
+    atStage(answered);
+    await mount();
+    expect((q("auto-resubmit-md") as HTMLButtonElement).disabled).toBe(false);
+    expect(q("auto-resubmit-md-blocked")).toBeNull();
+
+    nextWrite = refusal(400, { error: "1 request(s) still need your answer to the MD.", code: "rework_open" });
+    await click(q("auto-resubmit-md"));
+    await click(q("resubmit-md-dialog-confirm"));
+    expect(text(q("resubmit-md-dialog-error"))).toBe("1 request(s) still need your answer to the MD.");
+
+    const round2 = batchAt("md_review", {
+      mdRound: 2,
+      tracker: trackerFor("md_review", "MD: review HR's revised settlement (round 2).", { mdCycles: 1, mdRound: 2 }),
+      history: [
+        { at: "2026-11-24T05:00:00Z", by: "Priya HR", action: "md_resubmitted", note: "Kept Ravi's amount", round: 2 },
+      ],
+    });
+    nextWrite = round2;
+    await type(q("resubmit-md-dialog-note"), "Kept Ravi's amount");
+    await click(q("resubmit-md-dialog-confirm"));
+    expect(writes[1]).toEqual([
+      "POST",
+      "/api/settlement-automation/batches/7/resubmit-md",
+      { note: "Kept Ravi's amount" },
+    ]);
+    expect(q("resubmit-md-dialog")).toBeNull();
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Resubmitted to the MD" }));
+    expect(q("auto-stage-panel")?.getAttribute("data-stage")).toBe("md_review");
+    expect(text(q("auto-md-round"))).toBe("Round 2 — the MD is reviewing the revised settlement.");
+    expect(text(q("auto-waiting-md"))).toContain("Your note with the revised settlement: Kept Ravi's amount");
+    expect(text(q("tracker-step-md_review"))).toContain("round 2");
+    expect(q("tracker-step-md_changes")?.getAttribute("data-cycles")).toBe("1");
+  });
+
+  it("a click on the HR Rework (MD Changes) stage lists the flagged requests and the answers due", async () => {
+    atStage(batchAt("md_changes"));
+    await mount();
+    await click(q("tracker-open-md_changes"));
+    expect(q("auto-focus-panel")?.getAttribute("data-kind")).toBe("md_changes");
+    expect(focusRows()).toEqual(["auto-focus-row-2", "auto-focus-row-3"]);
+    expect(text(q("auto-focus-row-2"))).toContain("Waiting for your answer");
+    expect(text(q("auto-focus-row-3"))).toContain("“Too many leaves”");
+  });
+});
+
+describe("HR Rework (Auditor Changes): answer the auditor, then resubmit and send in one step", () => {
+  it("Accept the auditor's change and Keep HR's settlement answer the auditor; Change final uses the final dialog", async () => {
+    atStage(auditorChangesBatch());
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    expect(text(q("auto-group-pending"))).toBe("Waiting for your answer to the auditor2");
+    await click(q("auto-accept-1"));
+    expect(writes).toEqual([["POST", "/api/settlement-automation/items/1/resolve", { how: "accept" }]]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Auditor's change accepted" }));
+    await click(q("auto-keep-own-2"));
+    expect(writes[1]).toEqual(["POST", "/api/settlement-automation/items/2/resolve", { how: "keep" }]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Your settlement kept" }));
+    await click(q("auto-final-1"));
+    expect(text(q("final-auditor"))).toBe('The auditor: Reduced ₹6,000 -> ₹5,000: "Two absent days"');
+    await type(q("final-amount"), "5500");
+    await type(q("final-remark"), "Met halfway");
+    await click(q("final-confirm"));
+    expect(writes[2]).toEqual([
+      "PATCH",
+      "/api/settlement-automation/items/1/final",
+      { decision: "approved", amount: 5500, startMonth: 12, startYear: 2026, remark: "Met halfway" },
+    ]);
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ description: expect.stringContaining("The auditor sees it when you resubmit") }),
+    );
+  });
+
+  it("Resubmit to the auditor: resubmit, build the revised report from the revised settlement, then send it", async () => {
+    const answered = auditorChangesBatch({ actions: actionsFor("auditor_changes", true, false, true) });
+    answered.items = answered.items.map((i) => ({ ...i, rework: null }));
+    answered.counts = { ...answered.counts, rework: 0 };
+    atStage(answered);
+    await mount();
+    expect((q("auto-resubmit-auditor") as HTMLButtonElement).disabled).toBe(false);
+    const revised = batchAt("auditor_send", {
+      auditorRound: 2,
+      tracker: trackerFor("auditor_send", "HR: send the revised settlement to the auditor (round 2).", {
+        auditorCycles: 1,
+        auditorRound: 2,
+      }),
+    });
+    const sent = batchAt("auditor_review", {
+      auditorRound: 2,
+      tracker: trackerFor("auditor_review", "Auditor: review.", { auditorCycles: 1, auditorRound: 2 }),
+    });
+    nextWrite = revised;
+    laterWrites = [sent];
+    await click(q("auto-resubmit-auditor"));
+    expect(text(q("resubmit-auditor-dialog"))).toContain(
+      "Nothing goes to Accounts until the auditor approves the revised settlement.",
+    );
+    await type(q("resubmit-auditor-dialog-note"), "Accepted the cut on Asha");
+    await click(q("resubmit-auditor-dialog-confirm"));
+    expect(writes.map(([verb, url]) => [verb, url])).toEqual([
+      ["POST", "/api/settlement-automation/batches/7/resubmit-auditor"],
+      ["POST", "/api/settlement-automation/batches/7/send-auditor"],
+    ]);
+    expect(writes[0][2]).toEqual({ note: "Accepted the cut on Asha" });
+    // the report is built from the revised settlement the server answered (round 2), not the page's old one
+    expect(h.auditorFiles).toHaveBeenCalledTimes(1);
+    expect(h.auditorFiles.mock.calls[0][0].auditorRound).toBe(2);
+    expect(((writes[1][2] as FormData).get("pdf") as File).name).toBe("Settlement_November_2026_Batch_1_Final.pdf");
+    expect(q("resubmit-auditor-dialog")).toBeNull();
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Revised settlement sent to the auditor (round 2)" }),
+    );
+    expect(q("auto-stage-panel")?.getAttribute("data-stage")).toBe("auditor_review");
+    expect(text(q("auto-auditor-round"))).toBe("Round 2 — the auditor is reviewing the revised settlement.");
+  });
+
+  it("when only the e-mail fails the batch waits at Send to Auditor, which says why and sends the revised one", async () => {
+    const answered = auditorChangesBatch({ actions: actionsFor("auditor_changes", true, false, true) });
+    answered.items = answered.items.map((i) => ({ ...i, rework: null }));
+    atStage(answered);
+    await mount();
+    nextWrite = batchAt("auditor_send", { auditorRound: 2 });
+    laterWrites = [refusal(502, { error: "Not sent: SMTP timeout", code: "email_failed" })];
+    await click(q("auto-resubmit-auditor"));
+    await click(q("resubmit-auditor-dialog-confirm"));
+    expect(q("resubmit-auditor-dialog")).toBeNull();
+    expect(q("auto-stage-panel")?.getAttribute("data-stage")).toBe("auditor_send");
+    expect(q("auto-send-error")?.getAttribute("data-code")).toBe("email_failed");
+    expect(h.toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Resubmitted, but not sent to the auditor yet", variant: "destructive" }),
+    );
+    expect(text(q("auto-auditor-round"))).toContain("Send the revised settlement (round 2)");
+    expect(text(q("auto-send-auditor"))).toBe("Send the revised settlement (round 2)");
+  });
+
+  it("a refused resubmission keeps the dialog open with the server's words and sends nothing", async () => {
+    const answered = auditorChangesBatch({ actions: actionsFor("auditor_changes", true, false, true) });
+    atStage(answered);
+    await mount();
+    nextWrite = refusal(400, { error: "2 request(s) still need your answer to the auditor.", code: "rework_open" });
+    await click(q("auto-resubmit-auditor"));
+    await click(q("resubmit-auditor-dialog-confirm"));
+    expect(text(q("resubmit-auditor-dialog-error"))).toBe("2 request(s) still need your answer to the auditor.");
+    expect(h.auditorFiles).not.toHaveBeenCalled();
+    expect(writes).toHaveLength(1);
+  });
+
+  it("answers several at once: Keep HR's settlement on the ticked ones", async () => {
+    atStage(auditorChangesBatch());
+    await mount(`${SALARY_ADVANCE}?view=requests`);
+    await click(q("auto-select-1"));
+    await click(q("auto-select-2"));
+    await click(q("auto-bulk-keep"));
+    expect(text(q("auto-answer-dialog"))).toContain("Keep your own on 2 requests?");
+    await click(q("auto-answer-dialog-confirm"));
+    expect(writes).toEqual([
+      ["POST", "/api/settlement-automation/batches/7/resolve-bulk", { itemIds: [1, 2], how: "keep" }],
+    ]);
+    expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Your own kept on 2 requests" }));
+  });
+
+  it("confirming the auditor's review by hand is refused while the auditor has changes in the portal", async () => {
+    atStage(batchAt("auditor_review"));
+    await mount();
+    nextWrite = refusal(409, {
+      error:
+        "The auditor marked changes in the review portal: wait for their answer (the settlement then comes back to HR for rework).",
+      code: "auditor_changes_open",
+    });
+    const before = monthReads;
+    await click(q("auto-proceed"));
+    await click(q("proceed-dialog-confirm"));
+    expect(text(q("proceed-dialog-error"))).toContain("The auditor marked changes in the review portal");
+    expect(monthReads).toBeGreaterThan(before);
+  });
+});
+
+describe("the history in the tracker's words (2026-11-27)", () => {
+  it("names the returns for rework and the resubmissions with their round", async () => {
+    atStage(
+      batchAt("md_review", {
+        mdRound: 2,
+        history: [
+          { at: "2026-11-22T05:30:00Z", by: "Priya HR", action: "forwarded", note: "", count: 3 },
+          {
+            at: "2026-11-23T05:00:00Z",
+            by: "Managing Director",
+            action: "md_returned",
+            note: "Recheck",
+            round: 1,
+            changes: 2,
+            remarks: 1,
+          },
+          { at: "2026-11-24T05:00:00Z", by: "Priya HR", action: "md_resubmitted", note: "", round: 2, count: 2 },
+        ],
+      }),
+    );
+    await mount();
+    await openTab("History");
+    const history = text(q("auto-history"));
+    expect(history).toContain("HR resubmitted it to the MD (round 2)");
+    expect(history).toContain("MD returned it to HR for rework (round 1)");
+    expect(history).toContain("2 changes · 1 remark");
+    expect(history.indexOf("HR resubmitted")).toBeLessThan(history.indexOf("MD returned"));
+    expect(q("auto-history")?.querySelector('[data-tone="rework"]')).not.toBeNull();
   });
 });

@@ -18,46 +18,81 @@ const STAGES: [string, string][] = [
   ["received", "Employee Requests Received"],
   ["hr_review", "HR Review"],
   ["md_review", "MD Review & Approval"],
+  ["md_changes", "HR Rework (MD Changes)"],
   ["hr_final", "HR Final Settlement"],
   ["auditor_send", "Send to Auditor"],
   ["auditor_review", "Auditor Review"],
-  ["auditor_changes", "HR Review of Auditor Changes"],
+  ["auditor_changes", "HR Rework (Auditor Changes)"],
   ["accounts_send", "Send Bank File to Accounts"],
   ["completed", "Settlement Workflow Completed"],
 ];
 const STAGE_INDEX: Record<SettlementStage, number> = {
   hr_review: 1,
   md_review: 2,
-  hr_final: 3,
-  auditor_send: 4,
-  auditor_review: 5,
-  auditor_changes: 6,
-  accounts_send: 7,
+  md_changes: 3,
+  hr_final: 4,
+  auditor_send: 5,
+  auditor_review: 6,
+  auditor_changes: 7,
+  accounts_send: 8,
   completed: 9,
 };
+/** A rework loop -> the review it hangs under. */
+const LOOP_UNDER: Record<string, number> = { md_changes: 2, auditor_changes: 6 };
 
 export const TYPE_LABELS: Record<AdvanceType, string> = { general: "Salary Advance", term: "Term Loan" };
 
-/** The tracker as tracker_json draws it; `finalizedVia: "md"` skips HR Final Settlement. */
-export function trackerFor(stage: SettlementStage, finalizedVia?: "md" | "hr" | null): TrackerStep[] {
+/** The tracker as tracker_json draws it: ten stages, the two rework loops "done" once gone round (with `cycles`),
+ *  "current" while HR reworks, "skipped" when their review passed without a return; `finalizedVia: "md"` skips HR Final
+ *  Settlement. */
+export function trackerFor(
+  stage: SettlementStage,
+  finalizedVia?: "md" | "hr" | null,
+  mdCycles = 0,
+  mdRound = 1,
+): TrackerStep[] {
   const current = STAGE_INDEX[stage];
   return STAGES.map(([key, label], i) => {
-    const skipped = (key === "hr_final" && finalizedVia === "md") || (key === "auditor_changes" && current > 6);
-    const state = skipped
-      ? "skipped"
-      : i === 0 || i < current || (i === current && key === "completed")
+    const loop = key in LOOP_UNDER;
+    const cycles = key === "md_changes" ? mdCycles : 0;
+    const state: TrackerStep["state"] =
+      i === 0
         ? "done"
-        : i === current
+        : loop && stage === key
           ? "current"
-          : "pending";
+          : loop && cycles > 0
+            ? "done"
+            : loop
+              ? current > LOOP_UNDER[key]
+                ? "skipped"
+                : "pending"
+              : key === "hr_final" && finalizedVia === "md"
+                ? "skipped"
+                : i < current || (i === current && key === "completed")
+                  ? "done"
+                  : i === current
+                    ? "current"
+                    : "pending";
+    const detail =
+      state === "skipped"
+        ? (({ hr_final: "Finalized directly by the MD", md_changes: "No MD changes" } as Record<string, string>)[key] ??
+          "No auditor changes")
+        : state === "done" && key === "md_review" && stage === "md_changes"
+          ? "Returned to HR for rework"
+          : state === "done" && key === "md_changes"
+            ? `Reworked and resubmitted ${cycles === 1 ? "once" : `${cycles} times`}`
+            : null;
     return {
       key,
       label,
       state,
       at: state === "done" && i > 0 ? "2026-11-24T06:30:00+00:00" : null,
       by: state === "done" && i > 0 ? (key === "md_review" ? "Test MD (MD)" : "Priya (HR)") : null,
-      detail: skipped ? (key === "hr_final" ? "Finalized directly by the MD" : "No auditor changes") : null,
+      detail,
       action: state === "current" ? `${label}: next step.` : null,
+      loop,
+      cycles: loop ? cycles : null,
+      round: key === "md_review" ? mdRound : key === "auditor_review" ? 1 : null,
     };
   });
 }
@@ -175,9 +210,50 @@ export function fourItems(): SettlementItem[] {
   ];
 }
 
-/** Counts, totals and the MD's buttons worked out from the items, as batch_json does. */
+/** HR's proposal as an MD decision (service.py hr_expected). */
+function expected(i: SettlementItem): { decision: "approved" | "rejected"; amount: number | null } {
+  if (i.hr?.action === "reject") return { decision: "rejected", amount: null };
+  if (i.hr?.action === "reduce" && i.hr.amount != null) return { decision: "approved", amount: i.hr.amount };
+  return { decision: "approved", amount: i.requestedAmount };
+}
+
+/** service.py md_changed: the MD's OWN decision differs from HR's proposal (a pre-filled one is no change). */
+export function changedFromHr(i: SettlementItem): boolean {
+  if (!i.md.decision || !i.md.decidedAt || i.md.fromHr) return false;
+  const e = expected(i);
+  if (i.md.decision !== e.decision) return true;
+  return e.decision === "approved" && Math.abs((i.md.amount ?? 0) - (e.amount ?? 0)) > 0.004;
+}
+
+/** service.py md_remarked: the MD wrote their own remark (not HR's carried over). */
+const remarkedByMd = (i: SettlementItem) =>
+  !!i.md.decidedAt && !i.md.fromHr && !!i.md.remark.trim() && i.md.remark.trim() !== (i.hr?.remark ?? i.hrNote).trim();
+
+/** service.py review_state for the stages the MD sees. */
+function reviewIn(i: SettlementItem, stage: SettlementStage): SettlementItem["review"] {
+  if (stage === "md_review") {
+    if (!i.md.decision || !i.md.decidedAt || i.md.fromHr) return "pending";
+    return i.md.decision === "rejected" ? "rejected" : "approved";
+  }
+  if (stage === "md_changes") {
+    if (i.rework) return "pending";
+    return i.hr?.action === "reject" ? "rejected" : "approved";
+  }
+  const d = i.effective?.decision ?? i.final.decision ?? i.md.decision;
+  return d === "rejected" ? "rejected" : d === "approved" ? "approved" : "pending";
+}
+
+/** Counts, totals, the rework facts and the MD's buttons worked out from the items, as batch_json does. */
 export function withTotals(b: SettlementBatch): SettlementBatch {
-  const items = b.items;
+  const items = b.items.map((i) => ({
+    ...i,
+    md: { ...i.md, fromHr: !!i.md.decision && !i.md.decidedAt },
+    review: reviewIn(i, b.stage),
+    mdChanged: changedFromHr(i),
+    mdRemarked: remarkedByMd(i),
+    rework: i.rework ?? null,
+    trail: i.trail ?? [],
+  }));
   const mdDone = items.filter((i) => i.md.decision).length;
   const decision = (i: SettlementItem) => i.final.decision ?? i.md.decision;
   const approved = items.filter((i) => decision(i) === "approved").length;
@@ -186,12 +262,27 @@ export function withTotals(b: SettlementBatch): SettlementBatch {
   const md = b.stage === "md_review";
   const type = b.advanceType ?? "general";
   const typeLabel = TYPE_LABELS[type];
+  const mdChanges = items.filter((i) => i.mdChanged).length;
+  const mdCycles = (b.history ?? []).filter((h) => h.action === "md_returned").length;
+  const mdRound = b.mdRound ?? 1;
   return {
     ...b,
+    items,
     advanceType: type,
     typeLabel,
     title: `${typeLabel} · ${b.label}`,
-    tracker: trackerFor(b.stage, b.finalizedVia),
+    tracker: trackerFor(b.stage, b.finalizedVia, mdCycles, mdRound),
+    mdRound,
+    auditorRound: 1,
+    flow: {
+      mdRound,
+      auditorRound: 1,
+      mdCycles,
+      auditorCycles: 0,
+      mdPath: b.finalizedVia === "md" ? "direct" : b.mdConfirmedAt ? "hr" : null,
+      accountsVia: null,
+      mdReturn: b.flow?.mdReturn ?? null,
+    },
     counts: {
       total: items.length,
       mdDecided: mdDone,
@@ -200,13 +291,22 @@ export function withTotals(b: SettlementBatch): SettlementBatch {
       undecided: items.length - approved - rejected,
       warning: items.filter((i) => flag(i) === "warning").length,
       critical: items.filter((i) => flag(i) === "critical").length,
+      pending: items.filter((i) => i.review === "pending").length,
+      reviewedApproved: items.filter((i) => i.review === "approved").length,
+      reviewedRejected: items.filter((i) => i.review === "rejected").length,
+      mdChanges,
+      rework: items.filter((i) => i.rework).length,
     },
     amounts: {
       requested: items.reduce((s, i) => s + i.requestedAmount, 0),
       mdApproved: items.reduce((s, i) => s + (i.md.amount ?? 0), 0),
       finalApproved: items.reduce((s, i) => s + (i.final.decision === "approved" ? (i.final.amount ?? 0) : 0), 0),
     },
-    actions: { canDecideMd: md, canConfirmMd: md && mdDone === items.length && items.length > 0 },
+    actions: {
+      canDecideMd: md,
+      canConfirmMd: md && mdDone === items.length && items.length > 0 && mdChanges === 0,
+      canReturnMd: md && items.length > 0,
+    },
   };
 }
 
@@ -433,6 +533,14 @@ export function fakeServer(
         return refuse(400, `${open.length} request(s) still need your decision before you can confirm.`, "undecided", {
           undecided: open.map((i) => i.id),
         });
+      const changed = owner.items.filter(changedFromHr);
+      if (changed.length)
+        return refuse(
+          409,
+          `You changed ${changed.length} request(s) from HR's proposal. Return the settlement to HR for rework; you approve it once HR resubmits.`,
+          "has_changes",
+          { changed: changed.map((i) => i.id) },
+        );
       const direct = body.mode === "direct";
       if (direct && (!body.pdf || !body.xlsx)) return refuse(400, "Attach the report.", "file");
       const note = String(body.note ?? "").trim();
@@ -495,6 +603,72 @@ export function fakeServer(
             ? "The settlement is finalized, but it could not be sent to the auditor (Not sent: e-mail is switched off). HR can send it from the Loan & Advance page."
             : null,
       };
+    };
+    fixtures[`/api/md/settlement/batches/${b.id}/return`] = (_params, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { note?: string };
+      calls.push({ path: `/api/md/settlement/batches/${b.id}/return`, body });
+      const owner = batches.find((x) => x.id === b.id)!;
+      if (owner.stage !== "md_review") return refuse(409, "This step is not open.", "stage", { stage: owner.stage });
+      const note = (body.note ?? "").trim();
+      const changed = owner.items.filter(changedFromHr);
+      const remarked = owner.items.filter((i) => !changedFromHr(i) && remarkedByMd(i));
+      if (!changed.length && !remarked.length && note.length < 3)
+        return refuse(
+          400,
+          "Nothing to rework: approve the settlement, or write what HR should correct (at least 3 characters).",
+          "no_changes",
+        );
+      const round = owner.mdRound ?? 1;
+      const at = "2026-11-27T05:30:00+00:00";
+      const flagged = new Set([...changed, ...remarked].map((i) => i.id));
+      return save({
+        ...owner,
+        stage: "md_changes",
+        stageLabel: "HR Rework (MD Changes)",
+        nextAction: "HR: answer each request the MD changed, then Resubmit to the MD.",
+        flow: { ...owner.flow!, mdReturn: { at, by: "Test MD (MD)", note } },
+        history: [
+          ...(owner.history ?? []),
+          {
+            at,
+            by: "Test MD (MD)",
+            action: "md_returned",
+            note,
+            round,
+            changes: changed.length,
+            remarks: remarked.length,
+          },
+        ],
+        items: owner.items.map((i) =>
+          flagged.has(i.id)
+            ? {
+                ...i,
+                rework: "md" as const,
+                trail: [
+                  ...(i.trail ?? []),
+                  {
+                    at,
+                    by: owner.forwardedBy ?? "",
+                    role: "hr" as const,
+                    round,
+                    action: i.hr?.action ?? "approve",
+                    amount: i.hr?.amount ?? null,
+                    remark: i.hr?.remark ?? "",
+                  },
+                  {
+                    at,
+                    by: "Test MD (MD)",
+                    role: "md" as const,
+                    round,
+                    action: i.md.decision ?? "",
+                    amount: i.md.amount,
+                    remark: i.md.remark,
+                  },
+                ],
+              }
+            : i,
+        ),
+      });
     };
     for (const it of b.items) {
       fixtures[`/api/md/settlement/items/${it.id}/leave-calendar`] = () => ({

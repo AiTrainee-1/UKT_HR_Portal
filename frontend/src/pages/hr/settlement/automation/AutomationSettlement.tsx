@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import HrLayout from "@/components/HrLayout";
 import { useUrlParams } from "@/components/payroll/kit/url-state";
+import WorkflowFlow from "@/components/settlement-flow/WorkflowFlow";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -35,24 +36,29 @@ import {
   useSettlementHrReview,
   useSettlementHrReviewBulk,
   useSettlementMonth,
+  useSettlementResolve,
+  useSettlementResolveBulk,
+  useSettlementRework,
   type SettlementAdvanceType,
   type SettlementBatch,
   type SettlementBatchItem,
   type SettlementFinalInput,
-  type SettlementTrackerKey,
+  type SettlementResolveHow,
 } from "@/lib/api-client/custom-hooks/settlement-automation";
 import { kindFor } from "@/lib/hr-access";
 import { cn } from "@/lib/utils";
 import { useCompany } from "../../report-log/useCompany";
 import { TYPE_LABEL } from "../logic";
 import { earnedRange } from "../rules";
-import { BulkBar, BulkDialog, type BulkAction } from "../bulk";
+import { BulkDialog, type BulkAction } from "../bulk";
 import { useLeaveCalendar } from "../LeaveCalendarButton";
 import NewRequestDialog from "../NewRequestDialog";
 import PageHeading from "../PageHeading";
 import { EmptyState, StatCard } from "../parts";
 import { formatMoney } from "../shared";
-import { FinalDecisionDialog, HrNoteDialog, HrProposalDialog } from "./dialogs";
+import { useFlash } from "../table-kit";
+import AutomationBulkBar, { type BulkButton, type BulkKind } from "./BulkActions";
+import { ConfirmDialog, FinalDecisionDialog, HrNoteDialog, HrProposalDialog } from "./dialogs";
 import { BatchHistory, FilesSent } from "./FilesAndHistory";
 import {
   CARD_FILTERS,
@@ -71,9 +77,8 @@ import {
 import FocusPanel from "./FocusPanel";
 import { monthFromUrl, monthText, monthToUrl, pickBatch, reached, workflowRefusal, type MonthRef } from "./logic";
 import MonthSwitcher from "./MonthSwitcher";
-import RequestsTable, { type HrAction, type RequestsMode } from "./RequestsTable";
+import RequestsTable, { type RequestsMode, type RowActionKind } from "./RequestsTable";
 import StagePanel from "./StagePanel";
-import Tracker from "./Tracker";
 
 /** The address: the month ("" = this month in India), the batch shown ("" = the month's current one), the top tab
  *  ("" = Workflow), the stage or card listed under the tracker (`focus`), and the Requests tab's filter and search. */
@@ -88,6 +93,7 @@ const asView = (raw: string): AutomationView =>
 const STAGE_DOT: Record<SettlementBatch["stage"], string> = {
   hr_review: "bg-amber-400",
   md_review: "bg-violet-500",
+  md_changes: "bg-orange-500",
   hr_final: "bg-indigo-500",
   auditor_send: "bg-sky-500",
   auditor_review: "bg-sky-500",
@@ -135,6 +141,26 @@ function countedDays(batch: Pick<SettlementBatch, "items">): string {
   return through ? earnedRange(through) : "";
 }
 
+/** What this login may do on the batch's requests now (from the server's `actions`): HR Review's proposals, the answers
+ *  to the MD in HR Rework (MD Changes), HR Final Settlement's final decisions, or the answers to the auditor in HR Rework
+ *  (Auditor Changes). */
+export function requestsMode(batch: SettlementBatch | null, may: boolean): RequestsMode {
+  if (!batch || !may) return null;
+  const a = batch.actions;
+  switch (batch.stage) {
+    case "hr_review":
+      return a.canEditHrNotes ? "hr_review" : null;
+    case "md_changes":
+      return a.canResolveMd || a.canEditHrNotes ? "md_changes" : null;
+    case "hr_final":
+      return a.canEditFinal ? "hr_final" : null;
+    case "auditor_changes":
+      return a.canResolveAuditor || a.canEditFinal ? "auditor_changes" : null;
+    default:
+      return null;
+  }
+}
+
 /** The summary cards as filters (owner 2026-11-27): a click lists those requests under them. */
 type Picker = { active: FocusKey | null; onPick: (filter: CardFilter) => void };
 
@@ -162,7 +188,11 @@ function Headline({ batch, active, onPick }: { batch: SettlementBatch } & Picker
           testId="auto-count-approved"
           label="Approved"
           value={c.approved}
-          sub={batch.stage === "hr_review" || batch.stage === "md_review" ? "by the MD so far" : "final decisions"}
+          sub={
+            batch.stage === "hr_review" || batch.stage === "md_review" || batch.stage === "md_changes"
+              ? "by the MD so far"
+              : "final decisions"
+          }
           icon={CheckCircle2}
           tone="bg-green-50 text-green-800"
           {...card("approved")}
@@ -332,12 +362,18 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
   const hrBulk = useSettlementHrReviewBulk();
   const finalDecision = useSettlementFinalDecision();
   const finalBulk = useSettlementFinalBulk();
+  const rework = useSettlementRework();
+  const resolve = useSettlementResolve();
+  const resolveBulk = useSettlementResolveBulk();
   const [noteItem, setNoteItem] = useState<SettlementBatchItem | null>(null);
   const [finalItem, setFinalItem] = useState<SettlementBatchItem | null>(null);
   const [proposal, setProposal] = useState<{ item: SettlementBatchItem; action: "reduce" | "reject" } | null>(null);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [busy, setBusy] = useState<{ id: number; action: RowActionKind } | null>(null);
   const [selected, setSelected] = useState<Set<number>>(() => new Set());
   const [bulk, setBulk] = useState<BulkAction | null>(null);
+  const [answerAll, setAnswerAll] = useState<SettlementResolveHow | null>(null);
+  // the row that just moved between the groups (waiting / approved / rejected) glows where it landed
+  const [flashId, flash] = useFlash();
   const leave = useLeaveCalendar();
   const showLeave = (item: SettlementBatchItem) => leave.show(item.advance.id, item.advance.employeeName);
 
@@ -371,8 +407,7 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
     : "all";
 
   // what this login may do on the requests now, and the ticked ones (cleared when the batch or its stage changes)
-  const mode: RequestsMode =
-    !batch || !may ? null : batch.actions.canEditHrNotes ? "hr_review" : batch.actions.canEditFinal ? "hr_final" : null;
+  const mode = requestsMode(batch, may);
   const shownItems = useMemo(
     () => (batch ? requestsShown(batch.items, showFilter, url.q) : []),
     [batch, showFilter, url.q],
@@ -391,37 +426,110 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
   const refetchMonth = () =>
     queryClient.invalidateQueries({ queryKey: getSettlementMonthQueryKey(period.month, period.year, advanceType) });
 
-  // ── HR Review: HR's proposal on one request (keep / reduce / reject) and the remark ──
-  const keepAsAsked = async (item: SettlementBatchItem) => {
-    setBusyId(item.id);
+  const who = (item: SettlementBatchItem) => item.advance.employeeName;
+  const fail = (title: string, err: unknown) =>
+    toast({ title, description: workflowRefusal(err, "Something went wrong.").text, variant: "destructive" });
+
+  /** One request's step from its row: the button spins while it saves; the row then glows where it landed. */
+  const rowStep = async (
+    item: SettlementBatchItem,
+    action: RowActionKind,
+    run: () => Promise<unknown>,
+    done: { title: string; description: string },
+    failTitle: string,
+  ) => {
+    setBusy({ id: item.id, action });
     try {
-      await hrReview.mutateAsync({ itemId: item.id, body: { action: "keep" } });
-      toast({ title: "Kept as asked", description: `${item.advance.employeeName}'s request goes to the MD as asked.` });
+      await run();
+      flash(item.id);
+      toast(done);
     } catch (err) {
-      toast({
-        title: "The proposal could not be changed",
-        description: workflowRefusal(err, "Something went wrong.").text,
-        variant: "destructive",
-      });
+      if (workflowRefusal(err, "").code === "changed") void refetchMonth();
+      fail(failTitle, err);
     } finally {
-      setBusyId(null);
+      setBusy(null);
     }
   };
-  const onHrAction = (item: SettlementBatchItem, action: HrAction) => {
-    if (action === "remark") setNoteItem(item);
-    else if (action === "keep") void keepAsAsked(item);
-    else setProposal({ item, action });
+
+  const reviewer = batch?.stage === "auditor_changes" ? "the auditor" : "the MD";
+  const onAction = (item: SettlementBatchItem, action: RowActionKind) => {
+    if (!batch) return;
+    const stage = batch.stage;
+    switch (action) {
+      case "remark":
+        return setNoteItem(item);
+      case "reduce":
+      case "reject":
+        return setProposal({ item, action });
+      case "final":
+        return setFinalItem(item);
+      case "keep":
+        return void rowStep(
+          item,
+          action,
+          () => hrReview.mutateAsync({ itemId: item.id, body: { action: "keep" } }),
+          stage === "md_changes"
+            ? { title: "Kept as asked", description: `${who(item)}: your answer goes to the MD as asked.` }
+            : { title: "Kept as asked", description: `${who(item)}'s request goes to the MD as asked.` },
+          "The proposal could not be changed",
+        );
+      case "rework":
+        return void rowStep(
+          item,
+          action,
+          () => rework.mutateAsync({ itemId: item.id }),
+          {
+            title: "Reopened for rework",
+            description: `${who(item)}'s request waits for your decision again, at the top of the list.`,
+          },
+          "The request could not be reopened",
+        );
+      case "accept":
+      case "keepOwn": {
+        const how: SettlementResolveHow = action === "accept" ? "accept" : "keep";
+        const done =
+          how === "accept"
+            ? stage === "md_changes"
+              ? {
+                  title: "MD's decision accepted",
+                  description: `${who(item)}: the MD's decision is your proposal now.`,
+                }
+              : {
+                  title: "Auditor's change accepted",
+                  description: `${who(item)}: the auditor's change is your final settlement now.`,
+                }
+            : stage === "md_changes"
+              ? { title: "Your proposal kept", description: `${who(item)}: the MD sees it again when you resubmit.` }
+              : {
+                  title: "Your settlement kept",
+                  description: `${who(item)}: the auditor sees it again when you resubmit.`,
+                };
+        return void rowStep(
+          item,
+          action,
+          () => resolve.mutateAsync({ itemId: item.id, how }),
+          done,
+          `Your answer to ${reviewer} could not be saved`,
+        );
+      }
+    }
   };
+
   const saveProposal = async (item: SettlementBatchItem, edit: HrProposalEdit) => {
     await hrReview.mutateAsync({ itemId: item.id, body: hrProposalPayload(edit) });
     setProposal(null);
+    flash(item.id);
+    const answer = batch?.stage === "md_changes";
     toast({
       title: edit.action === "reduce" ? "Smaller amount proposed" : "Rejection proposed",
-      description: `${item.advance.employeeName}: the MD sees your proposal and remark when you forward the batch.`,
+      description: answer
+        ? `${who(item)}: your answer goes to the MD when you resubmit the settlement.`
+        : `${who(item)}: the MD sees your proposal and remark when you forward the batch.`,
     });
   };
 
-  // ── Several requests at once: HR Review (approve = keep as asked) or HR Final Settlement (within the MD's) ──
+  // ── Several requests at once: HR Review (approve = keep as asked), HR Final Settlement (within the MD's), or in a
+  // rework stage the same answer to the reviewer on each (accept their change / keep HR's own) ──
   const runBulk = async (remark: string) => {
     if (!batch || !bulk || !mode) return;
     const itemIds = ticked.map((i) => i.id);
@@ -458,6 +566,57 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
     }
   };
 
+  const runAnswerAll = async () => {
+    if (!batch || !answerAll) return;
+    const itemIds = ticked.map((i) => i.id);
+    try {
+      const reply = await resolveBulk.mutateAsync({ batchId: batch.id, itemIds, how: answerAll });
+      const skipped = reply.skipped ?? [];
+      const n = countText(itemIds.length - skipped.length);
+      toast({
+        title:
+          answerAll === "accept"
+            ? `${batch.stage === "md_changes" ? "MD's decision" : "Auditor's change"} accepted on ${n}`
+            : `Your own kept on ${n}`,
+        description:
+          skipped.length > 0
+            ? `Left out: ${skippedText(batch, skipped)}`
+            : `${reviewer === "the MD" ? "The MD" : "The auditor"} sees the revised settlement when you resubmit it.`,
+        variant: skipped.length > 0 && skipped.length === itemIds.length ? "destructive" : undefined,
+      });
+      setAnswerAll(null);
+      setSelected(new Set());
+    } catch (err) {
+      if (workflowRefusal(err, "").code === "changed") void refetchMonth();
+      throw err;
+    }
+  };
+
+  const runBulkButton = (kind: BulkKind) => {
+    if (kind === "accept" || kind === "keep") setAnswerAll(kind);
+    else setBulk(kind);
+  };
+  const bulkButtons: BulkButton[] =
+    mode === "md_changes" || mode === "auditor_changes"
+      ? [
+          { kind: "accept", label: mode === "md_changes" ? "Accept the MD's decision" : "Accept the auditor's change" },
+          { kind: "keep", label: mode === "md_changes" ? "Keep mine" : "Keep HR's settlement" },
+        ]
+      : [
+          { kind: "approve", label: mode === "hr_review" ? "Keep selected as asked" : "Approve selected" },
+          { kind: "reject", label: mode === "hr_review" ? "Propose reject" : "Reject selected" },
+        ];
+  const bulkNote =
+    mode === "hr_review"
+      ? "HR Review: keep as asked, or propose to reject with one reason; the MD decides."
+      : mode === "hr_final"
+        ? "Approve at the MD's amount (a request the MD rejected is left out), or reject with one reason."
+        : mode === "md_changes"
+          ? "Your answer to the MD on each selected request: take the MD's decision, or keep your own proposal."
+          : mode === "auditor_changes"
+            ? "Your answer to the auditor on each selected request: take the auditor's change, or keep your settlement."
+            : undefined;
+
   const saveNote = async (item: SettlementBatchItem, note: string) => {
     await hrNote.mutateAsync({ itemId: item.id, hrNote: note });
     setNoteItem(null);
@@ -467,11 +626,16 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
   const saveFinal = async (item: SettlementBatchItem, body: SettlementFinalInput) => {
     await finalDecision.mutateAsync({ itemId: item.id, body });
     setFinalItem(null);
+    flash(item.id);
     toast({
       title: "Final decision kept",
       description: `${item.advance.employeeName}: ${
         body.decision === "approved" ? `approve ${formatMoney(body.amount)}` : "reject"
-      }. Nothing is decided until you Finalize.`,
+      }. ${
+        batch?.stage === "auditor_changes"
+          ? "The auditor sees it when you resubmit the settlement."
+          : "Nothing is decided until you Finalize."
+      }`,
     });
   };
 
@@ -606,11 +770,21 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
                   {typeLabel} · {monthText(period)}
                   {batch ? ` · ${batch.label}` : ""}
                 </h3>
-                <Tracker
+                <WorkflowFlow
                   steps={tracker}
+                  flow={batch?.flow ?? data.flow ?? null}
+                  history={batch?.history ?? []}
                   received={batch?.items.length ?? data.received}
                   label={`${typeLabel} workflow`}
-                  onSelect={batch ? (key: SettlementTrackerKey) => pick(key) : undefined}
+                  variant="hrms"
+                  onSelect={
+                    batch
+                      ? (key: string) => {
+                          const next = parseFocus(key);
+                          if (next) pick(next);
+                        }
+                      : undefined
+                  }
                   selected={focus && !isCardFilter(focus) ? focus : null}
                 />
                 {batch && batch.items.length > 0 && (
@@ -632,6 +806,7 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
                 mayNotReason={mayNotReason}
                 finalizeBlocked={finalizeBlocked}
                 company={company.excel}
+                onOpenRequests={() => setUrl({ view: "requests" })}
               />
             ) : (
               noRequests
@@ -684,20 +859,14 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
                 </div>
               </div>
               {mode && batch.items.length > 0 && (
-                <BulkBar
+                <AutomationBulkBar
                   ticked={ticked.length}
                   total={shownItems.length}
                   onSelectAll={() => toggleAll(true)}
                   onClear={() => toggleAll(false)}
-                  onApprove={() => setBulk("approve")}
-                  onReject={() => setBulk("reject")}
-                  approveLabel={mode === "hr_review" ? "Keep selected as asked" : "Approve selected"}
-                  rejectLabel={mode === "hr_review" ? "Propose reject" : "Reject selected"}
-                  note={
-                    mode === "hr_review"
-                      ? "HR Review: keep as asked, or propose to reject with one reason; the MD decides."
-                      : "Approve at the MD's amount (a request the MD rejected is left out), or reject with one reason."
-                  }
+                  buttons={bulkButtons}
+                  onRun={runBulkButton}
+                  note={bulkNote}
                   testId="auto-bulk"
                 />
               )}
@@ -732,10 +901,11 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
                   selected={selected}
                   onToggle={toggle}
                   onToggleAll={toggleAll}
-                  onHrAction={onHrAction}
-                  onEditFinal={setFinalItem}
+                  onAction={onAction}
                   onLeave={showLeave}
-                  busyId={busyId}
+                  busy={busy}
+                  canRework={may && batch.actions.canRework === true}
+                  flashId={flashId}
                 />
               )}
             </CardContent>
@@ -758,7 +928,12 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
         )}
 
         <HrNoteDialog item={noteItem} onSave={saveNote} onCancel={() => setNoteItem(null)} />
-        <HrProposalDialog target={proposal} onSave={saveProposal} onCancel={() => setProposal(null)} />
+        <HrProposalDialog
+          target={proposal}
+          onSave={saveProposal}
+          onCancel={() => setProposal(null)}
+          stage={batch?.stage}
+        />
         <BulkDialog
           action={bulk}
           count={ticked.length}
@@ -792,8 +967,38 @@ export default function AutomationSettlement({ advanceType }: { advanceType: Set
           onCancel={() => setBulk(null)}
           testId="auto-bulk-dialog"
         />
+        <ConfirmDialog
+          open={answerAll !== null}
+          tone={answerAll === "keep" ? "blue" : "emerald"}
+          title={
+            answerAll === "accept"
+              ? `Accept ${reviewer === "the MD" ? "the MD's decision" : "the auditor's change"} on ${countText(ticked.length)}?`
+              : `Keep your own on ${countText(ticked.length)}?`
+          }
+          description={
+            <p>
+              {answerAll === "accept"
+                ? batch?.stage === "md_changes"
+                  ? "On each one the MD's decision becomes your proposal (a request the MD has not decided is left out)."
+                  : "On each one the auditor's reduced amount or rejection becomes your final settlement (a remark alone changes nothing)."
+                : batch?.stage === "md_changes"
+                  ? "On each one you stand by your own proposal; the MD sees it again when you resubmit."
+                  : "On each one you stand by your final settlement; the auditor sees it again when you resubmit."}{" "}
+              Rework reopens any of them before you resubmit.
+            </p>
+          }
+          confirmLabel={answerAll === "accept" ? `Accept on ${ticked.length}` : `Keep on ${ticked.length}`}
+          onConfirm={runAnswerAll}
+          onCancel={() => setAnswerAll(null)}
+          testId="auto-answer-dialog"
+        />
         {leave.dialog}
-        <FinalDecisionDialog item={finalItem} onSave={saveFinal} onCancel={() => setFinalItem(null)} />
+        <FinalDecisionDialog
+          item={finalItem}
+          onSave={saveFinal}
+          onCancel={() => setFinalItem(null)}
+          stage={batch?.stage}
+        />
         {/* a new request joins this month's open batch of this type: the page then shows this month's current batch */}
         <NewRequestDialog
           open={showNew}

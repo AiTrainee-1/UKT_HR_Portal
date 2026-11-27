@@ -9,6 +9,8 @@ export type AdvanceType = "general" | "term";
 export type SettlementStage =
   | "hr_review"
   | "md_review"
+  /** HR Rework (MD Changes) (2026-11-27): the MD returned the batch to HR; HR answers and resubmits it to the MD. */
+  | "md_changes"
   | "hr_final"
   | "auditor_send"
   | "auditor_review"
@@ -30,6 +32,37 @@ export type TrackerStep = {
   action: string | null;
   /** What happened there ("Finalized directly by the MD", "Approved by the auditor"). */
   detail?: string | null;
+  /** A rework loop (md_changes / auditor_changes) and how many times the batch went round it (2026-11-27). */
+  loop?: boolean;
+  cycles?: number | null;
+  /** md_review / auditor_review: the review round (2+ = a revised settlement). */
+  round?: number | null;
+};
+
+/** The branching tracker's facts (2026-11-27): rounds, rework cycles, the MD's path, who sent the bank file. */
+export type SettlementFlow = {
+  mdRound: number;
+  auditorRound: number;
+  mdCycles: number;
+  auditorCycles: number;
+  mdPath: "hr" | "direct" | null;
+  accountsVia: "hr" | "auditor" | null;
+  /** The MD's latest Return to HR for rework, with their instructions. */
+  mdReturn: { at: string; by: string | null; note: string } | null;
+};
+
+/** Where a request stands with the reviewer of the batch's stage: waiting ones at the top, then approved, then rejected. */
+export type ReviewState = "pending" | "approved" | "rejected";
+
+/** One earlier decision on a request, kept when a rework round replaced it. */
+export type TrailEntry = {
+  at: string;
+  by: string;
+  role: "hr" | "md" | "hr_final" | "auditor";
+  round: number;
+  action: string;
+  amount: number | null;
+  remark: string;
 };
 
 export type LeaveFlag = "ok" | "warning" | "critical";
@@ -101,9 +134,19 @@ export type SettlementItem = {
   advance: SettlementAdvance;
   requestedAmount: number;
   hrNote: string;
-  /** HR's review proposal (2026-11-27): reduce (to `amount`) or reject; null = none (HR kept the amount asked); `remark`
-   *  is HR's note. */
-  hr?: { action: "reduce" | "reject" | null; amount: number | null; remark: string };
+  /** HR's review proposal (2026-11-27): reduce (to `amount`) or reject; approve / null = kept as asked; `remark` is
+   *  HR's note. */
+  hr?: { action: "approve" | "reduce" | "reject" | null; amount: number | null; remark: string };
+  /** Where it stands with the MD now (pending = waiting for the MD's own decision, incl. HR's proposals to confirm). */
+  review?: ReviewState;
+  /** Flagged for HR's rework (the batch went back to HR) and not answered yet. */
+  rework?: "md" | "auditor" | null;
+  /** The MD's own decision differs from HR's proposal: the MD cannot approve, they return the settlement to HR. */
+  mdChanged?: boolean;
+  /** The MD wrote their own remark on it. */
+  mdRemarked?: boolean;
+  /** The earlier rounds' decisions on it (HR's proposal and the MD's decision of each returned round). */
+  trail?: TrailEntry[];
   md: {
     decision: MdDecision | null;
     amount: number | null;
@@ -123,7 +166,12 @@ export type SettlementItem = {
     months?: number | null;
   };
   /** The auditor's change in the Auditor Review Portal (a smaller amount or a rejection) and its remark. */
-  auditor?: { action: "reduce" | "reject" | null; amount: number | null; remark: string; at: string | null };
+  auditor?: {
+    action: "approve" | "reduce" | "reject" | null;
+    amount: number | null;
+    remark: string;
+    at: string | null;
+  };
   /** The settlement as it will be paid: the final decision with the auditor's change on top. */
   effective?: { decision: MdDecision | null; amount: number | null; remark: string };
   applied: boolean;
@@ -139,13 +187,23 @@ export type HistoryEntry = {
   approved?: number;
   rejected?: number;
   total?: number;
+  /** md_returned / md_resubmitted: the review round; md_returned: how many requests were changed / remarked. */
+  round?: number;
+  changes?: number;
+  remarks?: number;
+  /** md_confirmed: sent directly to the auditor; finalized / accounts_sent: who did it. */
+  direct?: boolean;
+  via?: string;
   [extra: string]: unknown;
 };
 
 export type BatchActions = {
   canDecideMd: boolean;
+  /** Every request decided and no change from HR's proposals (2026-11-27). */
   canConfirmMd: boolean;
-  [action: string]: boolean;
+  /** Return to HR for rework (changes or corrections). */
+  canReturnMd?: boolean;
+  [action: string]: boolean | undefined;
 };
 
 export type SettlementBatch = {
@@ -163,6 +221,10 @@ export type SettlementBatch = {
   stageLabel: string;
   nextAction: string;
   tracker: TrackerStep[];
+  /** The branching tracker's facts (2026-11-27; absent from an older server). */
+  flow?: SettlementFlow;
+  mdRound?: number;
+  auditorRound?: number;
   counts: {
     total: number;
     mdDecided: number;
@@ -171,6 +233,14 @@ export type SettlementBatch = {
     undecided: number;
     warning: number;
     critical: number;
+    /** With the stage's reviewer (2026-11-27): waiting, approved, rejected. */
+    pending?: number;
+    reviewedApproved?: number;
+    reviewedRejected?: number;
+    /** The MD's decisions that differ from HR's proposals. */
+    mdChanges?: number;
+    /** Requests waiting for HR's rework answer. */
+    rework?: number;
   };
   amounts: { requested: number; mdApproved: number; finalApproved: number; payable?: number };
   forwardedAt: string | null;
@@ -240,3 +310,7 @@ export type BulkReply = SettlementBatch & { skipped?: { id: number; reason: stri
 /** POST /api/md/settlement/batches/<id>/confirm: Forward to HR, or Direct to Auditor (with the finalized report). */
 export type ConfirmMode = "hr" | "direct";
 export type ConfirmReply = SettlementBatch & { warning?: string | null };
+
+/** POST /api/md/settlement/batches/<id>/return {note}: changes or corrections - the settlement goes back to HR for
+ *  rework (2026-11-27); refused (no_changes) without a change, a remark of the MD's or a note. */
+export type ReturnBody = { note: string };

@@ -2,9 +2,40 @@
 // segmented switch (the decision form's) and a labelled figure.
 import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { AlertOctagon, AlertTriangle, CalendarCheck, CalendarClock, ChevronDown, type LucideIcon } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { decisionKind, decisionText, finalKind, leaveChip, type DecisionKind, type LeaveTone } from "./logic";
 import type { LeaveCheck, SettlementItem } from "./types";
+
+/**
+ * The press feedback of the HRMS row actions (hr/settlement/table-kit.tsx RowAction; owner 2026-11-27: "proper hover
+ * effects and visual feedback") on an MD glass button. md-btn already lifts a pixel with a deeper shadow on hover and
+ * draws its wine focus ring; this adds the press - the button sinks to about 95 % - with a short ease. Everything is
+ * motion-safe: under "reduce motion" nothing moves (the skin turns its own transitions off there too). Only utilities on
+ * the component (the md-theme stylesheet is left alone); the transition needs `!` because the skin's md-btn rules are
+ * unlayered CSS, which a Tailwind utility cannot otherwise beat. translate / scale are their own CSS properties, so they
+ * add to the skin's transform instead of replacing it.
+ */
+const BTN_EASE =
+  "motion-safe:[transition:transform_.18s_ease,translate_.15s_ease-out,scale_.12s_ease-out,box-shadow_.2s_ease,filter_.2s_ease,color_.15s_ease,background_.2s_ease,border-color_.2s_ease]!";
+export const BTN_MOTION = `${BTN_EASE} motion-safe:enabled:active:scale-[0.97]`;
+/** The ghost look gets no lift from the skin on hover (md-btn-ghost:hover sets none): the pixel lift is added here. */
+export const GHOST_MOTION = `${BTN_EASE} motion-safe:enabled:hover:-translate-y-px motion-safe:enabled:active:translate-y-0 motion-safe:enabled:active:scale-95`;
+
+/** A short hover / focus label in the shared Radix tooltip (drawn in a portal, so a table's scroll box never cuts it). The
+ *  child is focusable so the label reaches the keyboard too. */
+export function Hint({ label, children }: { label: ReactNode; children: ReactNode }) {
+  return (
+    <TooltipProvider delayDuration={150} skipDelayDuration={60}>
+      <Tooltip>
+        <TooltipTrigger asChild>{children}</TooltipTrigger>
+        <TooltipContent side="top" sideOffset={6} collisionPadding={8} className="max-w-xs text-[11.5px] leading-snug">
+          {label}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
 
 // Own classes rather than md-chip + overrides: the skin's md-chip is unlayered CSS, which a Tailwind colour cannot beat.
 const LEAVE_CLASS: Record<LeaveTone, string> = {
