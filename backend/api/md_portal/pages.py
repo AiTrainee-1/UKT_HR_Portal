@@ -130,6 +130,13 @@ MD_PAGES: list[dict] = [
         "domain": "payroll",
     },
     {
+        "id": "settlement",
+        "title": "Loan & Advance",
+        "path": "/md/loan-advance",
+        "summary": "Salary Advance and Term Loan requests HR forwards for the MD's decision, each type on its own: approve, reduce or reject each one with the salary earned and the leave of the 1st-20th, then Confirm & Proceed back to HR.",
+        "domain": None,
+    },
+    {
         "id": "communications",
         "title": "Communication usage & cost",
         "path": "/md/communications",

@@ -379,13 +379,13 @@ for (const mode of MODES) {
       await audit(page, "late report, grouped, a unit and a row ticked, a row hovered");
     });
 
-    test("Staff Payroll and Settlement: the figure tiles", async ({ context, page }) => {
+    test("Staff Payroll and Loan & Advance: the figure tiles", async ({ context, page }) => {
       await oldBrowser(context, page, mode);
       await signIn(page);
       for (const [label, path] of [
         ["staff payroll", "/hr/payroll?month=2&year=2026"],
         ["production payroll", "/hr/production-payroll/weekly"],
-        ["settlement", "/hr/settlement"],
+        ["loan & advance", "/hr/Loan&Advance"],
         ["employees", "/hr/employees"],
         ["attendance search", "/hr/attendance/search"],
         ["settings themes", "/hr/settings?tab=themes"],

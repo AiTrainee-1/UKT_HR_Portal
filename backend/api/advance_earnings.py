@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
+# The defaults; the rules in force are HR's, in Settings -> Loan & Advance (advance_rules.rules(), 2026-11-27).
 EARNED_THROUGH_DAY = 20
 SALARY_ADVANCE_PERCENT = 50
 TERM_LOAN_SERVICE_MONTHS = 6
@@ -50,11 +51,12 @@ class Earnings:
     working_days: Decimal  # present shifts 1st-20th (kept in Advance.earned_working_days)
     paid_days: Decimal  # present shifts + paid holidays / HR holiday days: the "Working Days" shown (2026-11-26)
     earned: Decimal  # per-day salary x paid days
+    percent: int = SALARY_ADVANCE_PERCENT  # the Salary Advance % of Settings when worked out
 
     @property
     def limit(self) -> Decimal:
-        """50 % of the earned salary, whole rupees rounded down."""
-        return Decimal(math.floor(self.earned * SALARY_ADVANCE_PERCENT / 100))
+        """The Salary Advance limit: `percent` of the earned salary, whole rupees rounded down."""
+        return Decimal(math.floor(self.earned * self.percent / 100))
 
     def to_json(self) -> dict:
         return {
@@ -71,7 +73,7 @@ class Earnings:
             "holidayDays": float(self.paid_days - self.working_days),
             "paidDays": float(self.paid_days),
             "earnedAmount": float(self.earned),
-            "percent": SALARY_ADVANCE_PERCENT,
+            "percent": self.percent,
             "limit": float(self.limit),
         }
 
@@ -90,7 +92,7 @@ def earned_in_month(
     emp,
     month: int,
     year: int,
-    through_day: int = EARNED_THROUGH_DAY,
+    through_day: int | None = None,
     settings=None,
     salary: Decimal | None = None,
     today: date | None = None,
@@ -101,6 +103,7 @@ def earned_in_month(
     not earned yet)."""
     import calendar
 
+    from .advance_rules import rules
     from .clock import ist_today
 
     from .attendance_final import compute_month_records
@@ -119,6 +122,8 @@ def earned_in_month(
     company_days = len(_build_working_days(month, year, saturday_off, set()))
     if not company_days:
         return None
+    r = rules()
+    through_day = through_day or r.sa_earned_through
     through = date(year, month, min(through_day, calendar.monthrange(year, month)[1]))
 
     holiday_dates = set(Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True))
@@ -154,7 +159,120 @@ def earned_in_month(
         working_days=present,
         paid_days=paid,
         earned=_d2(exact_rate * paid),
+        percent=r.sa_percent,
     )
+
+
+# ─────────────────────────── leave taken in the 1st-20th ───────────────────────────
+
+LEAVE_WARNING_DAYS = Decimal("3")  # exactly 3 = warning (orange); more than 3 = critical (red) (owner 2026-11-26)
+
+
+def leave_dates_in_month(emp, month: int, year: int, through_day: int | None = None, today: date | None = None,
+                         settings=None) -> list[dict]:  # fmt: skip
+    """The leave days themselves (the Leave calendar, 2026-11-27): every working day of the 1st to `through_day` that
+    counts as leave - {date, kind: absent | on_leave | half_day_leave, weight 1 | 0.5} - by the rules of
+    leave_days_in_month."""
+    import calendar
+
+    from .attendance_final import compute_month_records
+    from .clock import ist_today
+    from .day_progress import is_in_progress
+    from .models import AttendanceDayRecord as R, Holiday, PayrollSettings
+    from .payroll_views import _build_working_days, _effective_shift_times, _get_active_assignment
+
+    from .advance_rules import rules
+
+    today = today or ist_today()
+    through_day = through_day or rules().sa_earned_through
+    through = date(year, month, min(through_day, calendar.monthrange(year, month)[1]))
+    assignment = _get_active_assignment(emp, date(year, month, 15))
+    saturday_off = _effective_shift_times(assignment)[3] if assignment else False
+    holiday_dates = set(Holiday.objects.filter(date__year=year, date__month=month).values_list("date", flat=True))
+    working = [d for d in _build_working_days(month, year, saturday_off, holiday_dates) if d <= through and d <= today]
+    if not working:
+        return []
+    records = {r.date: r for r in compute_month_records(emp, year, month, settings or PayrollSettings.get())}
+    out = []
+    for d in working:
+        fr = records.get(d)
+        if fr is None or is_in_progress(fr.provisional_until):
+            continue
+        if fr.status == R.STATUS_ABSENT:
+            out.append({"date": d.isoformat(), "kind": "absent", "label": "Absent", "weight": 1.0})
+        elif fr.status == R.STATUS_LEAVE:
+            out.append({"date": d.isoformat(), "kind": "on_leave", "label": "On leave", "weight": 1.0})
+        elif fr.status == R.STATUS_HALF and getattr(fr, "is_half_day_leave", False):
+            out.append({"date": d.isoformat(), "kind": "half_day_leave", "label": "Half-day leave", "weight": 0.5})
+    return out
+
+
+def leave_days_in_month(emp, month: int, year: int, through_day: int | None = None, today: date | None = None,
+                        settings=None) -> Decimal:  # fmt: skip
+    """The leave an employee took from the 1st to `through_day` of the month (owner 2026-11-26, for the Salary Advance /
+    Term Loan check): on the working days (Sundays, Saturday-offs and declared holidays never count) each Absent day and
+    each day of approved leave (On Leave) counts 1, an approved half-day leave 0.5. Casual Leave does NOT count (the
+    owner's choice: it is paid). Days not judged yet (to come, or still in progress) count nothing. Staff and production
+    alike."""
+    return sum(
+        (Decimal(str(d["weight"])) for d in leave_dates_in_month(emp, month, year, through_day, today, settings)),
+        Decimal("0"),
+    )
+
+
+def leave_calendar_json(adv) -> dict:
+    """An advance's Leave calendar: the month it was raised in, the days counted (1st to the kept last day), every leave
+    day (red on the calendar), the declared holidays, the total and its flag."""
+    from .models import Holiday
+
+    month, year = raised_month(adv)
+    through = through_day_of(adv)
+    days = leave_dates_in_month(adv.employee, month, year, through_day=through)
+    total = sum((Decimal(str(d["weight"])) for d in days), Decimal("0"))
+    return {
+        "employee": {
+            "code": adv.employee.employee_code,
+            "name": f"{adv.employee.first_name} {adv.employee.last_name}".strip(),
+        },
+        "month": month,
+        "year": year,
+        "throughDay": through,
+        "days": days,
+        "holidays": [
+            {"date": h.date.isoformat(), "name": h.name}
+            for h in Holiday.objects.filter(date__year=year, date__month=month).order_by("date")
+        ],
+        "total": float(total),
+        "flag": leave_flag(total),
+    }
+
+
+def leave_flag(days) -> str | None:
+    """ "critical" (more than 3 days), "warning" (exactly 3), "ok" (fewer); None when not worked out."""
+    if days is None:
+        return None
+    days = Decimal(str(days))
+    if days > LEAVE_WARNING_DAYS:
+        return "critical"
+    if days == LEAVE_WARNING_DAYS:
+        return "warning"
+    return "ok"
+
+
+def leave_check_json(adv) -> dict | None:
+    """The leave check as the API serves it (null until worked out)."""
+    if adv.leave_days_1_20 is None:
+        return None
+    month, year = raised_month(adv)
+    days = Decimal(str(adv.leave_days_1_20))
+    return {
+        "month": month,
+        "year": year,
+        "throughDay": through_day_of(adv),
+        "days": float(days),
+        "flag": leave_flag(days),
+        "warningAt": float(LEAVE_WARNING_DAYS),
+    }
 
 
 # ─────────────────────────── kept on the advance ───────────────────────────
@@ -171,8 +289,15 @@ def raised_month(adv) -> tuple[int, int]:
     return today.month, today.year
 
 
-def store(adv, earnings: Earnings | None, today: date | None = None) -> None:
-    """Keep `earnings` on the advance (only these columns are written)."""
+def through_day_of(adv) -> int:
+    """The last day an advance's kept figures count: the one kept with them (since 2026-11-27); figures kept before
+    that were all counted to the 20th. (No database read: the lists call this for every row.)"""
+    return getattr(adv, "earned_through_day", None) or EARNED_THROUGH_DAY
+
+
+def store(adv, earnings: Earnings | None, today: date | None = None, leave_days: Decimal | None = None) -> None:
+    """Keep `earnings` (and the leave taken in the 1st-20th, when given) on the advance (only these columns are
+    written)."""
     from .clock import ist_today
     from .models import Advance
 
@@ -183,10 +308,14 @@ def store(adv, earnings: Earnings | None, today: date | None = None) -> None:
         "earned_paid_days": earnings.paid_days if earnings else None,
         "earned_amount": earnings.earned if earnings else None,
         "earned_limit": earnings.limit if earnings else None,
+        "earned_percent": earnings.percent if earnings else None,
+        "earned_through_day": earnings.through.day if earnings else through_day_of(adv),
         "earned_on": today or ist_today(),
     }
     if earnings and adv.salary_at_request is None:
         fields["salary_at_request"] = earnings.fixed_salary
+    if leave_days is not None:
+        fields["leave_days_1_20"] = leave_days
     Advance.objects.filter(pk=adv.pk).update(**fields)
     for name, value in fields.items():
         setattr(adv, name, value)
@@ -210,17 +339,23 @@ def refresh(adv, today: date | None = None) -> None:
     time: the one kept when it was raised, else that month's payroll's, else today's (an older advance HR recorded)."""
     month, year = raised_month(adv)
     salary = adv.salary_at_request or salary_for_month(adv.employee, month, year)
-    store(adv, earned_in_month(adv.employee, month, year, salary=salary), today)
+    store(
+        adv,
+        earned_in_month(adv.employee, month, year, salary=salary),
+        today,
+        leave_days=leave_days_in_month(adv.employee, month, year),
+    )
 
 
 def is_stale(adv, today: date) -> bool:
     """No figures yet, or a still-waiting advance whose figures were taken before its month's 20th was over (a Term Loan
     asked for on the 5th): those are worked out again once the 20th has passed."""
-    if adv.earned_on is None:
-        return True
-    if adv.status != "pending" or adv.earned_month is None:
+    if adv.earned_on is None or adv.leave_days_1_20 is None:
+        return True  # never worked out, or before the leave check existed (2026-11-26)
+    if adv.status != "pending":
         return False
-    through = date(adv.earned_year, adv.earned_month, EARNED_THROUGH_DAY)
+    month, year = raised_month(adv)
+    through = date(year, month, through_day_of(adv))
     return adv.earned_on <= through < today
 
 
@@ -248,7 +383,7 @@ def earnings_json(adv) -> dict | None:
     return {
         "month": adv.earned_month,
         "year": adv.earned_year,
-        "throughDay": EARNED_THROUGH_DAY,
+        "throughDay": through_day_of(adv),
         "fixedSalary": float(adv.salary_at_request) if adv.salary_at_request is not None else None,
         # Working Days = present shifts + company holidays of the 1st-20th (owner 2026-11-26), the days the salary pays
         "workingDays": float(paid),
@@ -257,7 +392,7 @@ def earnings_json(adv) -> dict | None:
         "paidDays": float(paid),
         "earnedAmount": float(adv.earned_amount),
         "workingSalary": float(adv.earned_amount),
-        "percent": SALARY_ADVANCE_PERCENT,
+        "percent": getattr(adv, "earned_percent", None) or SALARY_ADVANCE_PERCENT,
         "limit": float(adv.earned_limit) if adv.earned_limit is not None else None,
         "workedOutOn": adv.earned_on.isoformat() if adv.earned_on else None,
     }
@@ -266,19 +401,21 @@ def earnings_json(adv) -> dict | None:
 # ─────────────────────────── Term Loan service ───────────────────────────
 
 
-def _service_policy():
+def _service_policy(months: int = TERM_LOAN_SERVICE_MONTHS):
     from . import cl_balance
 
-    return dataclasses.replace(cl_balance.policy(), basis="months", service=TERM_LOAN_SERVICE_MONTHS)
+    return dataclasses.replace(cl_balance.policy(), basis="months", service=months)
 
 
-def term_loan_service(emp, on: date) -> dict:
-    """{eligible, joinDate, serviceMonths, requiredMonths, eligibleFrom, reason}: 6 completed months from the joining date,
-    counted like the Casual Leave service rule."""
+def term_loan_service(emp, on: date, r=None) -> dict:
+    """{eligible, joinDate, serviceMonths, requiredMonths, eligibleFrom, reason}: the completed months of service
+    Settings asks for (default 6) from the joining date, counted like the Casual Leave service rule."""
     from . import cl_balance
+    from .advance_rules import rules
 
+    required = (r or rules()).tl_min_service_months
     joined = cl_balance.parse_join_date(emp.join_date)
-    base = {"requiredMonths": TERM_LOAN_SERVICE_MONTHS}
+    base = {"requiredMonths": required}
     if joined is None:
         return {
             **base,
@@ -289,13 +426,13 @@ def term_loan_service(emp, on: date) -> dict:
             "reason": "Your joining date is not recorded, so a Term Loan cannot be checked. Please contact HR.",
         }
     months = cl_balance.months_between(joined, on)
-    eligible_on = cl_balance.eligible_from(joined, _service_policy())
+    eligible_on = cl_balance.eligible_from(joined, _service_policy(required)) if required else joined
     eligible = on >= eligible_on
     reason = None
     if not eligible:
         reason = (
-            f"A Term Loan needs {TERM_LOAN_SERVICE_MONTHS} months of service. You can apply from "
-            f"{eligible_on.day} {eligible_on.strftime('%B %Y')} ({months}/{TERM_LOAN_SERVICE_MONTHS} months of service)."
+            f"A Term Loan needs {required} months of service. You can apply from "
+            f"{eligible_on.day} {eligible_on.strftime('%B %Y')} ({months}/{required} months of service)."
         )
     return {
         **base,

@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { useMdHods } from "@/pages/md/approvals/api";
 import { hodLabel, hodPath } from "@/pages/md/approvals/logic";
 import type { Hod } from "@/pages/md/approvals/types";
+import { useSettlementWaiting } from "@/pages/md/settlement/api";
 import { MD_NAV_GROUPS, type MdNavItem } from "./md-nav";
 import { prefetchAssistantPanel } from "./assistant/panel-loader";
 import { prefetchProps } from "./shell/prefetch";
@@ -42,7 +43,18 @@ function Tip({ label, hint, children }: { label: string; hint?: string; children
   );
 }
 
-function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
+function ExpandedItem({
+  item,
+  current,
+  onClose,
+  count,
+}: {
+  item: MdNavItem;
+  current: string;
+  onClose: () => void;
+  /** Requests waiting for the MD on this page (a badge when more than 0). */
+  count?: number;
+}) {
   const active = isActivePath(current, item.path);
   return (
     <Link
@@ -54,9 +66,26 @@ function ExpandedItem({ item, current, onClose }: { item: MdNavItem; current: st
       className="md-shell-nav"
     >
       <item.icon className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
-      <span className="truncate">{item.navLabel ?? item.title}</span>
+      <span className={cn("truncate", count ? "min-w-0 flex-1" : undefined)}>{item.navLabel ?? item.title}</span>
+      {count ? (
+        <>
+          <span className="md-shell-count" aria-hidden="true" data-testid={`md-nav-${item.id}-waiting`}>
+            {count > 99 ? "99+" : count}
+          </span>
+          <span className="sr-only">, {count} waiting</span>
+        </>
+      ) : null}
     </Link>
   );
+}
+
+/** Settlement: the requests HR forwarded that wait for the MD's decision (GET /api/md/settlement/waiting, every minute). */
+function useSettlementWaitingCount(): number {
+  return useSettlementWaiting().data?.count ?? 0;
+}
+
+function SettlementItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
+  return <ExpandedItem item={item} current={current} onClose={onClose} count={useSettlementWaitingCount()} />;
 }
 
 /** Whether the MD last opened or closed the heads under "HOD Approvals" (null: never chose). Kept in this browser, because
@@ -192,8 +221,10 @@ function useApprovalsWaiting(): number {
 
 function RailItem({ item, current, onClose }: { item: MdNavItem; current: string; onClose: () => void }) {
   const active = isActivePath(current, item.path);
-  const waiting = useApprovalsWaiting();
-  const dot = item.id === "approvals" && waiting > 0;
+  const approvalsWaiting = useApprovalsWaiting();
+  const settlementWaiting = useSettlementWaitingCount();
+  const waiting = item.id === "approvals" ? approvalsWaiting : item.id === "settlement" ? settlementWaiting : 0;
+  const dot = waiting > 0;
   return (
     <Tip label={item.title} hint={dot ? `${waiting} waiting` : undefined}>
       <Link
@@ -394,6 +425,8 @@ export default function MdSidebar({
                   <Fragment key={item.id}>
                     {item.id === "approvals" ? (
                       <ApprovalsItem item={item} current={location} onClose={onClose} />
+                    ) : item.id === "settlement" ? (
+                      <SettlementItem item={item} current={location} onClose={onClose} />
                     ) : (
                       <ExpandedItem item={item} current={location} onClose={onClose} />
                     )}

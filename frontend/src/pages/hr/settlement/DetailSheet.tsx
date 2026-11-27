@@ -35,7 +35,10 @@ import {
   progressPct,
   requestedOf,
   type SettlementRow,
+  termSalaryOf,
 } from "./logic";
+import { leaveChipOf } from "./leave";
+import { LeaveChip } from "./LeaveChip";
 import { Chip, InitialsAvatar, ProgressBar } from "./parts";
 import { MONTH_FULL, formatDate, formatDateTime, formatMoney, monthLabel } from "./shared";
 import { buildStatementHtml, printStatement } from "./statement";
@@ -119,6 +122,29 @@ function DecisionHistory({ items, type }: { items: AdvanceDecisionItem[]; type: 
   );
 }
 
+/** The leave check spelled out when it is flagged (3 days of leave in the 1st-20th = warning, more = critical). */
+function LeaveNote({ adv }: { adv: SettlementRow }) {
+  const view = leaveChipOf(adv.leaveCheck);
+  if (!view || view.flag === "ok") return null;
+  const critical = view.flag === "critical";
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 rounded-xl border p-3 text-xs",
+        critical ? "border-red-200 bg-red-50 text-red-900" : "border-orange-200 bg-orange-50 text-orange-900",
+      )}
+      role="note"
+      data-testid="advance-leave-note"
+    >
+      <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden />
+      <p>
+        <b>{critical ? "Critical" : "Warning"}:</b> {view.title.replace(/^(Critical|Warning): /, "")} Exactly 3 days is
+        a warning, more than 3 is critical.
+      </p>
+    </div>
+  );
+}
+
 /** One advance in full: what was asked for and approved, what is recovered, what is still scheduled, every deduction and
  *  every decision. */
 export default function DetailSheet({
@@ -178,8 +204,11 @@ export default function DetailSheet({
                 <Chip tone={adv.advanceType === "term" ? "accent" : "info"}>{TYPE_LABEL[adv.advanceType]}</Chip>
                 {hasLeft(adv) && <Chip tone="caution">Has left</Chip>}
                 {appliedByEmployee(adv) && <Chip tone="neutral">Applied by employee</Chip>}
+                <LeaveChip check={adv.leaveCheck} showOk testId="advance-detail-leave" />
               </div>
             </SheetHeader>
+
+            <LeaveNote adv={adv} />
 
             {adv.status !== "pending" && (adv.decisionRemark ?? "").trim() && (
               <div
@@ -215,7 +244,7 @@ export default function DetailSheet({
               </div>
             )}
 
-            <section className="space-y-2" aria-label="Settlement breakdown">
+            <section className="space-y-2" aria-label="Amounts breakdown">
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400">Breakdown</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-4" data-testid="advance-figures">
                 <Figure label="Requested" value={formatMoney(requestedOf(adv))} tone="text-gray-800" />
@@ -261,7 +290,49 @@ export default function DetailSheet({
               )}
             </section>
 
-            {adv.earnings && (
+            {adv.advanceType === "term" && (
+              <section className="space-y-2" aria-label="Term Loan" data-testid="advance-term-figures">
+                <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-gray-400">
+                  <Wallet size={13} /> Term Loan
+                </p>
+                <dl className="space-y-1.5 rounded-xl border border-gray-100 bg-white p-3">
+                  <Detail
+                    label="Fixed monthly salary"
+                    value={termSalaryOf(adv) != null ? formatMoney(termSalaryOf(adv)) : null}
+                  />
+                  <Detail
+                    label="Eligible loan limit"
+                    value={adv.termLimit != null ? formatMoney(adv.termLimit) : null}
+                  />
+                  <Detail label="Requested amount" value={formatMoney(requestedOf(adv))} />
+                  <Detail
+                    label="Approved amount"
+                    value={
+                      approved != null ? formatMoney(approved) : adv.status === "rejected" ? "Rejected" : "Waiting"
+                    }
+                  />
+                  <Detail
+                    label="Repayment period"
+                    value={
+                      adv.repaymentMonths
+                        ? `${adv.repaymentMonths} ${adv.repaymentMonths === 1 ? "month" : "months"}`
+                        : null
+                    }
+                  />
+                  <Detail label="Monthly EMI" value={adv.emiAmount > 0 ? formatMoney(adv.emiAmount) : null} />
+                  <Detail
+                    label="EMIs deducted"
+                    value={repayments.length > 0 ? `${deducted} of ${repayments.length}` : null}
+                  />
+                  <Detail
+                    label="Remaining outstanding"
+                    value={approved != null ? formatMoney(adv.outstanding) : null}
+                  />
+                </dl>
+              </section>
+            )}
+
+            {adv.earnings && adv.advanceType === "general" && (
               <section className="space-y-2" aria-label="Salary earned" data-testid="advance-earned">
                 <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-gray-400">
                   <Wallet size={13} /> Earned in {earnedPeriodLabel(adv.earnings)}
@@ -287,7 +358,9 @@ export default function DetailSheet({
               >
                 <AlertTriangle size={14} className="mt-0.5 shrink-0" />
                 <div className="min-w-0">
-                  <p className="font-semibold">Recorded above the {adv.earnings?.percent ?? 50}% limit</p>
+                  <p className="font-semibold">
+                    Recorded above the {adv.earnings?.percent ? `${adv.earnings.percent}% ` : ""}limit
+                  </p>
                   <p className="break-words">{adv.limitRemark}</p>
                 </div>
               </div>
@@ -299,14 +372,8 @@ export default function DetailSheet({
                 label="Applied by"
                 value={appliedByEmployee(adv) ? "The employee, from the mobile app" : "HR (recorded here)"}
               />
-              {adv.salaryAtRequest != null && !adv.earnings && (
+              {adv.salaryAtRequest != null && !adv.earnings && adv.advanceType === "general" && (
                 <Detail label="Monthly fixed salary" value={formatMoney(adv.salaryAtRequest)} />
-              )}
-              {adv.advanceType === "term" && adv.emiAmount > 0 && (
-                <Detail
-                  label="Monthly EMI"
-                  value={`${formatMoney(adv.emiAmount)}${adv.repaymentMonths ? ` for ${adv.repaymentMonths} months` : ""}`}
-                />
               )}
               <Detail
                 label={adv.advanceType === "term" ? "Deduction starts" : "Deducted in"}

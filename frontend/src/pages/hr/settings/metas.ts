@@ -14,6 +14,7 @@ import { PAYROLL_SETTINGS, PAYROLL_SUB_TAB_OF } from "./PayrollTab.meta";
 import { PRODUCTION_PAYROLL_SETTINGS, PRODUCTION_SUB_TAB_OF } from "./ProductionPayrollTab.meta";
 import { PF_ESI_SETTINGS, PF_ESI_SUB_TAB_OF } from "./PfEsiTab.meta";
 import { SALARY_SLIP_SETTINGS } from "./SalarySlipTab.meta";
+import { SETTLEMENT_SETTINGS } from "./SettlementTab.meta";
 import { SMTP_SETTINGS } from "./SmtpTab.meta";
 import { WHATSAPP_SETTINGS } from "./WhatsAppTab.meta";
 import { BACKUP_FEATURE_OF, BACKUP_SETTINGS } from "./BackupTab.meta";
@@ -38,6 +39,7 @@ export const ALL_SETTINGS: SettingMeta[] = [
   ...PRODUCTION_PAYROLL_SETTINGS,
   ...PF_ESI_SETTINGS,
   ...SALARY_SLIP_SETTINGS,
+  ...SETTLEMENT_SETTINGS,
   ...SMTP_SETTINGS,
   ...WHATSAPP_SETTINGS,
   ...BACKUP_SETTINGS,

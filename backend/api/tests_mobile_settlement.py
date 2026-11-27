@@ -40,9 +40,13 @@ def fake_earned(emp, month, year, *args, **kwargs):
     salary = monthly_fixed_salary(emp)
     if salary is None:
         return None
+    from .advance_rules import rules
+
+    r = rules()  # like the real calculator: Settings' % and last day (2026-11-27)
     return Earnings(
-        month=month, year=year, through=date(year, month, 20), fixed_salary=salary, daily_rate=Decimal("1000"),
-        company_days=26, working_days=Decimal("18"), paid_days=Decimal("24"), earned=EARNED,
+        month=month, year=year, through=date(year, month, r.sa_earned_through), fixed_salary=salary,
+        daily_rate=Decimal("1000"), company_days=26, working_days=Decimal("18"), paid_days=Decimal("24"),
+        earned=EARNED, percent=r.sa_percent,
     )  # fmt: skip
 
 
@@ -252,14 +256,17 @@ class SalaryAdvanceTests(_Base):
         self.assertIsNone(body["monthlySalary"])
         self.assertFalse(body["salaryAdvance"]["canApply"])
         self.assertIn("not recorded", body["salaryAdvance"]["reason"])
-        self.assertTrue(body["termLoan"]["canApply"])  # a Term Loan has no salary limit
+        # a Term Loan is a % of the monthly salary (2026-11-27): none without one
+        self.assertEqual((body["termLoan"]["canApply"], body["termLoan"]["code"]), (False, "no_salary"))
 
     def test_production_staff_paid_per_shift_have_no_monthly_salary(self):
         self.emp.employment_type = "production"
         self.emp.salary_per_shift = Decimal("600")
         self.emp.save()
         self.assertEqual(self.general(1000).json()["code"], "no_salary")
-        self.assertEqual(self.term().status_code, 201)
+        # Term Loans are for staff only (owner 2026-11-27)
+        r = self.term()
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "staff_only"))
 
     def test_whole_rupees_and_a_purpose_are_required(self):
         self.assertEqual(self.general("1500.50").json()["field"], "amount")
@@ -273,23 +280,26 @@ class SalaryAdvanceTests(_Base):
 
 
 class TermLoanTests(_Base):
-    def test_months_must_be_1_to_12(self):
-        for months in (0, 13, "abc", None, 2.5):
+    def test_months_must_be_1_to_the_settings_most(self):
+        for months in (0, 7, 13, "abc", None, 2.5):  # Settings' most is 6 by default (2026-11-27)
             r = self.term(months=months)
             self.assertEqual(r.status_code, 400, months)
             self.assertEqual(r.json()["field"], "repaymentMonths")
         self.assertEqual(self.term(months=1).status_code, 201)
         Advance.objects.all().delete()
-        self.assertEqual(self.term(months=12).status_code, 201)
+        self.assertEqual(self.term(months=6).status_code, 201)
 
     def test_the_mobile_apps_snake_case_body_is_read(self):
         r = self.apply({"advance_type": "term", "amount": 5000, "repayment_months": 5, "purpose": "Bike repair"})
         self.assertEqual(r.status_code, 201, r.content)
         self.assertEqual((r.json()["repaymentMonths"], r.json()["emiAmount"]), (5, 1000.0))
 
-    def test_any_amount_from_1000_even_above_the_salary_limit(self):
+    def test_from_1000_up_to_the_monthly_salary(self):
         self.assertEqual(self.term(amount=999).json()["field"], "amount")
-        self.assertEqual(self.term(amount=150000, months=12).status_code, 201)
+        r = self.term(amount=30001)
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "over_limit"))
+        self.assertIn("100% of your monthly salary", r.json()["error"])
+        self.assertEqual(self.term(amount=30000, months=6).status_code, 201)
 
     def test_emi_in_whole_rupees_last_one_absorbs_the_rest_starting_next_month(self):
         r = self.term(10000, 3, day=date(2026, 12, 21))
@@ -411,11 +421,13 @@ class DuplicateTests(_Base):
         self.assertEqual(self.term().status_code, 409)
         self.assertEqual(self.general(1000).status_code, 201)  # the other form is independent
         self.hr_put(first, {"status": "approved"})
-        self.assertEqual(self.term().status_code, 201)
+        # 2026-11-27 rules: one Term Loan waiting or being repaid at a time, and one a calendar year
+        r = self.term()
+        self.assertEqual((r.status_code, r.json()["code"]), (409, "active"))
         with on(date(2026, 10, 25)):
             body = self.client.get("/api/my/advances/eligibility", **self.me).json()
         self.assertFalse(body["termLoan"]["canApply"])
-        self.assertEqual(body["termLoan"]["activeCount"], 1)
+        self.assertEqual((body["termLoan"]["activeCount"], body["termLoan"]["code"]), (1, "active"))
         self.assertIsNotNone(body["salaryAdvance"]["existing"])
 
 
@@ -487,18 +499,30 @@ class RecordsTests(_Base):
         self.assertEqual(
             (body["salaryAdvance"]["limit"], body["salaryAdvance"]["deductionLabel"]), (12000.0, "December 2026")
         )
-        self.assertEqual((body["salaryAdvance"]["percent"], body["salaryAdvance"]["limitBasis"]), (50, "earned_1_to_20"))
+        self.assertEqual(
+            (body["salaryAdvance"]["percent"], body["salaryAdvance"]["limitBasis"]), (50, "earned_1_to_20")
+        )
         earned = body["salaryAdvance"]["earned"]
         # Working Days = present shifts + company holidays (2026-11-26): 18 worked + 6 holiday days = the 24 paid days
         self.assertEqual(
-            (earned["earnedAmount"], earned["workingDays"], earned["presentShifts"], earned["holidayDays"], earned["final"]),
+            (
+                earned["earnedAmount"],
+                earned["workingDays"],
+                earned["presentShifts"],
+                earned["holidayDays"],
+                earned["final"],
+            ),
             (24000.0, 24.0, 18.0, 6.0, False),
         )
         self.assertEqual(body["termLoan"]["firstDeductionLabel"], "January 2027")
         self.assertFalse(body["salaryAdvance"]["canApply"])  # the 20th: the window opens on the 21st
         self.assertTrue(body["termLoan"]["canApply"])
         self.assertTrue(body["termLoan"]["service"]["eligible"])
-        self.assertEqual(len(body["rules"]), 6)
+        self.assertEqual(len(body["rules"]), 7)
+        self.assertEqual(
+            (body["termLoan"]["maxMonths"], body["termLoan"]["limit"], body["termLoan"]["maxAmount"]),
+            (6, 30000.0, 30000.0),  # 100% of the 30,000 monthly salary, 6 months (Settings defaults, 2026-11-27)
+        )
 
     def test_closed_window_names_the_salary_of_the_next_window(self):
         # 2026-11-25: after the 22nd the next Salary Advance can only be asked for next month, so next month's salary.

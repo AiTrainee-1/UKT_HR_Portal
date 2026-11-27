@@ -16,6 +16,7 @@ import {
   Coffee,
   DoorOpen,
   FileClock,
+  HandCoins,
   IndianRupee,
   LayoutDashboard,
   MessagesSquare,
@@ -107,6 +108,9 @@ export const MD_NAV_GROUPS: MdNavGroup[] = [
     heading: "Money & reports",
     items: [
       item("payroll", "Payroll", IndianRupee, "/md/payroll"),
+      // the MD's step of the Settlement Automation Method (2026-11-26; "Loan & Advance" since 2026-11-27, id kept):
+      // the sidebar shows how many requests wait, Salary Advance and Term Loan together
+      item("settlement", "Loan & Advance", HandCoins, "/md/loan-advance"),
       item("communications", "Communication usage & cost", MessagesSquare, "/md/communications", "Communication cost"),
       item("reports", "Reports", BarChart3, "/md/reports"),
     ],

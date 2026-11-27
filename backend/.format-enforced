@@ -670,3 +670,11 @@ api/tests_birthday_compensation.py
 api/day_progress.py
 api/tests_day_in_progress.py
 api/advance_earnings.py
+api/settlement_automation/__init__.py
+api/settlement_automation/service.py
+api/settlement_automation/views.py
+api/settlement_automation/urls.py
+api/md_portal/routes/settlement.py
+api/models/settlement_automation.py
+api/advance_rules.py
+api/tests_advance_rules.py

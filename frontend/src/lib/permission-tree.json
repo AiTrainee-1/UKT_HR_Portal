@@ -1810,9 +1810,9 @@
         },
         {
           "key": "settlement",
-          "label": "Settlement",
+          "label": "Loan & Advance",
           "type": "page",
-          "help": "Salary advances and term loans, and their repayment.",
+          "help": "Salary advances and term loans, and their repayment; with the Automation Method (Settings -> Settlement) the month-wise workflow HR -> MD -> HR final settlement -> auditor -> accounts.",
           "enforce": "server"
         },
         {
@@ -2760,6 +2760,13 @@
               "enforce": "server"
             },
             {
+              "key": "settings.settlement",
+              "label": "Loan & Advance",
+              "type": "tab",
+              "help": "Which method the Settlement page runs (Normal or Automation) and the auditor's and Accounts' e-mail addresses.",
+              "enforce": "server"
+            },
+            {
               "key": "settings.devices",
               "label": "Devices",
               "type": "tab",
@@ -3223,7 +3230,7 @@
     },
     {
       "id": "settlement",
-      "label": "Settlement"
+      "label": "Loan & Advance"
     },
     {
       "id": "payroll",

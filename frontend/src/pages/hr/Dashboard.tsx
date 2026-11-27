@@ -209,7 +209,7 @@ export default function HrDashboard() {
   // permission_middleware.py ALWAYS_READABLE_GET_PREFIXES) -but advances and
   // pending permissions are full sensitive records reused here just for a
   // Dashboard count, so those two are only fetched when the viewer actually
-  // has access to Settlement / Requests respectively.
+  // has access to Loan & Advance / Requests respectively.
   const canSeeSettlement = canView(user, "settlement");
   const canSeeRequests = canView(user, "requests");
   const canSeeMissingPunch = canView(user, "missing_punch");
@@ -455,7 +455,7 @@ export default function HrDashboard() {
               label="Open Advances" loading={!advances} value={openAdvances}
               sub={totalOutstanding > 0 ? `${fmt(totalOutstanding)} outstanding` : "No outstanding"}
               icon={Wallet} accent="#ef4444"
-              onClick={() => navigate("/hr/settlement")}
+              onClick={() => navigate("/hr/Loan&Advance")}
             />
         </div>
         </Gate>
@@ -733,7 +733,7 @@ export default function HrDashboard() {
                   { label: "Casual Leave Requests", value: casualLeavePending, color: "#16a34a", icon: Calendar,   path: "/hr/casual-leave" },
                   { label: "On-Duty Approvals",    value: onDutyPending,    color: "#d97706", icon: MapPinned,     path: "/hr/geo-attendance/approvals" },
                   { label: "Production Payroll Pending", value: productionPayrollPending, color: "#b45309", icon: Factory, path: "/hr/production-payroll" },
-                  { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/settlement" },
+                  { label: "Open Advances",        value: openAdvances,     color: "#ef4444", icon: CreditCard,    path: "/hr/Loan&Advance" },
                   { label: "Notifications",        value: (summary as any)?.unreadNotifications ?? 0, color: "#006496", icon: AlertCircle, path: "/hr/notifications" },
                 ].map(({ label, value, color, icon: Icon, path }) => (
                   <button

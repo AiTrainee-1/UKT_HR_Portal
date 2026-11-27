@@ -8,7 +8,11 @@ import {
   SETTLEMENT_URL_DEFAULTS,
   appliedByEmployee,
   approvalDefaults,
+  bulkDecisionPayload,
+  bulkResultText,
+  bulkTickable,
   approvalEmi,
+  raisedByEmployeeRules,
   approvalPayload,
   approvalPreview,
   approvalProblem,
@@ -38,6 +42,9 @@ import {
   reportDefaults,
   reportState,
   saveColumnChoice,
+  COLUMN_SETS,
+  TERM_DEFAULT_COLUMN_KEYS,
+  TERM_EXTRA_COLUMN_KEYS,
   statusMatches,
   TYPE_LABEL,
   buildExport,
@@ -48,7 +55,6 @@ import {
   describeSchedule,
   describeScope,
   earnedPeriodLabel,
-  emptyForm,
   exportColumns,
   exportState,
   exportStatusLabel,
@@ -56,19 +62,14 @@ import {
   filtersActive,
   filtersFromUrl,
   filtersToUrl,
-  formLimit,
-  formOverLimit,
-  formPreview,
   hasLeft,
   historyText,
   inPeriod,
   overLimitBy,
-  overLimitRefusal,
   pageView,
   parseBasis,
   parsePeriod,
   parseSort,
-  parseTab,
   periodLabel,
   pickFilterUrl,
   previewForAdvance,
@@ -80,14 +81,11 @@ import {
   schedulePreview,
   serverError,
   sortRows,
-  startWarning,
   statusCounts,
   summarize,
   tabFilters,
-  toPayload,
-  validateForm,
+  tabOfPage,
   yearOptions,
-  type AdvanceForm,
   type ApprovalEdit,
   type PageState,
   type SettlementRow,
@@ -120,17 +118,11 @@ const adv = (over: Partial<SettlementRow> = {}): SettlementRow => ({
   ...over,
 });
 
-const form = (over: Partial<AdvanceForm> = {}): AdvanceForm => ({
-  ...emptyForm(new Date(2026, 9, 10)),
-  employeeId: "7",
-  amount: "12000",
-  ...over,
-});
-
 const edit = (over: Partial<ApprovalEdit> = {}): ApprovalEdit => ({
   amount: "10000",
   startMonth: 11,
   startYear: 2026,
+  months: "",
   remark: "",
   ...over,
 });
@@ -413,88 +405,6 @@ describe("the schedule an approval creates (twin of the server's)", () => {
   });
 });
 
-describe("the new-advance form", () => {
-  it("starts on next month, and rolls into next year in December", () => {
-    expect(emptyForm(new Date(2026, 9, 10))).toMatchObject({ repaymentStartMonth: 11, repaymentStartYear: 2026 });
-    expect(emptyForm(new Date(2026, 11, 10))).toMatchObject({ repaymentStartMonth: 1, repaymentStartYear: 2027 });
-  });
-
-  it("a valid general advance has no errors", () => {
-    expect(validateForm(form())).toEqual({});
-  });
-
-  it("asks for the employee and the amount", () => {
-    const e = validateForm(form({ employeeId: "", amount: "" }));
-    expect(e.employee).toMatch(/Choose the employee/);
-    expect(e.amount).toBe("Enter the amount.");
-  });
-
-  it("refuses an amount that is zero, negative, too precise or too large", () => {
-    expect(validateForm(form({ amount: "0" })).amount).toMatch(/more than 0/);
-    expect(validateForm(form({ amount: "-5" })).amount).toMatch(/more than 0/);
-    expect(validateForm(form({ amount: "10.555" })).amount).toMatch(/2 decimal places/);
-    expect(validateForm(form({ amount: "100000000" })).amount).toMatch(/too large/);
-    expect(validateForm(form({ amount: "999.99" })).amount).toBeUndefined();
-  });
-
-  it("a term loan needs the months or the EMI", () => {
-    expect(validateForm(form({ advanceType: "term" })).repayment).toMatch(/months or the monthly EMI/);
-    expect(validateForm(form({ advanceType: "term", repaymentMonths: "12" }))).toEqual({});
-    expect(validateForm(form({ advanceType: "term", emiAmount: "1500" }))).toEqual({});
-  });
-
-  it("checks the months and the EMI", () => {
-    expect(validateForm(form({ advanceType: "term", repaymentMonths: "0" })).months).toMatch(/whole number/);
-    expect(validateForm(form({ advanceType: "term", repaymentMonths: "2.5" })).months).toMatch(/whole number/);
-    expect(validateForm(form({ advanceType: "term", repaymentMonths: "121" })).months).toMatch(/120/);
-    expect(validateForm(form({ advanceType: "term", emiAmount: "13000" })).emi).toMatch(/more than the amount/);
-    expect(validateForm(form({ advanceType: "term", emiAmount: "-1" })).emi).toMatch(/more than 0/);
-  });
-
-  it("months and EMI of a general advance are not asked for", () => {
-    expect(validateForm(form({ advanceType: "general", repaymentMonths: "x" }))).toEqual({});
-  });
-
-  it("checks the year", () => {
-    expect(validateForm(form({ repaymentStartYear: 26 })).year).toMatch(/4-digit/);
-    expect(validateForm(form({ repaymentStartYear: 2026.5 })).year).toMatch(/4-digit/);
-  });
-
-  it("warns, without blocking, when the first deduction month is already over", () => {
-    const now = new Date(2026, 9, 10);
-    expect(startWarning(form({ repaymentStartMonth: 9, repaymentStartYear: 2026 }), now)).toMatch(
-      /Sep 2026 is already over/,
-    );
-    expect(startWarning(form({ repaymentStartMonth: 10, repaymentStartYear: 2026 }), now)).toBeNull();
-    expect(startWarning(form({ repaymentStartMonth: 1, repaymentStartYear: 2027 }), now)).toBeNull();
-  });
-
-  it("sends the body the page always sent", () => {
-    expect(toPayload(form({ purpose: "  School fees " }))).toEqual({
-      employeeId: 7,
-      advanceType: "general",
-      amount: 12000,
-      purpose: "School fees",
-      repaymentMonths: undefined,
-      emiAmount: undefined,
-      repaymentStartMonth: 11,
-      repaymentStartYear: 2026,
-    });
-    expect(toPayload(form({ advanceType: "term", repaymentMonths: "6" }))).toMatchObject({
-      repaymentMonths: 6,
-      emiAmount: undefined,
-    });
-    expect(toPayload(form({ advanceType: "term", emiAmount: "2500.5" }))).toMatchObject({ emiAmount: 2500.5 });
-  });
-
-  it("previews the schedule once the form says enough", () => {
-    expect(formPreview(form({ amount: "" }))).toBeNull();
-    expect(formPreview(form({ advanceType: "term" }))).toBeNull();
-    expect(formPreview(form({ advanceType: "term", repaymentMonths: "4" }))?.items).toHaveLength(4);
-    expect(formPreview(form())?.items).toHaveLength(1);
-  });
-});
-
 describe("shared helpers", () => {
   it("formats money, dates and initials", () => {
     expect(formatMoney(1234567.5)).toBe("₹12,34,567.5");
@@ -639,13 +549,62 @@ describe("approving an employee's application (2026-10-31)", () => {
     });
 
   it("opens on the amount asked for and the start month on the advance, with no remark", () => {
-    expect(approvalDefaults(applied())).toEqual({ amount: "10000", startMonth: 11, startYear: 2026, remark: "" });
+    expect(approvalDefaults(applied())).toEqual({
+      amount: "10000",
+      startMonth: 11,
+      startYear: 2026,
+      remark: "",
+      months: "3", // a Term Loan's months as asked for
+    });
+    expect(approvalDefaults(applied({ advanceType: "general", repaymentMonths: null })).months).toBe("");
   });
 
-  it("keeps the whole-rupee EMI for an employee's loan and the paisa EMI for one HR recorded", () => {
+  it("a Term Loan's months: 1 to Settings' most, the EMI and schedule follow them, and only a change is sent", () => {
+    const a = applied();
+    // Settings' most is 6 months (the request's own 3 is within it)
+    expect(approvalProblem(a, edit({ amount: "9000", months: "6" }), 6)).toBeNull();
+    expect(approvalProblem(a, edit({ amount: "9000", months: "7" }), 6)).toBe(
+      "A Term Loan is repaid in 1 to 6 months.",
+    );
+    expect(approvalProblem(a, edit({ amount: "9000", months: "0" }), 6)).toBe(
+      "A Term Loan is repaid in 1 to 6 months.",
+    );
+    expect(approvalProblem(a, edit({ amount: "9000", months: "2.5" }), 6)).toBe(
+      "A Term Loan is repaid in 1 to 6 months.",
+    );
+    // whole-rupee EMIs under the employee rules: 9,000 over 4 months = 2,250 x 4; 10,000 over 6 = 1,667 x 5 + 1,665
+    expect(approvalEmi(a, 9000, 4)).toBe(2250);
+    expect(approvalEmi(a, 10000, 6)).toBe(1667);
+    const p = approvalPreview(a, edit({ amount: "10000", months: "6", startMonth: 12, startYear: 2026 }));
+    expect(p?.items).toHaveLength(6);
+    expect(p?.items.at(-1)).toMatchObject({ month: 5, year: 2027, amount: 1665 });
+    expect(approvalPayload(a, edit({ amount: "10000", months: "6", startMonth: 11, startYear: 2026 }))).toEqual({
+      status: "approved",
+      repaymentMonths: 6,
+    });
+    // the request's own months are not sent again
+    expect(approvalPayload(a, edit({ amount: "10000", months: "3", startMonth: 11, startYear: 2026 }))).toEqual({
+      status: "approved",
+    });
+  });
+
+  it("a Term Loan cannot be approved above its eligible limit", () => {
+    const a = applied({ requestedAmount: 40000, amount: 40000, termLimit: 30000 });
+    expect(approvalProblem(a, edit({ amount: "30001", months: "3" }), 6)).toBe(
+      "You can approve at most the ₹30,000 eligible limit.",
+    );
+    expect(approvalProblem(a, edit({ amount: "30000", months: "3" }), 6)).toBeNull();
+  });
+
+  it("keeps the whole-rupee EMI under the employee rules (HR's requests too, from 27 Nov 2026), the paisa EMI before", () => {
     expect(approvalEmi(applied(), 10000)).toBe(3334);
-    expect(approvalEmi(applied({ appliedBy: "hr" }), 10000)).toBe(3333.33);
+    // an HR-recorded loan from before the employee rules: amount / months to the paisa, as it was created
+    expect(approvalEmi(applied({ appliedBy: "hr", createdAt: "2026-11-26T12:00:00Z" }), 10000)).toBe(3333.33);
+    // raised by HR under the employee rules (POST /api/advances = apply_for since 2026-11-27, India day)
+    expect(approvalEmi(applied({ appliedBy: "hr", createdAt: "2026-11-26T19:00:00Z" }), 10000)).toBe(3334);
+    expect(approvalEmi(applied({ appliedBy: "hr", createdAt: "2026-11-28T05:00:00Z" }), 10000)).toBe(3334);
     expect(approvalEmi(applied({ advanceType: "general" }), 10000)).toBe(0);
+    expect(raisedByEmployeeRules({ appliedBy: "hr", createdAt: null })).toBe(false);
   });
 
   it("previews the smaller amount with the last EMI absorbing the rest", () => {
@@ -703,17 +662,15 @@ describe("approving an employee's application (2026-10-31)", () => {
 
 // ───────────────────── 2026-11-20: tabs, the month filter, remarks, history, per-tab exports ─────────────────────
 
-describe("the tabs: Overview, Term Loan, Salary Advance", () => {
+describe("the pages: Overview, Term Loan, Salary Advance", () => {
   const loan = adv({ advanceType: "term", employeeCode: "L1", status: "approved", emiAmount: 1000 });
   const advance = adv({ advanceType: "general", employeeCode: "A1", status: "pending", amount: 2000 });
   const rows = [loan, advance];
 
-  it("reads the tab from the address; anything else is Overview", () => {
-    expect(parseTab("loan")).toBe("loan");
-    expect(parseTab("advance")).toBe("advance");
-    expect(parseTab("")).toBe("overview");
-    expect(parseTab("nonsense")).toBe("overview");
-    expect(parseTab(null)).toBe("overview");
+  it("each address lists its own kind: /salary-advance the Salary Advances, /term-loan the Term Loans", () => {
+    expect(tabOfPage("overview")).toBe("overview");
+    expect(tabOfPage("general")).toBe("advance");
+    expect(tabOfPage("term")).toBe("loan");
   });
 
   it("Term Loan lists the term loans, Salary Advance the others, Overview both", () => {
@@ -1000,11 +957,11 @@ describe("the page's state in the address", () => {
     expect(parseSort("bogus:asc")).toEqual(DEFAULT_SORT);
   });
 
-  it("a tab's own part leaves the tab and the month out", () => {
-    const own = pickFilterUrl({ ...SETTLEMENT_URL_DEFAULTS, tab: "loan", month: "11", q: "asha" });
+  it("the filters' own part leaves the month out, and the kind of list is not in the query at all", () => {
+    const own = pickFilterUrl({ ...SETTLEMENT_URL_DEFAULTS, month: "11", q: "asha" });
     expect(own).toMatchObject({ q: "asha", status: "pending" });
-    expect(own).not.toHaveProperty("tab");
     expect(own).not.toHaveProperty("month");
+    expect(SETTLEMENT_URL_DEFAULTS).not.toHaveProperty("tab");
   });
 });
 
@@ -1085,9 +1042,11 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
       "Remarks",
     ];
     expect(exportColumns().map((c) => c.header)).toEqual(expected);
-    for (const tab of ["overview", "loan", "advance"] as const) {
+    for (const tab of ["overview", "advance"] as const) {
       expect(buildExport([loanRow], page({ tab }), 1).columns.map((c) => c.header)).toEqual(expected);
     }
+    // the Term Loan tab has its own report (owner 2026-11-27)
+    expect(buildExport([loanRow], page({ tab: "loan" }), 1).columns.map((c) => c.header)).toContain("Eligible Limit");
     // the money columns are the ones summed
     expect(
       exportColumns()
@@ -1131,16 +1090,16 @@ describe("exports (owner 2026-11-26: 12 columns, a status choice)", () => {
   it("puts the status in the title, the subtitle and the file name", () => {
     const loanPage = page({ tab: "loan", period: { month: 11, year: 2026 } });
     const all = buildExport([loanRow, pendingLoan], loanPage, 3);
-    expect(buildExport([loanRow], page(), 1).title).toBe("Settlement - All types - All statuses - All months");
-    expect(all.title).toBe("Settlement - Term Loan - All statuses - November 2026");
+    expect(buildExport([loanRow], page(), 1).title).toBe("Loan & Advance – All types – All statuses – All months");
+    expect(all.title).toBe("Loan & Advance – Term Loan – All statuses – November 2026");
     expect(all.subtitle).toBe("2 of 3 term loans · Status: All statuses");
-    expect(all.fileStem).toBe("Settlement_Term Loan_All statuses_November 2026");
+    expect(all.fileStem).toBe("Loan_Advance_Term Loan_All statuses_November 2026");
     expect(all.sheet).toBe("Term Loan Nov 2026");
     const pending = buildExport([pendingLoan], exportState(loanPage, "pending"), 3);
-    expect(pending.title).toBe("Settlement - Term Loan - Pending - November 2026");
+    expect(pending.title).toBe("Loan & Advance – Term Loan – Pending – November 2026");
     expect(pending.subtitle).toBe("1 of 3 term loans · Status: Pending");
     const advance = buildExport([rejectedAdvance], exportState(page({ tab: "advance" }), "rejected"), 1);
-    expect(advance.title).toBe("Settlement - Salary Advance - Rejected - All months");
+    expect(advance.title).toBe("Loan & Advance – Salary Advance – Rejected – All months");
     expect(advance.subtitle).toBe("1 of 1 salary advance · Status: Rejected");
   });
 
@@ -1223,75 +1182,8 @@ describe("delete: only a waiting advance (owner 2026-11-26)", () => {
   });
 });
 
-describe("the Salary Advance limit in the New dialog (owner 2026-11-26)", () => {
-  const preview = (limit: number | null) => ({
-    employeeId: 7,
-    employeeType: "staff",
-    month: 11,
-    year: 2026,
-    throughDay: 20,
-    percent: 50,
-    earnings:
-      limit == null
-        ? null
-        : {
-            month: 11,
-            year: 2026,
-            throughDay: 20,
-            fixedSalary: 26000,
-            workingDays: 14,
-            paidDays: 15,
-            earnedAmount: limit * 2,
-            percent: 50,
-            limit,
-          },
-    noSalaryReason:
-      limit == null ? "Paid per shift: there is no monthly fixed salary, so no Salary Advance limit." : null,
-    termLoanService: {
-      eligible: true,
-      joinDate: "2025-01-10",
-      serviceMonths: 22,
-      requiredMonths: 6,
-      eligibleFrom: "2025-07-10",
-      reason: null,
-    },
-  });
-
-  it("takes the limit from the preview, or from the server's refusal; none for a production employee", () => {
-    expect(formLimit(preview(5000))).toBe(5000);
-    expect(formLimit(preview(null))).toBeNull();
-    expect(formLimit(undefined, 4200)).toBe(4200);
-    expect(formLimit(preview(5000), 4200)).toBe(5000);
-  });
-
-  it("only a Salary Advance above the limit needs the reason, at least 3 characters", () => {
-    const over = form({ advanceType: "general", amount: "6000" });
-    expect(formOverLimit(over, 5000)).toBe(true);
-    expect(formOverLimit(form({ amount: "5000" }), 5000)).toBe(false); // at the limit is fine
-    expect(formOverLimit(over, null)).toBe(false); // no limit known
-    expect(formOverLimit(form({ advanceType: "term", amount: "60000", repaymentMonths: "6" }), 5000)).toBe(false);
-    expect(validateForm(over, 5000).limitRemark).toBe(
-      "Write why this goes over the ₹5,000 limit (at least 3 characters).",
-    );
-    expect(validateForm({ ...over, limitRemark: " a  " }, 5000).limitRemark).toBeDefined();
-    expect(validateForm({ ...over, limitRemark: "Medical emergency" }, 5000)).toEqual({});
-    expect(validateForm(over, null)).toEqual({});
-    expect(validateForm(form({ amount: "4000" }), 5000)).toEqual({});
-    // a broken amount is reported on the amount alone
-    expect(validateForm(form({ amount: "-1" }), 5000).limitRemark).toBeUndefined();
-  });
-
-  it("sends the reason as limitRemark for a Salary Advance only", () => {
-    expect(toPayload(form({ amount: "6000", limitRemark: "  Medical\n emergency " }))).toMatchObject({
-      limitRemark: "Medical emergency",
-    });
-    expect(toPayload(form({ amount: "6000" }))).not.toHaveProperty("limitRemark");
-    expect(toPayload(form({ advanceType: "term", repaymentMonths: "3", limitRemark: "anything" }))).not.toHaveProperty(
-      "limitRemark",
-    );
-  });
-
-  it("works out how far above the limit, and reads the server's over_limit refusal", () => {
+describe("the Salary Advance limit (owner 2026-11-26)", () => {
+  it("works out how far above the limit (the Approve dialog), and reads the server's words", () => {
     expect(overLimitBy(6000, 5000)).toBe(1000);
     expect(overLimitBy(5000, 5000)).toBe(0);
     expect(overLimitBy(6000, null)).toBe(0);
@@ -1300,15 +1192,10 @@ describe("the Salary Advance limit in the New dialog (owner 2026-11-26)", () => 
       { error: "₹6,000 is above the Salary Advance limit of ₹5,000.", code: "over_limit", limit: 5000 },
       { method: "POST", url: "/api/advances" },
     );
-    expect(overLimitRefusal(refused)).toBe(5000);
-    expect(serverError(refused, "x").text).toBe("₹6,000 is above the Salary Advance limit of ₹5,000.");
-    expect(overLimitRefusal(new Error("Network down"))).toBeNull();
-    const other = new ApiError(
-      new Response(null, { status: 400, statusText: "Bad Request" }),
-      { error: "Nope", code: "invalid" },
-      { method: "POST", url: "/api/advances" },
-    );
-    expect(overLimitRefusal(other)).toBeNull();
+    expect(serverError(refused, "x")).toEqual({
+      text: "₹6,000 is above the Salary Advance limit of ₹5,000.",
+      code: "over_limit",
+    });
   });
 
   it("names the days the earned salary covers", () => {
@@ -1527,9 +1414,9 @@ describe("the report dialog (owner 2026-11-26)", () => {
     ).toEqual(["N1", "O1"]);
     const v = pageView(rows, allMonths);
     const t = buildExport(v.shown, allMonths, v.periodRows.length);
-    expect(t.title).toBe("Settlement - Term Loan - Approved - All months");
+    expect(t.title).toBe("Loan & Advance – Term Loan – Approved – All months");
     expect(t.subtitle).toBe('2 of 4 term loans · Status: Approved · Search: "Asha"');
-    expect(t.fileStem).toBe("Settlement_Term Loan_Approved_All months");
+    expect(t.fileStem).toBe("Loan_Advance_Term Loan_Approved_All months");
   });
 
   it("remembers the last column choice in this browser, and works without storage", () => {
@@ -1557,6 +1444,22 @@ describe("the report dialog (owner 2026-11-26)", () => {
     get.mockRestore();
     set.mockRestore();
     window.localStorage.removeItem(COLUMN_CHOICE_KEY);
+  });
+
+  it("the Term Loan report remembers its own column choice, apart from the Salary Advance one", () => {
+    const termKey = COLUMN_SETS.term.storageKey;
+    expect(termKey).not.toBe(COLUMN_CHOICE_KEY);
+    window.localStorage.removeItem(termKey);
+    window.localStorage.removeItem(COLUMN_CHOICE_KEY);
+    expect(loadColumnChoice("term")).toEqual([...TERM_DEFAULT_COLUMN_KEYS]);
+    saveColumnChoice(["purpose", "termLimit", "sno"], "term");
+    expect(loadColumnChoice("term")).toEqual(["sno", "termLimit", "purpose"]); // the Term Loan report's order
+    expect(loadColumnChoice()).toEqual([...DEFAULT_COLUMN_KEYS]); // the Salary Advance choice is untouched
+    // a Salary Advance column is not a Term Loan one
+    expect(cleanColumnChoice(["earned", "sno"], "term")).toEqual(["sno"]);
+    expect(TERM_EXTRA_COLUMN_KEYS).toContain("purpose");
+    expect(TERM_DEFAULT_COLUMN_KEYS).not.toContain("purpose");
+    window.localStorage.removeItem(termKey);
   });
 });
 
@@ -1636,8 +1539,10 @@ describe("the bank file (owner 2026-11-26)", () => {
     expect(bankFileLines([adv({ amount: 2000.0000001 })])[0].amount).toBe(2000);
     expect(missingBankDetails(pay).map((a) => a.employeeCode)).toEqual(["A2"]);
     expect(missingBankDetails([adv({ bankAccount: null, bankIfsc: "X" })])).toHaveLength(1);
-    expect(bankFileName(nov)).toBe("Settlement_Bank_File_Salary_Advance_November_2026.xlsx");
-    expect(bankFileName({ ...nov, tab: "loan", period: null })).toBe("Settlement_Bank_File_Term_Loan_All_months.xlsx");
+    expect(bankFileName(nov)).toBe("Loan_Advance_Bank_File_Salary_Advance_November_2026.xlsx");
+    expect(bankFileName({ ...nov, tab: "loan", period: null })).toBe(
+      "Loan_Advance_Bank_File_Term_Loan_All_months.xlsx",
+    );
     expect(bankFileSheet(nov)).toBe("Salary Advance Nov 2026");
   });
 });
@@ -1655,5 +1560,37 @@ describe("Working Days with company holidays (owner 2026-11-26)", () => {
     const { workingDaysText } = await import("./logic");
     expect(workingDaysText({ workingDays: 13.5, presentShifts: 13.5, holidayDays: 0 })).toBe("13.5");
     expect(workingDaysText({ workingDays: 13.5 })).toBe("13.5");
+  });
+});
+
+describe("several requests at once on the Normal Method (round 5, 2026-11-27)", () => {
+  it("only a waiting request this login may decide can be ticked", () => {
+    expect(bulkTickable(adv({ status: "pending" }), true)).toBe(true);
+    expect(bulkTickable(adv({ status: "pending" }), false)).toBe(false);
+    expect(bulkTickable(adv({ status: "approved" }), true)).toBe(false);
+  });
+
+  it("approve = the full amount asked for (with the optional remark); reject = the one reason", () => {
+    const start = { repaymentStartMonth: 11, repaymentStartYear: 2026 };
+    expect(bulkDecisionPayload(adv({ ...start, amount: 1000, requestedAmount: 1000 }), "approve", "")).toEqual({
+      status: "approved",
+    });
+    // an amount below the one asked for on the request: the full amount asked for is approved
+    expect(bulkDecisionPayload(adv({ ...start, amount: 800, requestedAmount: 1000 }), "approve", "Checked")).toEqual({
+      status: "approved",
+      amount: 1000,
+      decisionRemark: "Checked",
+    });
+    expect(bulkDecisionPayload(adv(), "reject", "Budget closed")).toEqual({
+      status: "rejected",
+      decisionRemark: "Budget closed",
+    });
+  });
+
+  it("sums up what went through and what did not", () => {
+    expect(bulkResultText({ action: "approve", done: 3, failures: [] })).toBe("3 approved.");
+    expect(
+      bulkResultText({ action: "reject", done: 1, failures: [{ id: 2, name: "Ravi", text: "Already decided." }] }),
+    ).toBe("1 rejected; 1 could not be: Ravi (Already decided.)");
   });
 });

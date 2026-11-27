@@ -36,11 +36,13 @@ import {
   remarkRequired,
   requestedOf,
   serverError,
+  termSalaryOf,
   type ApprovalEdit,
   type ApprovalPayload,
   type RejectionPayload,
   type SettlementRow,
 } from "./logic";
+import { useLoanAdvanceRules } from "./rules";
 import { MONTHS, formatMoney } from "./shared";
 
 /** Which advance HR is deciding, and which way. */
@@ -72,6 +74,8 @@ export function DecisionDialog({
   const [refused, setRefused] = useState<{ text: string; code: string | null } | null>(null);
   const [tried, setTried] = useState(false);
   const remarkRef = useRef<HTMLTextAreaElement>(null);
+  // a Term Loan's repayment months: 1 to Settings' most (the loan's own months when it asked for more before a change)
+  const maxMonths = useLoanAdvanceRules()?.tl.maxMonths ?? null;
 
   useEffect(() => {
     setEdit(decision ? approvalDefaults(decision.row) : null);
@@ -85,7 +89,7 @@ export function DecisionDialog({
     setRefused(null);
   };
 
-  const amountProblem = row && edit && approve ? approvalProblem(row, edit) : null;
+  const amountProblem = row && edit && approve ? approvalProblem(row, edit, maxMonths) : null;
   // the remark's own message waits until the amount is right (an amount above the one asked for is refused anyway)
   const remarkProblem =
     row && edit
@@ -102,7 +106,7 @@ export function DecisionDialog({
   const partial = !!(row && edit && approve && !amountProblem && remarkRequired(row, edit));
   const needsRemark = !approve || partial;
   const term = row?.advanceType === "term";
-  // a Salary Advance's earned limit (50 % of the salary earned 1st-20th): information only, HR may approve more
+  // a Salary Advance's earned limit (Settings' % of the salary earned so far): information only, HR may approve more
   const earned = row && !term ? (row.earnings ?? null) : null;
   const limit = row && !term ? earnedLimitOf(row) : null;
   const aboveLimit = approve && !amountProblem ? overLimitBy(approvedNow, limit) : 0;
@@ -156,6 +160,13 @@ export function DecisionDialog({
                 {row?.purpose ? `, for ${row.purpose}` : ""}.
                 {byEmployee && " The employee applied from the mobile app."}
               </p>
+              {row && term && (
+                <p className="text-xs" data-testid="decision-term-figures">
+                  Fixed monthly salary {termSalaryOf(row) != null ? formatMoney(termSalaryOf(row)) : "-"} · Eligible
+                  limit {row.termLimit != null ? formatMoney(row.termLimit) : "-"}
+                  {row.repaymentMonths ? ` · Asked over ${row.repaymentMonths} months` : ""}.
+                </p>
+              )}
               {earned ? (
                 <p className="text-xs" data-testid="decision-earned">
                   Earned in {earnedPeriodLabel(earned)}: Fixed salary {formatMoney(earned.fixedSalary)} · Working days{" "}
@@ -198,7 +209,8 @@ export function DecisionDialog({
                   data-testid="decision-amount"
                 />
                 <p id="decision-requested" className="text-[11px] text-gray-500" data-testid="decision-requested">
-                  Asked for {formatMoney(asked)}; no more than that.
+                  Asked for {formatMoney(asked)}; no more than that
+                  {term && row.termLimit != null ? ` or the ${formatMoney(row.termLimit)} limit` : ""}.
                 </p>
               </div>
               <div className="space-y-1">
@@ -238,8 +250,36 @@ export function DecisionDialog({
             </div>
             {term && (
               <div className="space-y-1">
+                <Label htmlFor="decision-months" className="text-xs">
+                  Repayment months
+                </Label>
+                <Input
+                  id="decision-months"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  max={Math.max(maxMonths ?? 0, row.repaymentMonths ?? 0) || undefined}
+                  step={1}
+                  value={edit.months}
+                  onChange={(e) => patch({ months: e.target.value })}
+                  disabled={busy}
+                  className="w-28"
+                  data-testid="decision-months"
+                />
+                {maxMonths != null && (
+                  <p className="text-[11px] text-gray-500" data-testid="decision-months-hint">
+                    1 to {maxMonths} months
+                    {row.repaymentMonths && row.repaymentMonths > maxMonths
+                      ? ` (or the ${row.repaymentMonths} asked for)`
+                      : ""}
+                  </p>
+                )}
+              </div>
+            )}
+            {term && (
+              <div className="space-y-1">
                 <p className="text-xs font-medium text-gray-700" id="decision-emi-label">
-                  Monthly EMI (worked out from the approved amount)
+                  Monthly EMI (worked out from the approved amount and months)
                 </p>
                 <p
                   aria-labelledby="decision-emi-label"

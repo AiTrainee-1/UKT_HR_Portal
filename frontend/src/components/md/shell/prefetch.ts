@@ -37,6 +37,7 @@ const OWN: [prefix: string, load: Loader][] = [
   ["/md/recruitment", () => import("@/pages/md/MdRecruitment")],
   ["/md/activity", () => import("@/pages/md/MdActivity")],
   ["/md/approvals", () => import("@/pages/md/MdApprovals")],
+  ["/md/loan-advance", () => import("@/pages/md/MdSettlement")],
   ...Object.values(optional).map((load): [string, Loader] => ["/md/communications", load]),
 ];
 

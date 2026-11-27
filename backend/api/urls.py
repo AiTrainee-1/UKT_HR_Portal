@@ -25,7 +25,7 @@ from .leave_views import (
     employee_permissions, employee_permission_detail,
 )
 from .settlement_views import (
-    advances, advance_detail, advance_repayments, advance_earnings_preview,
+    advances, advance_detail, advance_repayments, advance_earnings_preview, advance_eligibility, advance_leave_calendar,
 )
 from .approval_workflow_views import approval_summary, approval_workflow_detail, approval_workflows
 from .login_sessions_views import login_sessions, revoke_login_session
@@ -416,8 +416,10 @@ urlpatterns = [
     # ── Settlement ──────────────────────────────────────────────────────────
     path("advances", advances),
     path("advances/earnings", advance_earnings_preview),
+    path("advances/eligibility", advance_eligibility),
     path("advances/<int:pk>", advance_detail),
     path("advances/<int:pk>/repayments", advance_repayments),
+    path("advances/<int:pk>/leave-calendar", advance_leave_calendar),
 
     # ── Salary Slips ────────────────────────────────────────────────────────
     path("salary-slips", salary_slips),
@@ -1099,6 +1101,8 @@ urlpatterns = [
     path("employee-investigation/", include("api.investigation.urls")),
     # ── Settings -> Auto-Reject Requests: waiting requests rejected after N days, nightly + Run now (api/request_auto_reject/) ──
     path("request-auto-reject/", include("api.request_auto_reject.urls")),
+    # Settlement Automation Method + Settings -> Settlement (2026-11-26; api/settlement_automation/)
+    path("", include("api.settlement_automation.urls")),
     # ── Staff Payroll: Excess tab, Not included view, Payslip tab (payroll_excess_views.py; 2026-11-20) ──
     path("", include("api.urls_payroll_excess")),
     # ── Employees -> Factory Employees (factory_employee_views.py; 2026-11-20) ──

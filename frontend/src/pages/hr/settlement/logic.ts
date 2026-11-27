@@ -1,14 +1,16 @@
-// Settlement (term loans and salary advances): the rules behind the page, kept apart from the screens so they can be
-// tested on their own. Nothing here decides or changes a real amount: the server creates the repayment schedule and
-// payroll deducts it. The schedule preview is a twin of settlement_views._auto_create_repayments, only to show HR what an
+// Loan & Advance (term loans and salary advances; the Settlement page until 2026-11-27): the rules behind the pages,
+// kept apart from the screens so they can be tested on their own. Nothing here decides or changes a real amount: the
+// server creates the repayment schedule and payroll deducts it. The schedule preview is a twin of settlement_views._auto_create_repayments, only to show HR what an
 // approval will create.
 
 import { matchesNamedOrgOption } from "@/lib/departments";
-import type { Advance, AdvanceDecisionItem, AdvanceEarnings, AdvanceEarningsPreview } from "@/lib/api-client";
+import type { Advance, AdvanceDecisionItem, AdvanceEarnings } from "@/lib/api-client";
 import { ApiError } from "@/lib/api-client/custom-fetch";
-import { istDay } from "@/lib/date-range";
+import { istDay, istDayOf } from "@/lib/date-range";
 import { roundUpRupee } from "@/lib/round-up-rupee";
 import type { Tone } from "@/lib/statusTones";
+import { LOAN_ADVANCE_TITLE, type LoanAdvancePage } from "./routes";
+import { earnedRange } from "./rules";
 import { MONTH_FULL, formatDate, formatMoney, inDayRange, localDay, matchesWords, monthLabel } from "./shared";
 
 /** An advance as the list sends it. The branch, employee type and employee status are additive fields: an older
@@ -70,7 +72,8 @@ export const STATUS_TONE: Record<AdvanceStatus, Tone> = {
  *  "Term Advance" before) is deducted once. */
 export const TYPE_LABEL: Record<Advance["advanceType"], string> = { general: "Salary Advance", term: "Term Loan" };
 
-// ─── Tabs: Overview (both kinds), Term Loan, Salary Advance ──────────────────────
+// ─── The pages: Overview (both kinds), Term Loan, Salary Advance ─────────────────
+// Each is its own address and sidebar entry since 2026-11-27 (routes.ts); "tab" is the page's kind of list here.
 
 export type SettlementTab = "overview" | "loan" | "advance";
 
@@ -87,8 +90,10 @@ export const TAB_TYPE: Record<SettlementTab, Advance["advanceType"] | null> = {
   advance: "general",
 };
 
-export const parseTab = (value: string | null | undefined): SettlementTab =>
-  value === "loan" || value === "advance" ? value : "overview";
+/** The list an address shows: /hr/Loan&Advance both kinds, /salary-advance the Salary Advances, /term-loan the Term
+ *  Loans. */
+export const tabOfPage = (page: LoanAdvancePage): SettlementTab =>
+  page === "term" ? "loan" : page === "general" ? "advance" : "overview";
 
 export const tabLabel = (tab: SettlementTab): string => SETTLEMENT_TABS.find((t) => t.value === tab)!.label;
 
@@ -237,7 +242,7 @@ export const canDelete = (a: Pick<SettlementRow, "status">): boolean => a.status
 
 /** "1st–20th November 2026": the days the earned salary covers. */
 export const earnedPeriodLabel = (e: Pick<AdvanceEarnings, "month" | "year" | "throughDay">): string =>
-  `1st–${e.throughDay ?? 20}th ${MONTH_FULL[e.month - 1] ?? "?"} ${e.year}`;
+  `${e.throughDay ? earnedRange(e.throughDay) : "1st to date,"} ${MONTH_FULL[e.month - 1] ?? "?"} ${e.year}`;
 
 /** "14.5" days (a half day is 0.5). */
 export const formatDays = (n: number | null | undefined): string =>
@@ -263,11 +268,6 @@ export const earnedLimitOf = (a: Pick<SettlementRow, "earnings">): number | null
 /** How far an amount goes above the earned limit (0 when it does not, or when there is no limit). */
 export const overLimitBy = (amount: number, limit: number | null | undefined): number =>
   limit != null && Number.isFinite(amount) && amount > limit ? round2(amount - limit) : 0;
-
-/** The limit the New dialog checks a Salary Advance against: the earnings preview's, or the one the server named when it
- *  refused the amount (400 `over_limit`). Null: no limit known (a production employee, no salary, still loading). */
-export const formLimit = (preview: AdvanceEarningsPreview | null | undefined, serverLimit?: number | null) =>
-  preview?.earnings?.limit ?? serverLimit ?? null;
 
 /** How much of the advance is recovered, 0-100. */
 export function progressPct(a: Pick<Advance, "amount" | "totalRepaid">): number {
@@ -510,11 +510,10 @@ export function sortRows(rows: SettlementRow[], sort: Sort): SettlementRow[] {
 
 // ─── The page's state in the address ────────────────────────────────────────────
 
-/** Everything the page keeps in the address (?tab=loan&month=11&year=2026&status=all ...). A value equal to its default
- *  is left out, so a fresh page has a clean address: no month = the current month, raised in it (owner 2026-11-26);
- *  `month=all` = All months. Module-level: useUrlParams needs one identity. */
+/** Everything the page keeps in the address (?month=11&year=2026&status=all ...; the kind of list is the path itself). A
+ *  value equal to its default is left out, so a fresh page has a clean address: no month = the current month, raised in
+ *  it (owner 2026-11-26); `month=all` = All months. Module-level: useUrlParams needs one identity. */
 export const SETTLEMENT_URL_DEFAULTS = {
-  tab: "overview",
   month: "",
   year: "",
   basis: "applied",
@@ -711,6 +710,9 @@ export function previewForAdvance(a: SettlementRow, now = new Date()): ScheduleP
 
 // ─── Deciding: the approved amount, the deduction month and the remark ─────────
 
+const num = (text: string): number => (text.trim() === "" ? NaN : Number(text));
+const hasTooManyDecimals = (text: string) => /\.\d{3,}/.test(text.trim());
+
 /** The shortest remark the server takes (settlement_views.REMARK_MIN) and the longest it keeps. */
 export const REMARK_MIN = 3;
 export const REMARK_MAX = 1000;
@@ -720,7 +722,14 @@ export const cleanRemark = (text: string): string => text.split(/\s+/).filter(Bo
 
 /** What HR may change when approving: a smaller amount than was asked for, the month the deduction starts, and the
  *  remark (required when the amount is not the one asked for). */
-export type ApprovalEdit = { amount: string; startMonth: number; startYear: number; remark: string };
+export type ApprovalEdit = {
+  amount: string;
+  startMonth: number;
+  startYear: number;
+  remark: string;
+  /** A Term Loan's repayment months ("" for a Salary Advance). */
+  months: string;
+};
 
 /** The editor's starting values: the amount asked for and the start month already on the advance (a Salary Advance an
  *  employee applied for starts in the month of the application, a Term Loan the month after). */
@@ -730,27 +739,59 @@ export function approvalDefaults(a: SettlementRow, now = new Date()): ApprovalEd
     startMonth: a.repaymentStartMonth || now.getMonth() + 1,
     startYear: a.repaymentStartYear || now.getFullYear(),
     remark: "",
+    months: a.advanceType === "term" && a.repaymentMonths ? String(a.repaymentMonths) : "",
   };
 }
 
-/** The monthly EMI the server works out when the amount changes: a Term Loan an employee applied for rounds UP to
- *  whole rupees (the last EMI absorbs the rest: settlement_views.whole_rupee_emi); one HR recorded divides to the
- *  paisa, as the create call does. */
-export function approvalEmi(a: SettlementRow, amount: number): number {
+/** The repayment months an approval says (the advance's own when the box is empty or not a whole number). */
+export function approvalMonths(a: SettlementRow, edit: Pick<ApprovalEdit, "months">): number | null {
+  const n = Number(edit.months.trim());
+  return edit.months.trim() !== "" && Number.isInteger(n) ? n : (a.repaymentMonths ?? null);
+}
+
+/** The day HR's requests started following the employee rules (POST /api/advances = apply_for, owner 2026-11-27):
+ *  settlement_views.EMPLOYEE_RULES_FOR_HR_FROM. */
+export const EMPLOYEE_RULES_FOR_HR_FROM = "2026-11-27";
+
+/** Raised under the employee rules: an employee's own application, or one HR raised for them from 2026-11-27 (India
+ *  day) on (settlement_views._raised_by_employee_rules). An older HR-recorded advance keeps the old rules. */
+export const raisedByEmployeeRules = (a: Pick<SettlementRow, "appliedBy" | "createdAt">): boolean =>
+  a.appliedBy === "employee" ||
+  (a.appliedBy === "hr" && !!a.createdAt && istDayOf(a.createdAt) >= EMPLOYEE_RULES_FOR_HR_FROM);
+
+/** The monthly EMI the server works out when the amount changes: a Term Loan raised under the employee rules rounds UP
+ *  to whole rupees (the last EMI absorbs the rest: settlement_views.whole_rupee_emi); an older one HR recorded divides
+ *  to the paisa, as its create call did. */
+export function approvalEmi(
+  a: SettlementRow,
+  amount: number,
+  months: number | null = a.repaymentMonths ?? null,
+): number {
   if (a.advanceType !== "term") return 0;
-  const months = a.repaymentMonths ?? 0;
-  if (months > 0) return appliedByEmployee(a) ? Math.ceil(amount / months) : round2(amount / months);
+  if (months && months > 0) return raisedByEmployeeRules(a) ? Math.ceil(amount / months) : round2(amount / months);
   return a.emiAmount;
 }
 
-/** The message to show beside the approved amount or the month, or null when they can be sent. */
-export function approvalProblem(a: SettlementRow, edit: ApprovalEdit): string | null {
+/** The message to show beside the approved amount, the months or the month, or null when they can be sent. A Term Loan
+ *  stays within its eligible limit (kept on it when raised) and 1 to `maxMonths` months (Settings'). */
+export function approvalProblem(a: SettlementRow, edit: ApprovalEdit, maxMonths?: number | null): string | null {
   const text = edit.amount.trim();
   const amount = num(text);
   if (text === "") return "Enter the amount to approve.";
   if (!Number.isFinite(amount) || amount <= 0) return "The approved amount must be more than 0.";
   if (hasTooManyDecimals(text)) return "Use at most 2 decimal places.";
   if (amount > requestedOf(a)) return `You can approve at most the ${formatMoney(requestedOf(a))} asked for.`;
+  if (a.advanceType === "term" && a.termLimit != null && amount > a.termLimit)
+    return `You can approve at most the ${formatMoney(a.termLimit)} eligible limit.`;
+  if (a.advanceType === "term" && edit.months.trim() !== "") {
+    const months = Number(edit.months.trim());
+    // a change is checked against Settings' most like the server; the request's own months are kept (and not sent)
+    const kept = months === (a.repaymentMonths ?? null);
+    if (!Number.isInteger(months) || months < 1 || (!kept && maxMonths != null && months > maxMonths))
+      return maxMonths != null
+        ? `A Term Loan is repaid in 1 to ${maxMonths} months.`
+        : "Enter the months as a whole number.";
+  }
   if (!Number.isInteger(edit.startYear) || edit.startYear < 2000 || edit.startYear > 2100)
     return "Enter a 4-digit year.";
   return null;
@@ -776,12 +817,13 @@ export const rejectionProblem = (remark: string): string | null =>
 export function approvalPreview(a: SettlementRow, edit: ApprovalEdit): SchedulePreview | null {
   const amount = num(edit.amount);
   if (!(amount > 0)) return null;
-  const changed = amount !== a.amount;
+  const months = approvalMonths(a, edit);
+  const changed = amount !== a.amount || months !== (a.repaymentMonths ?? null);
   return schedulePreview({
     type: a.advanceType,
     amount,
-    months: a.repaymentMonths,
-    emi: changed ? approvalEmi(a, amount) : a.emiAmount,
+    months,
+    emi: changed ? approvalEmi(a, amount, months) : a.emiAmount,
     startMonth: edit.startMonth,
     startYear: edit.startYear,
   });
@@ -790,6 +832,8 @@ export function approvalPreview(a: SettlementRow, edit: ApprovalEdit): ScheduleP
 export type ApprovalPayload = {
   status: "approved";
   amount?: number;
+  /** A Term Loan's repayment months, when HR changed them. */
+  repaymentMonths?: number;
   repaymentStartMonth?: number;
   repaymentStartYear?: number;
   decisionRemark?: string;
@@ -801,6 +845,9 @@ export function approvalPayload(a: SettlementRow, edit: ApprovalEdit): ApprovalP
   const body: ApprovalPayload = { status: "approved" };
   const amount = num(edit.amount);
   if (Number.isFinite(amount) && amount !== a.amount) body.amount = amount;
+  const months = approvalMonths(a, edit);
+  if (a.advanceType === "term" && months != null && months !== (a.repaymentMonths ?? null))
+    body.repaymentMonths = months;
   if (edit.startMonth !== a.repaymentStartMonth || edit.startYear !== a.repaymentStartYear) {
     body.repaymentStartMonth = edit.startMonth;
     body.repaymentStartYear = edit.startYear;
@@ -826,14 +873,6 @@ export function serverError(err: unknown, fallback: string): { text: string; cod
     return { text: said ?? err.message ?? fallback, code: data && typeof data.code === "string" ? data.code : null };
   }
   return { text: err instanceof Error && err.message ? err.message : fallback, code: null };
-}
-
-/** The limit the server named when it refused a Salary Advance above it without a remark (400 `{code: "over_limit",
- *  limit}`), or null for any other refusal. */
-export function overLimitRefusal(err: unknown): number | null {
-  if (!(err instanceof ApiError)) return null;
-  const data = (err.data ?? null) as { code?: unknown; limit?: unknown } | null;
-  return data && data.code === "over_limit" && typeof data.limit === "number" ? data.limit : null;
 }
 
 // ─── The decision history (detail sheet) ────────────────────────────────────────
@@ -865,136 +904,6 @@ export function historyText(
   if (item.action === "rejected")
     return { title: asked != null ? `Rejected (${formatMoney(asked)} asked for)` : "Rejected", detail: null };
   return { title: HISTORY_ACTION_LABEL.reopened, detail: null };
-}
-
-// ─── The "new advance" form ─────────────────────────────────────────────────────
-
-export type AdvanceForm = {
-  /** The employee's id, as text (EmployeeSearchSelect holds ids as text). */
-  employeeId: string;
-  advanceType: Advance["advanceType"];
-  amount: string;
-  purpose: string;
-  repaymentMonths: string;
-  emiAmount: string;
-  repaymentStartMonth: number;
-  repaymentStartYear: number;
-  /** Why HR records a Salary Advance above the 50 % earned limit (2026-11-26): required then, sent as `limitRemark`. */
-  limitRemark: string;
-};
-
-/** A blank form; payroll deducts from next month unless HR says otherwise. The Term Loan tab opens it on a term loan. */
-export function emptyForm(now = new Date(), advanceType: Advance["advanceType"] = "general"): AdvanceForm {
-  const nextMonth = now.getMonth() + 2 > 12 ? 1 : now.getMonth() + 2;
-  return {
-    employeeId: "",
-    advanceType,
-    amount: "",
-    purpose: "",
-    repaymentMonths: "",
-    emiAmount: "",
-    repaymentStartMonth: nextMonth,
-    repaymentStartYear: now.getMonth() + 2 > 12 ? now.getFullYear() + 1 : now.getFullYear(),
-    limitRemark: "",
-  };
-}
-
-export type FormErrors = Partial<
-  Record<"employee" | "amount" | "repayment" | "months" | "emi" | "year" | "limitRemark", string>
->;
-
-export const MAX_AMOUNT = 99_999_999.99;
-export const MAX_MONTHS = 120;
-
-const num = (text: string): number => (text.trim() === "" ? NaN : Number(text));
-const hasTooManyDecimals = (text: string) => /\.\d{3,}/.test(text.trim());
-
-/** A Salary Advance above the earned limit (`limit`: formLimit; null = no limit known, nothing is over it). */
-export function formOverLimit(f: Pick<AdvanceForm, "advanceType" | "amount">, limit: number | null): boolean {
-  if (f.advanceType !== "general" || limit == null) return false;
-  return overLimitBy(num(f.amount), limit) > 0;
-}
-
-/** The messages to show next to the fields; empty when the form can be sent. `limit` is the Salary Advance limit
- *  (formLimit): above it, HR must write why (at least REMARK_MIN characters), as the server requires. */
-export function validateForm(f: AdvanceForm, limit: number | null = null): FormErrors {
-  const e: FormErrors = {};
-  if (!f.employeeId) e.employee = "Choose the employee this advance is for.";
-
-  const amount = num(f.amount);
-  if (f.amount.trim() === "") e.amount = "Enter the amount.";
-  else if (!Number.isFinite(amount) || amount <= 0) e.amount = "The amount must be more than 0.";
-  else if (hasTooManyDecimals(f.amount)) e.amount = "Use at most 2 decimal places.";
-  else if (amount > MAX_AMOUNT) e.amount = "That amount is too large.";
-
-  if (!Number.isInteger(f.repaymentStartYear) || f.repaymentStartYear < 2000 || f.repaymentStartYear > 2100) {
-    e.year = "Enter a 4-digit year.";
-  }
-
-  if (f.advanceType === "term") {
-    const months = num(f.repaymentMonths);
-    const emi = num(f.emiAmount);
-    if (f.repaymentMonths.trim() === "" && f.emiAmount.trim() === "") {
-      e.repayment = "Enter the number of months or the monthly EMI.";
-    } else if (f.repaymentMonths.trim() !== "") {
-      if (!Number.isInteger(months) || months < 1) e.months = "Months must be a whole number, 1 or more.";
-      else if (months > MAX_MONTHS) e.months = `A loan cannot run longer than ${MAX_MONTHS} months.`;
-    } else if (!Number.isFinite(emi) || emi <= 0) {
-      e.emi = "The EMI must be more than 0.";
-    } else if (hasTooManyDecimals(f.emiAmount)) {
-      e.emi = "Use at most 2 decimal places.";
-    } else if (Number.isFinite(amount) && amount > 0 && emi > amount) {
-      e.emi = "The monthly EMI cannot be more than the amount.";
-    }
-  }
-  if (!e.amount && formOverLimit(f, limit) && cleanRemark(f.limitRemark ?? "").length < REMARK_MIN) {
-    e.limitRemark = `Write why this goes over the ${formatMoney(limit)} limit (at least ${REMARK_MIN} characters).`;
-  }
-  return e;
-}
-
-/** A warning that does not stop the advance: the first deduction month is already over. */
-export function startWarning(f: AdvanceForm, now = new Date()): string | null {
-  const start = f.repaymentStartYear * 12 + f.repaymentStartMonth;
-  const current = now.getFullYear() * 12 + now.getMonth() + 1;
-  return start < current
-    ? `${monthLabel(f.repaymentStartMonth, f.repaymentStartYear)} is already over: check that its payroll has not been run.`
-    : null;
-}
-
-/** What the create call sends: the body the page always sent, plus the over-the-limit remark of a Salary Advance when
- *  HR wrote one (the server keeps it only when the amount is above the limit). */
-export function toPayload(f: AdvanceForm) {
-  const term = f.advanceType === "term";
-  const limitRemark = term ? "" : cleanRemark(f.limitRemark ?? "");
-  return {
-    employeeId: Number(f.employeeId),
-    advanceType: f.advanceType,
-    amount: parseFloat(f.amount),
-    purpose: f.purpose.trim() || undefined,
-    repaymentMonths: term ? parseInt(f.repaymentMonths, 10) || undefined : undefined,
-    emiAmount: term ? parseFloat(f.emiAmount) || undefined : undefined,
-    repaymentStartMonth: f.repaymentStartMonth,
-    repaymentStartYear: f.repaymentStartYear,
-    ...(limitRemark ? { limitRemark } : {}),
-  };
-}
-
-/** The schedule the form would create once approved, or null while it is not complete enough to say. */
-export function formPreview(f: AdvanceForm): SchedulePreview | null {
-  const amount = num(f.amount);
-  if (!(amount > 0)) return null;
-  const p = toPayload(f);
-  if (f.advanceType === "term" && !p.repaymentMonths && !p.emiAmount) return null;
-  const preview = schedulePreview({
-    type: f.advanceType,
-    amount,
-    months: p.repaymentMonths,
-    emi: p.emiAmount,
-    startMonth: f.repaymentStartMonth,
-    startYear: f.repaymentStartYear,
-  });
-  return preview.items.length > 0 ? preview : null;
 }
 
 // ─── Export (Excel and PDF): the customisable report ───────────────────────────
@@ -1174,40 +1083,188 @@ export const DEFAULT_COLUMN_KEYS: readonly string[] = EXPORT_COLUMNS.slice(0, 12
 /** The extras, unticked by default. */
 export const EXTRA_COLUMN_KEYS: readonly string[] = EXPORT_COLUMNS.slice(12).map((c) => c.key);
 
-/** The chosen columns in the fixed order (whatever order they were ticked in); the default 12 when none is given. */
-export function exportColumns(keys: readonly string[] = DEFAULT_COLUMN_KEYS): ExportColumn[] {
-  const chosen = new Set(keys);
-  return EXPORT_COLUMNS.filter((c) => chosen.has(c.key));
+// ─── The Term Loan report (owner 2026-11-27: designed for Term Loans, not the Salary Advance's structure) ──────────
+
+const recoveringOrBlank = (a: SettlementRow, n: number) => (a.status === "approved" || a.status === "closed" ? n : "");
+
+/** The EMI months of a Term Loan as "YYYY-MM": the schedule it has, else the one an approval as it stands creates. */
+function emiMonths(a: SettlementRow): string[] {
+  if (a.scheduleMonths && a.scheduleMonths.length > 0) return a.scheduleMonths;
+  const p = previewForAdvance(a);
+  return p.items.map((i) => `${i.year}-${String(i.month).padStart(2, "0")}`);
+}
+const monthOfKey = (key: string | undefined) =>
+  key ? monthLabel(Number(key.slice(5, 7)), Number(key.slice(0, 4))) : "";
+
+/** A Term Loan's fixed monthly salary when it was raised (kept on the advance), else the earned figures'. */
+export const termSalaryOf = (a: SettlementRow): number | null => a.salaryAtRequest ?? a.earnings?.fixedSalary ?? null;
+
+export const TERM_EXPORT_COLUMNS: readonly ExportColumn[] = [
+  { key: "sno", header: "S.No", width: 6, weight: 6, numeric: true, value: (_a, i) => i + 1 },
+  { key: "code", header: "Employee Code", width: 13, weight: 12, value: (a) => a.employeeCode },
+  { key: "employee", header: "Employee", width: 24, weight: 22, value: (a) => a.employeeName },
+  { key: "department", header: "Department", width: 18, weight: 16, value: (a) => a.employeeDepartment ?? "" },
+  {
+    key: "fixedSalary",
+    header: "Fixed Salary",
+    width: 14,
+    weight: 14,
+    money: true,
+    value: (a) => orBlank(termSalaryOf(a)),
+  },
+  {
+    key: "termLimit",
+    header: "Eligible Limit",
+    width: 14,
+    weight: 14,
+    money: true,
+    value: (a) => orBlank(a.termLimit),
+  },
+  { key: "requested", header: "Requested Amount", width: 14, weight: 14, money: true, value: (a) => requestedOf(a) },
+  {
+    key: "approved",
+    header: "Approved Amount",
+    width: 14,
+    weight: 14,
+    money: true,
+    value: (a) => orBlank(approvedOf(a)),
+  },
+  { key: "months", header: "Months", width: 8, weight: 8, numeric: true, value: (a) => orBlank(a.repaymentMonths) },
+  {
+    key: "emi",
+    header: "Monthly EMI",
+    width: 12,
+    weight: 12,
+    money: true,
+    value: (a) => (a.status === "rejected" || !(a.emiAmount > 0) ? "" : a.emiAmount),
+  },
+  {
+    key: "firstEmi",
+    header: "First EMI",
+    width: 11,
+    weight: 11,
+    value: (a) => (a.status === "rejected" ? "" : monthOfKey(emiMonths(a)[0])),
+  },
+  {
+    key: "lastEmi",
+    header: "Last EMI",
+    width: 11,
+    weight: 11,
+    value: (a) => (a.status === "rejected" ? "" : monthOfKey(emiMonths(a).at(-1))),
+  },
+  {
+    key: "repaid",
+    header: "Repaid",
+    width: 12,
+    weight: 12,
+    money: true,
+    value: (a) => recoveringOrBlank(a, a.totalRepaid),
+  },
+  {
+    key: "outstanding",
+    header: "Outstanding",
+    width: 12,
+    weight: 13,
+    money: true,
+    value: (a) => recoveringOrBlank(a, a.outstanding),
+  },
+  { key: "status", header: "Status", width: 14, weight: 13, value: (a) => STATUS_LABEL[a.status] },
+  { key: "remarks", header: "Remarks", width: 26, weight: 22, value: () => "" },
+  // ── the extras ──
+  { key: "purpose", header: "Purpose", width: 24, weight: 24, value: (a) => a.purpose ?? "" },
+  { key: "branch", header: "Branch", width: 16, weight: 16, value: (a) => a.employeeBranch ?? "" },
+  { key: "designation", header: "Designation", width: 18, weight: 18, value: (a) => a.employeeDesignation ?? "" },
+  { key: "appliedOn", header: "Applied on", width: 12, weight: 14, value: (a) => formatDate(a.createdAt) },
+  {
+    key: "appliedBy",
+    header: "Applied by",
+    width: 14,
+    weight: 13,
+    value: (a) => (appliedByEmployee(a) ? "Employee (app)" : "HR"),
+  },
+  { key: "decidedBy", header: "Decided by", width: 16, weight: 16, value: decidedByOf },
+  {
+    key: "decidedOn",
+    header: "Decided on",
+    width: 12,
+    weight: 14,
+    value: (a) => (decidedAtOf(a) ? formatDate(decidedAtOf(a)) : ""),
+  },
+  {
+    key: "decisionRemark",
+    header: "Decision remark",
+    width: 30,
+    weight: 28,
+    value: (a) => (a.status === "pending" ? "" : (a.decisionRemark ?? "")),
+  },
+];
+
+/** The Term Loan report's 16 default columns, and its extras. */
+export const TERM_DEFAULT_COLUMN_KEYS: readonly string[] = TERM_EXPORT_COLUMNS.slice(0, 16).map((c) => c.key);
+export const TERM_EXTRA_COLUMN_KEYS: readonly string[] = TERM_EXPORT_COLUMNS.slice(16).map((c) => c.key);
+
+/** Which report a type gets: a Term Loan its own; a Salary Advance, and both types together, the Salary Advance one. */
+export type ColumnSet = "general" | "term";
+export const columnSetOf = (type: "all" | Advance["advanceType"] | null | undefined): ColumnSet =>
+  type === "term" ? "term" : "general";
+
+/** One report's columns: every column in order, the defaults, the extras, and where this browser remembers the choice. */
+export const COLUMN_SETS: Record<
+  ColumnSet,
+  { columns: readonly ExportColumn[]; defaults: readonly string[]; extras: readonly string[]; storageKey: string }
+> = {
+  general: {
+    columns: EXPORT_COLUMNS,
+    defaults: DEFAULT_COLUMN_KEYS,
+    extras: EXTRA_COLUMN_KEYS,
+    // v2: the default columns changed (owner 2026-11-26), so a choice remembered under v1 is not read
+    storageKey: "uktex.settlement.reportColumns.v2",
+  },
+  term: {
+    columns: TERM_EXPORT_COLUMNS,
+    defaults: TERM_DEFAULT_COLUMN_KEYS,
+    extras: TERM_EXTRA_COLUMN_KEYS,
+    storageKey: "uktex.settlement.termReportColumns.v1",
+  },
+};
+
+/** The chosen columns of a report in its fixed order (whatever order they were ticked in); its defaults when none is
+ *  given. */
+export function exportColumns(keys?: readonly string[], set: ColumnSet = "general"): ExportColumn[] {
+  const chosen = new Set(keys ?? COLUMN_SETS[set].defaults);
+  return COLUMN_SETS[set].columns.filter((c) => chosen.has(c.key));
 }
 
 /** A column choice as it can be trusted: known keys only, in the fixed order; null when nothing usable is left (then the
  *  default applies). */
-export function cleanColumnChoice(value: unknown): string[] | null {
+export function cleanColumnChoice(value: unknown, set: ColumnSet = "general"): string[] | null {
   if (!Array.isArray(value)) return null;
-  const keys = exportColumns(value.filter((v): v is string => typeof v === "string")).map((c) => c.key);
+  const keys = exportColumns(
+    value.filter((v): v is string => typeof v === "string"),
+    set,
+  ).map((c) => c.key);
   return keys.length > 0 ? keys : null;
 }
 
-/** Where this browser remembers the last column choice (one per browser; the page works without it). v2: the default
- *  columns changed (owner 2026-11-26), so a choice remembered under v1 is not read and everyone starts on the new default
- *  once. */
-export const COLUMN_CHOICE_KEY = "uktex.settlement.reportColumns.v2";
+/** Where this browser remembers the Salary Advance report's last column choice (the Term Loan report has its own). */
+export const COLUMN_CHOICE_KEY = COLUMN_SETS.general.storageKey;
 
-/** The column choice this browser remembers, or the default 12. Never throws (private window, blocked storage). */
-export function loadColumnChoice(): string[] {
+/** The column choice this browser remembers for a report, or its defaults. Never throws (private window, blocked
+ *  storage). */
+export function loadColumnChoice(set: ColumnSet = "general"): string[] {
   try {
-    const raw = window.localStorage.getItem(COLUMN_CHOICE_KEY);
-    return (raw && cleanColumnChoice(JSON.parse(raw))) || [...DEFAULT_COLUMN_KEYS];
+    const raw = window.localStorage.getItem(COLUMN_SETS[set].storageKey);
+    return (raw && cleanColumnChoice(JSON.parse(raw), set)) || [...COLUMN_SETS[set].defaults];
   } catch {
-    return [...DEFAULT_COLUMN_KEYS];
+    return [...COLUMN_SETS[set].defaults];
   }
 }
 
-/** Remembers the column choice in this browser (silently does nothing when storage is blocked). */
-export function saveColumnChoice(keys: readonly string[]): void {
+/** Remembers a report's column choice in this browser (silently does nothing when storage is blocked). */
+export function saveColumnChoice(keys: readonly string[], set: ColumnSet = "general"): void {
   try {
-    const clean = cleanColumnChoice([...keys]);
-    if (clean) window.localStorage.setItem(COLUMN_CHOICE_KEY, JSON.stringify(clean));
+    const clean = cleanColumnChoice([...keys], set);
+    if (clean) window.localStorage.setItem(COLUMN_SETS[set].storageKey, JSON.stringify(clean));
   } catch {
     /* storage blocked: the choice is simply not remembered */
   }
@@ -1296,19 +1353,41 @@ export function exportSummary(rows: SettlementRow[]): SummaryCard[] {
   ];
 }
 
+/** The Final Summary of a Term Loan report (owner 2026-11-27): the distinct employees, what was requested and approved,
+ *  the monthly EMIs of the loans approved (being repaid or not yet started) and what is still outstanding. */
+export function termExportSummary(rows: SettlementRow[]): SummaryCard[] {
+  const sum = (pick: (a: SettlementRow) => number | null | undefined) =>
+    round2(rows.reduce((total, a) => total + (Number(pick(a)) || 0), 0));
+  const live = (a: SettlementRow) => a.status === "approved";
+  return [
+    { label: "Total Employees", value: new Set(rows.map((a) => a.employeeId)).size, kind: "count" },
+    { label: "Total Requested", value: sum(requestedOf), kind: "money" },
+    { label: "Total Approved", value: sum(approvedOf), kind: "money" },
+    { label: "Total Monthly EMI", value: sum((a) => (live(a) ? a.emiAmount : 0)), kind: "money" },
+    {
+      label: "Total Outstanding",
+      value: sum((a) => (live(a) || a.status === "closed" ? a.outstanding : 0)),
+      kind: "money",
+    },
+  ];
+}
+
 /** The signatures at the foot of the report, as on the Salary Statement. */
 export const EXPORT_SIGNATURES = ["Prepared By", "Checked By", "HRM", "Auditor", "MD"] as const;
 
 /** The report: the rows given (pageView(all, s).shown) under the columns chosen (the owner's 12 by default). The title,
- *  subtitle, sheet and file name say the type, the status and the month (or All months). `total` is how many the type
- *  has in the month, to say "12 of 40". */
+ *  subtitle, sheet and file name say the page (Loan & Advance), the type, the status and the month (or All months):
+ *  "Loan & Advance – Salary Advance – Pending – November 2026", "Loan_Advance_Salary_Advance_Pending_November_2026".
+ *  `total` is how many the type has in the month, to say "12 of 40". */
 export function buildExport(
   rows: SettlementRow[],
   s: PageState,
   total: number,
-  columnKeys: readonly string[] = DEFAULT_COLUMN_KEYS,
+  columnKeys?: readonly string[],
 ): SettlementExport {
-  const columns = exportColumns(columnKeys);
+  // a Term Loan report has its own columns and Final Summary (owner 2026-11-27); the others are as they were
+  const set = columnSetOf(TAB_TYPE[s.tab]);
+  const columns = exportColumns(columnKeys, set);
   const lines = rows.map((a, i) => columns.map((c) => c.value(a, i)));
   // "Total (12 advances)" goes under Employee, or the first text column when Employee is not ticked
   const named = columns.findIndex((c) => c.key === "employee");
@@ -1324,14 +1403,14 @@ export function buildExport(
   const type = exportTypeLabel(s.tab);
   const when = periodLabel(s.period);
   return {
-    title: `Settlement - ${type} - ${statusText} - ${when}`,
+    title: `${LOAN_ADVANCE_TITLE} – ${type} – ${statusText} – ${when}`,
     subtitle: `${rows.length} of ${countOf(total, s.tab)} · Status: ${statusText}${scope ? ` · ${scope}` : ""}`,
     sheet: `${type} ${s.period ? `${MONTH_FULL[s.period.month - 1].slice(0, 3)} ${s.period.year}` : "all months"}`,
-    fileStem: `Settlement_${type}_${statusText}_${when}`,
+    fileStem: `Loan_Advance_${type}_${statusText}_${when}`,
     columns,
     rows: lines,
     totals,
-    summary: exportSummary(rows),
+    summary: set === "term" ? termExportSummary(rows) : exportSummary(rows),
   };
 }
 
@@ -1364,10 +1443,39 @@ export const bankFileTotal = (rows: SettlementRow[]): number =>
 
 const fileWord = (text: string) => text.replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "");
 
-/** "Settlement_Bank_File_Term_Loan_November_2026.xlsx" (the tab, then the month or All months). */
+/** "Loan_Advance_Bank_File_Term_Loan_November_2026.xlsx" (the page, then the month or All months). */
 export const bankFileName = (s: PageState): string =>
-  `Settlement_Bank_File_${fileWord(tabLabel(s.tab))}_${fileWord(periodLabel(s.period))}.xlsx`;
+  `Loan_Advance_Bank_File_${fileWord(tabLabel(s.tab))}_${fileWord(periodLabel(s.period))}.xlsx`;
 
 /** The bank file's sheet: "Term Loan Nov 2026". */
 export const bankFileSheet = (s: PageState): string =>
   `${tabLabel(s.tab)} ${s.period ? `${MONTH_FULL[s.period.month - 1].slice(0, 3)} ${s.period.year}` : "All months"}`;
+
+// ─── Several requests at once (owner 2026-11-27, round 5) ────────────────────────
+
+/** A request the bulk Approve / Reject may take: still waiting, and this login may decide its type. */
+export const bulkTickable = (a: SettlementRow, mayDecide: boolean): boolean => a.status === "pending" && mayDecide;
+
+/** The PUT body of a bulk step for one request: Approve = the full amount asked for (with the optional remark), Reject =
+ *  the one reason for all. */
+export function bulkDecisionPayload(
+  a: SettlementRow,
+  action: "approve" | "reject",
+  remark: string,
+): ApprovalPayload | RejectionPayload {
+  if (action === "reject") return rejectionPayload(remark);
+  return approvalPayload(a, { ...approvalDefaults(a), remark });
+}
+
+export type BulkResult = {
+  action: "approve" | "reject";
+  done: number;
+  failures: { id: number; name: string; text: string }[];
+};
+
+/** "3 approved; 1 could not be: Ravi Shankar (You can approve at most ...)". */
+export function bulkResultText(r: BulkResult): string {
+  const did = `${r.done} ${r.action === "approve" ? "approved" : "rejected"}`;
+  if (r.failures.length === 0) return `${did}.`;
+  return `${did}; ${r.failures.length} could not be: ${r.failures.map((f) => `${f.name} (${f.text})`).join("; ")}`;
+}

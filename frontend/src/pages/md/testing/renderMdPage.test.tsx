@@ -34,6 +34,7 @@ describe("renderMdPage", () => {
       "Leave & Holiday",
       "Requests",
       "Payroll",
+      "Loan & Advance",
       "Reports",
       "Recruitment",
       "Activity Logs",

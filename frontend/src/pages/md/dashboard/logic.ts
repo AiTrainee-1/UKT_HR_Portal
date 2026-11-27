@@ -275,6 +275,7 @@ const EXPLORE_QUESTIONS: Record<string, string> = {
   visitors: "How many visitors and outpasses were there recently, and is anything out of order?",
   "tea-break": "Are tea breaks costing us production time, and where is it worst?",
   payroll: "What did payroll cost the company last month, how much was deducted, and which departments cost the most?",
+  settlement: "Which Salary Advance and Term Loan requests are waiting for my decision?",
   reports: "Which reports should I read this week?",
   recruitment: "Are we hiring fast enough, and which positions have been open too long?",
   activity: "Has anything unusual happened in the system recently?",

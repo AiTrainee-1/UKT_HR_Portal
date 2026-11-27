@@ -11,10 +11,18 @@ import {
   settlementPdfColumns,
   settlementPdfRows,
 } from "./export";
-import { DEFAULT_SORT, NO_FILTERS, buildExport, type PageState, type SettlementRow } from "./logic";
+import {
+  DEFAULT_SORT,
+  NO_FILTERS,
+  TERM_DEFAULT_COLUMN_KEYS,
+  buildExport,
+  type PageState,
+  type SettlementRow,
+} from "./logic";
 
-// The Settlement exports (owner 2026-11-20, columns 2026-11-26): Excel and PDF of one tab's list as filtered, in the
+// The Loan & Advance exports (owner 2026-11-20, columns 2026-11-26): Excel and PDF of one tab's list as filtered, in the
 // status chosen, with the 12 columns (requested, the salary earned 1st-20th, approved, an empty Remarks) and a totals row.
+// The Term Loan tab has its own report (owner 2026-11-27): its own 16 columns and Final Summary.
 
 const row = (over: Partial<SettlementRow>): SettlementRow => ({
   id: 1,
@@ -22,7 +30,7 @@ const row = (over: Partial<SettlementRow>): SettlementRow => ({
   employeeCode: "E001",
   employeeName: "Asha Kumar",
   employeeDepartment: "Stitching",
-  advanceType: "term",
+  advanceType: "general",
   amount: 700,
   requestedAmount: 1000,
   purpose: "Medical",
@@ -53,7 +61,7 @@ const row = (over: Partial<SettlementRow>): SettlementRow => ({
 });
 
 const state = (over: Partial<PageState> = {}): PageState => ({
-  tab: "loan",
+  tab: "advance",
   period: { month: 11, year: 2026 },
   basis: "applied",
   filters: { ...NO_FILTERS, status: "approved" },
@@ -79,7 +87,7 @@ function drawn(doc: jsPDF, page?: number): string[] {
   return found;
 }
 
-describe("the Settlement workbook", () => {
+describe("the Loan & Advance workbook", () => {
   it("has the title with the tab and month, the scope line, the headings, a row per advance and the totals", async () => {
     const two = [
       row({}),
@@ -87,9 +95,9 @@ describe("the Settlement workbook", () => {
     ];
     const wb = await buildSettlementWorkbook(input(two));
     const ws = wb.worksheets[0];
-    expect(ws.name).toBe("Term Loan Nov 2026");
-    expect(String(ws.getCell(3, 1).value)).toBe("Settlement - Term Loan - Active - November 2026");
-    expect(String(ws.getCell(4, 1).value)).toContain("2 of 5 term loans · Status: Active. Amounts in rupees.");
+    expect(ws.name).toBe("Salary Advance Nov 2026");
+    expect(String(ws.getCell(3, 1).value)).toBe("Loan & Advance – Salary Advance – Active – November 2026");
+    expect(String(ws.getCell(4, 1).value)).toContain("2 of 5 salary advances · Status: Active. Amounts in rupees.");
     const headers = (ws.getRow(5).values as unknown[]).slice(1);
     expect(headers).toEqual([
       "S.No",
@@ -109,7 +117,7 @@ describe("the Settlement workbook", () => {
     expect(ws.getCell(6, col("S.No")).value).toBe(1);
     expect(ws.getCell(7, col("S.No")).value).toBe(2);
     expect(ws.getCell(6, col("Employee")).value).toBe("Asha Kumar");
-    expect(ws.getCell(6, col("Type")).value).toBe("Term Loan");
+    expect(ws.getCell(6, col("Type")).value).toBe("Salary Advance");
     expect(ws.getCell(6, col("Requested Amount")).value).toBe(1000);
     expect(ws.getCell(6, col("Fixed Salary")).value).toBe(26000);
     expect(ws.getCell(6, col("Working Days")).value).toBe(14.5);
@@ -123,7 +131,7 @@ describe("the Settlement workbook", () => {
     expect(ws.getCell(7, col("Fixed Salary")).value).toBeNull();
     expect(ws.getCell(7, col("Working Days")).value).toBeNull();
     expect(ws.getCell(7, col("Limit")).value).toBeNull();
-    expect(ws.getCell(8, col("Employee")).value).toBe("Total (2 term loans)");
+    expect(ws.getCell(8, col("Employee")).value).toBe("Total (2 salary advances)");
     expect(ws.getCell(8, col("Requested Amount")).value).toBe(3000);
     expect(ws.getCell(8, col("Fixed Salary")).value).toBe(26000);
     expect(ws.getCell(8, col("Earned Salary")).value).toBe(16120.5);
@@ -134,24 +142,28 @@ describe("the Settlement workbook", () => {
 
   it("names the file after the tab, the status and the month", () => {
     const name = exportFileName(buildExport([row({})], state(), 1), "xlsx");
-    expect(name).toMatch(/^Settlement_Term_Loan_Active_November_2026_\d{4}-\d{2}-\d{2}\.xlsx$/);
+    expect(name).toMatch(/^Loan_Advance_Salary_Advance_Active_November_2026_\d{4}-\d{2}-\d{2}\.xlsx$/);
     const all = exportFileName(
       buildExport([row({})], state({ tab: "overview", period: null, filters: NO_FILTERS }), 1),
       "pdf",
     );
-    expect(all).toMatch(/^Settlement_All_types_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
+    expect(all).toMatch(/^Loan_Advance_All_types_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/);
   });
 });
 
-describe("the Settlement PDF", () => {
+describe("the Loan & Advance PDF", () => {
   it("shares the A4 landscape width by the columns' weights", () => {
-    for (const tab of ["overview", "loan", "advance"] as const) {
+    for (const tab of ["overview", "advance"] as const) {
       const cols = settlementPdfColumns(buildExport([row({})], state({ tab }), 1));
       expect(cols.reduce((a, c) => a + c.mm, 0)).toBeCloseTo(277, 5);
       expect(cols).toHaveLength(12);
       expect(cols.find((c) => c.header.startsWith("Requested"))?.header).toBe("Requested Amount (Rs)");
       expect(cols.find((c) => c.header.startsWith("Working Days"))?.header).toBe("Working Days");
     }
+    // the Term Loan report: its own 16 columns on the same width
+    const term = settlementPdfColumns(buildExport([row({ advanceType: "term" })], state({ tab: "loan" }), 1));
+    expect(term).toHaveLength(16);
+    expect(term.reduce((a, c) => a + c.mm, 0)).toBeCloseTo(277, 5);
   });
 
   it("prints the amounts in Indian grouping and ends on a totals row", () => {
@@ -160,13 +172,14 @@ describe("the Settlement PDF", () => {
     expect(rows[0].cells).toContain("1,25,000");
     expect(rows[0].cells).toContain("1,00,000.5");
     expect(rows[1].total).toBe(true);
-    expect(rows[1].cells).toContain("Total (1 term loan)");
+    expect(rows[1].cells).toContain("Total (1 salary advance)");
   });
 
   it("draws the title with the status, the rows, the earned figures and the totals on an A4 landscape page", async () => {
     const doc = await buildSettlementPdf(input([row({})], state({ tab: "overview" })));
     const text = drawn(doc).join(" | ");
-    expect(text).toContain("Settlement - All types - Active - November 2026");
+    // the PDF's standard font has no en dash: the drawn title uses a plain one
+    expect(text).toContain("Loan & Advance - All types - Active - November 2026");
     expect(text).toContain("Asha Kumar");
     expect(text).toContain("16,120.5");
     expect(text).not.toContain("Budget limit this"); // HR's decision remark is not a column any more
@@ -234,7 +247,7 @@ describe("the Final Summary and the signatures", () => {
       );
       return at as { row: number; col: number } | null;
     };
-    const totals = find("Total (3 term loans)")!;
+    const totals = find("Total (3 salary advances)")!;
     const title = find("Final Summary")!;
     expect(title.row).toBe(totals.row + 3);
     expect(ws.getCell(title.row, 1).font?.bold).toBe(true);
@@ -298,7 +311,7 @@ describe("the Final Summary and the signatures", () => {
   it("PDF: the Final Summary and the signatures under the totals, no notes", async () => {
     const doc = await buildSettlementPdf(input(three, state({ filters: NO_FILTERS })));
     const text = drawn(doc).join(" | ");
-    expect(text).toContain("Total (3 term loans)");
+    expect(text).toContain("Total (3 salary advances)");
     expect(text).toContain("Final Summary");
     for (const label of [
       "Total Employee Count",
@@ -312,7 +325,7 @@ describe("the Final Summary and the signatures", () => {
     expect(text).toContain("Rs. 13,060.00");
     for (const title of ["Prepared By", "Checked By", "HRM", "Auditor", "MD"]) expect(text).toContain(title);
     expect(text).not.toMatch(/monthly fixed salary|Requested = what/);
-    expect(text.indexOf("Total (3 term loans)")).toBeLessThan(text.indexOf("Final Summary"));
+    expect(text.indexOf("Total (3 salary advances)")).toBeLessThan(text.indexOf("Final Summary"));
     expect(text.indexOf("Final Summary")).toBeLessThan(text.indexOf("Prepared By"));
     expect(text).toContain("Page 1 of 1");
   });
@@ -334,5 +347,130 @@ describe("the Final Summary and the signatures", () => {
     expect(second).toContain("MD");
     expect(second).toContain("Page 2 of 2");
     expect(first).toContain("Page 1 of 2");
+  });
+});
+
+// ───────────────────── the Term Loan report (owner 2026-11-27) ─────────────────────
+
+describe("the Term Loan report", () => {
+  // Asha: ₹30,000 approved over 3 months (whole-rupee EMIs ₹10,000), one EMI deducted; Ravi: waiting; Mani: rejected
+  const loan = (over: Partial<SettlementRow>): SettlementRow =>
+    row({
+      advanceType: "term",
+      salaryAtRequest: 30000,
+      termLimit: 30000,
+      requestedAmount: 30000,
+      amount: 30000,
+      emiAmount: 10000,
+      repaymentMonths: 3,
+      repaymentStartMonth: 12,
+      repaymentStartYear: 2026,
+      totalRepaid: 10000,
+      outstanding: 20000,
+      earnings: null,
+      ...over,
+    });
+  const loans = [
+    loan({}),
+    loan({
+      id: 2,
+      employeeId: 2,
+      employeeCode: "E002",
+      employeeName: "Ravi",
+      status: "pending",
+      requestedAmount: 12000,
+      amount: 12000,
+      emiAmount: 6000,
+      repaymentMonths: 2,
+      totalRepaid: 0,
+      outstanding: 12000,
+    }),
+    loan({
+      id: 3,
+      employeeId: 3,
+      employeeCode: "E003",
+      employeeName: "Mani",
+      status: "rejected",
+      requestedAmount: 5000,
+      amount: 5000,
+      emiAmount: 0,
+      totalRepaid: 0,
+      outstanding: 0,
+    }),
+  ];
+  const termState = state({ tab: "loan", filters: NO_FILTERS });
+
+  it("has its own 16 columns, in the owner's order, with Remarks empty", () => {
+    const table = buildExport(loans, termState, 3);
+    expect(table.columns.map((c) => c.header)).toEqual([
+      "S.No",
+      "Employee Code",
+      "Employee",
+      "Department",
+      "Fixed Salary",
+      "Eligible Limit",
+      "Requested Amount",
+      "Approved Amount",
+      "Months",
+      "Monthly EMI",
+      "First EMI",
+      "Last EMI",
+      "Repaid",
+      "Outstanding",
+      "Status",
+      "Remarks",
+    ]);
+    expect(TERM_DEFAULT_COLUMN_KEYS).toHaveLength(16);
+    const cell = (r: number, h: string) => table.rows[r][table.columns.findIndex((c) => c.header === h)];
+    expect(cell(0, "Fixed Salary")).toBe(30000);
+    expect(cell(0, "Eligible Limit")).toBe(30000);
+    expect(cell(0, "Approved Amount")).toBe(30000);
+    expect(cell(0, "Months")).toBe(3);
+    expect(cell(0, "Monthly EMI")).toBe(10000);
+    expect(cell(0, "First EMI")).toBe("Dec 2026");
+    expect(cell(0, "Last EMI")).toBe("Feb 2027");
+    expect(cell(0, "Repaid")).toBe(10000);
+    expect(cell(0, "Outstanding")).toBe(20000);
+    expect(cell(0, "Status")).toBe("Active");
+    expect(cell(0, "Remarks")).toBe("");
+    // a waiting loan has nothing repaid or outstanding yet; a rejected one no EMI and no months to deduct in
+    expect(cell(1, "Repaid")).toBe("");
+    expect(cell(1, "Outstanding")).toBe("");
+    expect(cell(2, "Monthly EMI")).toBe("");
+    expect(cell(2, "First EMI")).toBe("");
+  });
+
+  it("ends on its own Final Summary: employees, requested, approved, monthly EMI and outstanding", () => {
+    const summary = buildExport(loans, termState, 3).summary;
+    expect(summary).toEqual([
+      { label: "Total Employees", value: 3, kind: "count" },
+      { label: "Total Requested", value: 47000, kind: "money" },
+      { label: "Total Approved", value: 30000, kind: "money" }, // the waiting and the rejected are not approved
+      { label: "Total Monthly EMI", value: 10000, kind: "money" }, // active loans only
+      { label: "Total Outstanding", value: 20000, kind: "money" },
+    ]);
+    // whatever columns are ticked
+    expect(buildExport(loans, termState, 3, ["employee"]).summary).toEqual(summary);
+  });
+
+  it("Excel and PDF carry the Term Loan columns, the summary and the signatures", async () => {
+    const wb = await buildSettlementWorkbook(input(loans, termState));
+    const ws = wb.worksheets[0];
+    expect(ws.name).toBe("Term Loan Nov 2026");
+    const headers = (ws.getRow(5).values as unknown[]).slice(1);
+    expect(headers).toHaveLength(16);
+    expect(headers).toContain("Eligible Limit");
+    expect(headers).not.toContain("Earned Salary");
+    const values: unknown[] = [];
+    ws.eachRow((r) => r.eachCell((cell) => values.push(cell.value)));
+    for (const text of ["Final Summary", "Total Monthly EMI", "Total Outstanding", "Prepared By", "MD"])
+      expect(values).toContain(text);
+
+    const doc = await buildSettlementPdf(input(loans, termState));
+    const text = drawn(doc).join(" | ");
+    expect(text).toContain("Loan & Advance - Term Loan - All statuses - November 2026");
+    expect(text).toContain("Total Monthly EMI");
+    expect(text).toContain("Rs. 20,000.00");
+    expect(text).toContain("Prepared By");
   });
 });

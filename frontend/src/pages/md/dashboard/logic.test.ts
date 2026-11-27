@@ -274,6 +274,7 @@ describe("explore", () => {
       "leave",
       "requests",
       "payroll",
+      "settlement",
       "communications",
       "reports",
       "recruitment",
@@ -288,7 +289,7 @@ describe("explore", () => {
 
   it("works before the page list has loaded", () => {
     const tiles = exploreTiles(undefined);
-    expect(tiles).toHaveLength(20);
+    expect(tiles).toHaveLength(21);
     expect(tiles.every((t) => t.summary === "")).toBe(true);
   });
 });

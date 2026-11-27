@@ -20,12 +20,11 @@ import type { ExportCompany } from "../attendance/export";
 import {
   ALL_MONTHS,
   BASIS_OPTIONS,
-  DEFAULT_COLUMN_KEYS,
-  EXPORT_COLUMNS,
+  COLUMN_SETS,
   EXPORT_STATUS_OPTIONS,
-  EXTRA_COLUMN_KEYS,
   TYPE_LABEL,
   buildExport,
+  columnSetOf,
   countOf,
   currentPeriod,
   describeScope,
@@ -61,17 +60,27 @@ type Props = {
 };
 
 const TRIGGER = "h-9";
-const COLUMN_BY_KEY = new Map(EXPORT_COLUMNS.map((c) => [c.key, c]));
+const COLUMN_BY_KEY = {
+  general: new Map(COLUMN_SETS.general.columns.map((c) => [c.key, c])),
+  term: new Map(COLUMN_SETS.term.columns.map((c) => [c.key, c])),
+};
+
+/** The report the page starts from, with this browser's last column choice for its type's report. */
+function startingReport(page: PageState): ReportSettings {
+  const base = reportDefaults(page);
+  return { ...base, columns: loadColumnChoice(columnSetOf(base.type)) };
+}
 
 /**
- * The customisable Settlement report (owner 2026-11-26): the month, status, type, department, branch and Staff /
+ * The customisable Loan & Advance report (owner 2026-11-26): the month, status, type, department, branch and Staff /
  * Production start as the page shows them and can be changed here; the columns are tick-boxes (the owner's 12 by default,
- * extras after them), and this browser remembers the last choice. Excel or PDF, with totals for the ticked money columns.
+ * extras after them), and this browser remembers the last choice. A Term Loan report has its own columns, defaults and
+ * remembered choice (owner 2026-11-27). Excel or PDF, with totals for the ticked money columns.
  */
 export default function ExportDialog({ open, onClose, all, page, company }: Props) {
   const { toast } = useToast();
   // starts from the page as it is now, with this browser's last column choice
-  const [r, setSettings] = useState<ReportSettings>(() => reportDefaults(page, loadColumnChoice()));
+  const [r, setSettings] = useState<ReportSettings>(() => startingReport(page));
   const [busy, setBusy] = useState<"xlsx" | "pdf" | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -79,9 +88,12 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
     setSettings((prev) => ({ ...prev, ...p }));
     setSaved(null);
   };
+  // the report of the type chosen: a Term Loan its own, the others the Salary Advance's
+  const set = columnSetOf(r.type);
+  const cs = COLUMN_SETS[set];
   const setColumns = (columns: string[]) => {
     patch({ columns });
-    saveColumnChoice(columns);
+    saveColumnChoice(columns, set);
   };
 
   const state = useMemo(() => reportState(page, r), [page, r]);
@@ -107,12 +119,11 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
   });
   const chosen = new Set(r.columns);
   const toggle = (key: string, on: boolean) => {
-    const next = EXPORT_COLUMNS.filter((c) => (c.key === key ? on : chosen.has(c.key))).map((c) => c.key);
+    const next = cs.columns.filter((c) => (c.key === key ? on : chosen.has(c.key))).map((c) => c.key);
     if (next.length === 0) return; // at least one column stays ticked
     setColumns(next);
   };
-  const isDefaultColumns =
-    r.columns.length === DEFAULT_COLUMN_KEYS.length && DEFAULT_COLUMN_KEYS.every((k) => chosen.has(k));
+  const isDefaultColumns = r.columns.length === cs.defaults.length && cs.defaults.every((k) => chosen.has(k));
   const thisYear = currentPeriod().year;
 
   const run = async (kind: "xlsx" | "pdf") => {
@@ -137,7 +148,7 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
   };
 
   const columnBox = (key: string) => {
-    const c = COLUMN_BY_KEY.get(key)!;
+    const c = COLUMN_BY_KEY[set].get(key)!;
     const on = chosen.has(key);
     const last = on && r.columns.length === 1;
     return (
@@ -251,7 +262,12 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
               <Label className="text-xs">Type</Label>
               <Select
                 value={r.type}
-                onValueChange={(v) => patch({ type: v as ReportSettings["type"], department: "all" })}
+                onValueChange={(v) => {
+                  const type = v as ReportSettings["type"];
+                  // another report (Term Loan <-> the others): its own remembered columns
+                  const columns = columnSetOf(type) === set ? r.columns : loadColumnChoice(columnSetOf(type));
+                  patch({ type, department: "all", columns });
+                }}
               >
                 <SelectTrigger className={TRIGGER} aria-label="Report type" data-testid="report-type">
                   <SelectValue />
@@ -320,11 +336,11 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
         <section className="space-y-2" aria-label="Columns">
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-bold uppercase tracking-wider text-gray-400">
-              Columns ({r.columns.length} of {EXPORT_COLUMNS.length})
+              Columns ({r.columns.length} of {cs.columns.length})
             </p>
             <button
               type="button"
-              onClick={() => setColumns([...DEFAULT_COLUMN_KEYS])}
+              onClick={() => setColumns([...cs.defaults])}
               disabled={isDefaultColumns}
               className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 hover:underline disabled:cursor-default disabled:text-gray-400 disabled:no-underline"
               data-testid="report-columns-reset"
@@ -333,16 +349,18 @@ export default function ExportDialog({ open, onClose, all, page, company }: Prop
             </button>
           </div>
           <div className="rounded-xl border bg-white p-2">
-            <p className="px-1.5 pb-1 text-[11px] font-semibold text-gray-500">The owner's columns</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3">{DEFAULT_COLUMN_KEYS.map(columnBox)}</div>
+            <p className="px-1.5 pb-1 text-[11px] font-semibold text-gray-500" data-testid="report-columns-title">
+              {set === "term" ? "The Term Loan report's columns" : "The owner's columns"}
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-3">{cs.defaults.map(columnBox)}</div>
             <p className="mt-2 border-t px-1.5 pb-1 pt-2 text-[11px] font-semibold text-gray-500">More columns</p>
-            <div className="grid grid-cols-2 sm:grid-cols-3">{EXTRA_COLUMN_KEYS.map(columnBox)}</div>
+            <div className="grid grid-cols-2 sm:grid-cols-3">{cs.extras.map(columnBox)}</div>
           </div>
         </section>
 
         <p className="text-xs text-gray-600" data-testid="report-summary">
           <b>{countOf(rows.length, tab)}</b> · {exportTypeLabel(tab)} · {exportStatusLabel(r.status)} ·{" "}
-          {periodLabel(r.period)} · {exportColumns(r.columns).length} columns
+          {periodLabel(r.period)} · {exportColumns(r.columns, set).length} columns
         </p>
         {saved && (
           <p className="text-xs font-medium text-emerald-700" data-testid="report-saved">

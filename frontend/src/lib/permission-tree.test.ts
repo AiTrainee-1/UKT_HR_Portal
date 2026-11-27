@@ -59,6 +59,9 @@ const OLD_ROUTE_MODULE_MAP: Record<string, string> = {
   // Missed Payroll (2026-11-23) is a new page whose key inherits payroll: whoever could open Staff Payroll opens it the same way
   "/hr/missed-payroll": "payroll",
   "/hr/settlement": "settlement",
+  // Loan & Advance (2026-11-27) is the Settlement page renamed (its old address redirects): the same key, so whoever could
+  // open Settlement opens its Overview, Salary Advance and Term Loan pages the same way
+  "/hr/Loan&Advance": "settlement",
   // Analytics (2026-11-21) is a new page whose key inherits attendance: whoever could open Attendance opens it the same way
   "/hr/analytics": "attendance",
   "/hr/reports": "reports",
@@ -235,6 +238,9 @@ const SIDEBAR_CHILDREN = [
   "/hr/production-payroll/weekly",
   "/hr/compensation/ctc-breakdown",
   "/hr/compensation/history",
+  "/hr/Loan&Advance",
+  "/hr/Loan&Advance/salary-advance",
+  "/hr/Loan&Advance/term-loan",
   "/hr/recruitment/dashboard",
   "/hr/recruitment/new-joinees",
   "/hr/interviews",

@@ -57,6 +57,7 @@ const MdReports = lazy(() => import("@/pages/md/MdReports"));
 const MdRecruitment = lazy(() => import("@/pages/md/MdRecruitment"));
 const MdActivity = lazy(() => import("@/pages/md/MdActivity"));
 const MdApprovals = lazy(() => import("@/pages/md/MdApprovals"));
+const MdSettlement = lazy(() => import("@/pages/md/MdSettlement"));
 const MdCommunications = lazy(() => import("@/pages/md/MdCommunications"));
 
 // HR pages
@@ -132,6 +133,8 @@ const GeoAttendance = lazy(() => import("@/pages/hr/GeoAttendance"));
 const AttendancePunchSearch = lazy(() => import("@/pages/hr/AttendancePunchSearch"));
 const HrChat = lazy(() => import("@/pages/hr/Chat"));
 const VerifyEmployee = lazy(() => import("@/pages/VerifyEmployee"));
+// Auditor Review Portal (2026-11-27): public, opened from the e-mailed review link (no HRMS login)
+const AuditorReview = lazy(() => import("@/pages/auditor-review/AuditorReview"));
 
 // Employee pages
 const EmployeeDashboard = lazy(() => import("@/pages/employee/Dashboard"));
@@ -163,6 +166,15 @@ import {
   ErpReports,
   ErpSettings,
 } from "@/pages/erp/ErpPlaceholder";
+// /md/settlement -> /md/loan-advance (tiny, so imported directly rather than lazily)
+import LegacySettlementRedirect from "@/pages/md/settlement/LegacyRedirect";
+// Loan & Advance's addresses and where the old Settlement ones go (no imports of its own, so not lazily)
+import {
+  LEGACY_SETTLEMENT_BASE,
+  LOAN_ADVANCE_BASE,
+  LOAN_ADVANCE_BASE_ENCODED,
+  legacySettlementTarget,
+} from "@/pages/hr/settlement/routes";
 
 // Retry a failed query once, and only when the request never got an answer (offline, DNS, a dropped connection). An
 // HTTP error is the server's answer: a 4xx fails the same way again, and a 5xx/504 means the single worker is already
@@ -323,6 +335,8 @@ function Router() {
         <Route path="/set-password" component={SetPassword} />
         <Route path="/apply/job/:id" component={JobApply} />
         <Route path="/verify/:code" component={VerifyEmployee} />
+        {/* the auditor's review of a Loan & Advance settlement: the token in the address is the key, no sign-in */}
+        <Route path="/auditor-review/:token" component={AuditorReview} />
         <Route path="/db-offline" component={DatabaseOffline} />
         <Route path="/server-error">{() => <ServerError />}</Route>
         <Route path="/gate/outpass/:token" component={OutpassGate} />
@@ -493,7 +507,18 @@ function Router() {
         <Route path="/hr/compensation/*?">
           {() => <ProtectedRoute component={Compensation} allowedRoles={["hr"]} />}
         </Route>
-        <Route path="/hr/settlement">{() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}</Route>
+        {/* Loan & Advance (the Settlement page, renamed 2026-11-27): the Overview and one page per type under one prefix,
+          gated by the one `settlement` module; the component picks the page (and the method) from the path. The old
+          /hr/settlement (?tab=advance -> Salary Advance, ?tab=loan -> Term Loan) and a percent-encoded "&" redirect. */}
+        <Route path="/hr/Loan&Advance/*?">
+          {() => <ProtectedRoute component={Settlement} allowedRoles={["hr"]} />}
+        </Route>
+        <Route path={`${LOAN_ADVANCE_BASE_ENCODED}/*?`}>
+          {() => <MovedTo from={LOAN_ADVANCE_BASE_ENCODED} to={LOAN_ADVANCE_BASE} />}
+        </Route>
+        <Route path={`${LEGACY_SETTLEMENT_BASE}/*?`}>
+          {() => <Redirect to={legacySettlementTarget(window.location.search, window.location.hash)} replace />}
+        </Route>
         <Route path="/hr/reports">{() => <ProtectedRoute component={Reports} allowedRoles={["hr"]} />}</Route>
         {/* Report Center -> Customise: the report builder (a new report, or a saved one; running it stays /hr/reports) */}
         <Route path="/hr/reports/customise/new">
@@ -520,6 +545,10 @@ function Router() {
         </Route>
         {/* HOD Approvals: one page per Department Head of the MD department (/md/approvals/<id>), picked in the sidebar */}
         <Route path="/md/approvals/*?">{() => <ProtectedRoute component={MdApprovals} allowedRoles={["hr"]} />}</Route>
+        {/* Loan & Advance: the MD's step of the Settlement Automation Method (batches HR forwards; Confirm & Proceed).
+            /md/settlement was its address until 2026-11-27: it goes there, query kept. */}
+        <Route path="/md/loan-advance">{() => <ProtectedRoute component={MdSettlement} allowedRoles={["hr"]} />}</Route>
+        <Route path="/md/settlement">{() => <LegacySettlementRedirect />}</Route>
         {/* The analytics pages that used to be separate now live inside the pages they analyse. */}
         <Route path="/md/visitors">{() => <Redirect to="/md/outpass-visitors/visitors" replace />}</Route>
         <Route path="/md/tea-break">{() => <Redirect to="/md/outpass-visitors/tea-break" replace />}</Route>

@@ -87,6 +87,7 @@ API_ALLOWLIST: tuple[tuple[str, str], ...] = (
     (r"payroll-settings", "read by every page; each saved field is checked against its Settings tab (FIELD_GROUPS)"),
     (r"pf-esi-settings", "read by the payroll screens; only the Super Admin changes it (checked in the view)"),
     (r"support-contact", "the HR contact on the sign-in screens: no login"),
+    (r"auditor-review/[^/]+(/.*)?", "the Auditor Review Portal: no login, the e-mailed expiring token is the key"),
     (r"mobile-app/latest-version", "the app's update check: no login"),
     (r"theme-settings(/update)?", "the portal's colours: ungated before 2026-11-11 (permission-inventory.md, Gaps)"),
 )
@@ -120,6 +121,10 @@ NEW_SINCE_SNAPSHOT: tuple[tuple[str, str], ...] = (
     (r"enquiries(/.*)?", "requests"),
     # On-Duty overtime punch photos, 2026-11-24: follow Geo Attendance (Punch Verifications)
     (r"on-duty-overtime-punches(/.*)?", "geo_attendance"),
+    # Settlement Automation Method, 2026-11-26: the Settlement page's own workflow (module settlement)
+    (r"settlement-automation(/.*)?", "settlement"),
+    # Settings -> Settlement (the method and the e-mail addresses), 2026-11-26: follows Settings until a role sets it
+    (r"settlement-settings", "settings"),
 )
 
 

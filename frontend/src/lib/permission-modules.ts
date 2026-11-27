@@ -182,6 +182,9 @@ const BASE_ROUTE_MODULE_MAP: Record<string, string> = {
   "/hr/salary": "salary",
   // "/hr/salary-slip" (the standalone Salary Slip page, 2026-11-20) comes from the tree: salary_slip_center claims it
   // "/hr/missed-payroll" (Missed Payroll, 2026-11-23) comes from the tree too: missed_payroll claims it
+  // Loan & Advance (the Settlement page, renamed 2026-11-27): the Overview, /salary-advance and /term-loan under it; the
+  // old address only redirects now, kept so a stale link is gated the same way
+  "/hr/Loan&Advance": "settlement",
   "/hr/settlement": "settlement",
   "/hr/reports": "reports",
   "/hr/user-management": "user_management",

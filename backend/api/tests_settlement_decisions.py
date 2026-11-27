@@ -74,11 +74,9 @@ class AdvanceDecisionTests(TestCase):
         self.assertEqual(res.json()["history"][0]["remark"], "")
 
     def test_never_more_than_was_asked_for_even_when_hr_recorded_it(self):
-        res = self.client.post(URL, {"employeeId": self.emp.id, "amount": 1500, "advanceType": "general",
-                                     "limitRemark": "No attendance yet this month"},
-                               content_type="application/json", **self.auth)  # fmt: skip
-        self.assertEqual(res.status_code, 201, res.content)
-        adv = Advance.objects.get(pk=res.json()["id"])
+        # an advance HR raised (since 2026-11-27 HR's POST follows the employee rules; tests_advance_earnings covers it)
+        adv = Advance.objects.create(employee=self.emp, advance_type="general", amount=Decimal("1500"),
+                                     requested_amount=Decimal("1500"), outstanding=Decimal("1500"))  # fmt: skip
         self.assertEqual(adv.requested_amount, Decimal("1500.00"))
         res = self.put(adv, {"status": "approved", "amount": 2000, "decisionRemark": "More"})
         self.assertEqual(res.status_code, 400)

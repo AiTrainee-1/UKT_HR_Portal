@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryOptions } from "@tanstack/react-query";
 import { customFetch } from "../custom-fetch";
+import type { SalaryAdvanceRules, TermLoanRules } from "./settlement-automation";
 import type { ApprovalProgress } from "../../approval-workflow";
 
 export type EmployeeRequest = {
@@ -78,6 +79,23 @@ export type Advance = {
   bankAccount?: string | null;
   bankIfsc?: string | null;
   bankName?: string | null;
+  /** The leave check (2026-11-26, both Settlement methods): leave in the 1st-20th of the month the advance was raised
+   *  in; null (or absent on an older server) until it is worked out. */
+  leaveCheck?: AdvanceLeaveCheck | null;
+  /** A Term Loan's eligible limit when it was raised (Settings' % of the fixed monthly salary, 2026-11-27). */
+  termLimit?: number | null;
+};
+
+/** Absent days + approved leave (an approved half-day leave 0.5) on the working days of the 1st-20th of the month an
+ *  advance was raised in (advance_earnings.leave_check_json). Casual Leave, Sundays, holidays and days not judged yet
+ *  never count. Exactly `warningAt` (3) days is a warning (orange), more is critical (red). */
+export type AdvanceLeaveCheck = {
+  month: number;
+  year: number;
+  throughDay: number;
+  days: number;
+  flag: "ok" | "warning" | "critical";
+  warningAt: number;
 };
 
 /** The salary earned from the 1st to the 20th of a month (advance_earnings.earnings_json / Earnings.to_json). */
@@ -206,21 +224,24 @@ export const useListAdvances = <TData = Advance[]>(
     ...options,
   });
 
+/** What HR sends to raise a request on an employee's behalf (owner 2026-11-27): exactly the employee apps' form. The
+ *  server runs the employee rules on it (mobile_settlement_views.apply_for): the Salary Advance window (21st-22nd) and
+ *  its 50 % earned limit, one a month, the Term Loan's 6 months of service, 1-12 months, from Rs 1,000; the first
+ *  deduction month is fixed by the rules. Refusals carry `code` (window_closed, over_limit, duplicate, service,
+ *  no_salary, inactive, invalid ...) and, for a field, `field`. */
+export type CreateAdvanceInput = {
+  employeeId: number;
+  advanceType: Advance["advanceType"];
+  /** Whole rupees. */
+  amount: number;
+  /** Term Loan only: 1-12. */
+  repaymentMonths?: number;
+  purpose: string;
+};
+
 export const useCreateAdvance = () =>
   useMutation({
-    mutationFn: (data: {
-      employeeId: number;
-      advanceType: string;
-      amount: number;
-      purpose?: string;
-      emiAmount?: number;
-      repaymentMonths?: number;
-      repaymentStartMonth?: number;
-      repaymentStartYear?: number;
-      notes?: string;
-      /** Why HR records a Salary Advance above the 50 % earned limit (required then: 400 over_limit without it). */
-      limitRemark?: string;
-    }) =>
+    mutationFn: (data: CreateAdvanceInput) =>
       customFetch<Advance>("/api/advances", {
         method: "POST",
         body: JSON.stringify(data),
@@ -260,6 +281,114 @@ export const useAdvanceEarnings = (employeeId: number | null) =>
     queryFn: () => customFetch<AdvanceEarningsPreview>(`/api/advances/earnings?employeeId=${employeeId}`),
     enabled: employeeId !== null && employeeId > 0,
     staleTime: 60_000,
+  });
+
+/** A form's window (mobile_settlement_views.window / term_window): a Salary Advance opens on the 21st and 22nd, a Term
+ *  Loan any day (`alwaysOpen`). */
+export type AdvanceWindow = {
+  isOpen: boolean;
+  opensOn: string | null;
+  closesOn: string | null;
+  nextOpensOn: string | null;
+  daysUntilOpen: number;
+  daysLeft: number | null;
+  /** The window in words, as the employee app says it. */
+  message: string;
+  type?: Advance["advanceType"];
+  label?: string;
+  alwaysOpen?: boolean;
+};
+
+/** GET /api/advances/eligibility?employeeId= (2026-11-27): the employee app's own eligibility for one employee (the
+ *  New request dialog) - which form may be sent now and why not, the 1st-20th earned figures and the Salary Advance
+ *  limit, a request already this month, the Term Loan's service check, the rules. */
+export type AdvanceEligibility = {
+  /** The server's today (India), "YYYY-MM-DD". */
+  today: string;
+  /** The Salary Advance window. */
+  window: AdvanceWindow;
+  windows?: { general: AdvanceWindow; term: AdvanceWindow };
+  workflowEnabled: boolean;
+  /** Why new requests are switched off (Approval Workflow Control), when they are. */
+  workflowMessage: string | null;
+  employeeActive: boolean;
+  monthlySalary: number | null;
+  salaryAdvance: {
+    canApply: boolean;
+    /** Why not, in the employee app's words; null when it can be sent. */
+    reason: string | null;
+    percent: number;
+    /** The most that can be asked for (50 % of the 1st-20th earned salary); null without figures. */
+    limit: number | null;
+    deductionMonth: number;
+    deductionYear: number;
+    /** "November 2026": deducted in full from this month's salary. */
+    deductionLabel: string;
+    existing: { id: number; status: string; amount: number } | null;
+    limitBasis?: string;
+    /** The earned figures the limit is taken from (the 1st to Settings' day; null after the window or without a monthly
+     *  salary); `final` once that day is over (before it: earned so far). */
+    earned: (AdvanceEarnings & { final?: boolean }) | null;
+    /** The Salary Advance rules of Settings (2026-11-27). */
+    rules?: SalaryAdvanceRules;
+  };
+  termLoan: {
+    canApply: boolean;
+    reason: string | null;
+    minMonths: number;
+    maxMonths: number;
+    minAmount: number;
+    maxAmount: number;
+    firstDeductionMonth: number;
+    firstDeductionYear: number;
+    /** "December 2026": the first EMI is taken from this month's salary. */
+    firstDeductionLabel: string;
+    /** A Term Loan of this employee still waiting for a decision (a new one waits until it is decided). */
+    pending: { id: number; amount: number } | null;
+    activeCount: number;
+    /** The service rule (Settings' months). */
+    service: TermLoanService;
+    /** The most this employee may ask for: Settings' % of the fixed monthly salary (null: no Term Loan). */
+    limit?: number | null;
+    limitPercent?: number;
+    monthlySalary?: number | null;
+    /** Term Loans approved this calendar year, and how many Settings allows. */
+    approvedThisYear?: number;
+    perYear?: number;
+    /** The waiting or active Term Loan (one at a time). */
+    open?: { id: number; status: string; amount: number } | null;
+    rejectedThisMonth?: boolean;
+    /** When the employee may apply again (a blocked Term Loan). */
+    nextEligibleOn?: string | null;
+    /** Why not: staff_only, no_salary, service, pending, active, yearly, rejected_this_month. */
+    code?: string | null;
+    rules?: TermLoanRules;
+  };
+  /** The rules, one line each, as the employee app lists them. */
+  rules: string[];
+  approvalPath?: string;
+  employee: {
+    id: number;
+    code: string;
+    name: string;
+    department: string | null;
+    branch: string | null;
+    /** "staff" | "production". */
+    type: string | null;
+    joinDate: string | null;
+  };
+};
+
+export const getAdvanceEligibilityQueryKey = (employeeId: number) => ["/api/advances/eligibility", employeeId] as const;
+
+/** What the employee could apply for now, for HR's New request dialog (the employee rules, 2026-11-27). Always read fresh:
+ *  the window and "one a month" change with the day and with other requests. */
+export const useAdvanceEligibility = (employeeId: number | null) =>
+  useQuery({
+    queryKey: getAdvanceEligibilityQueryKey(employeeId ?? 0),
+    queryFn: () => customFetch<AdvanceEligibility>(`/api/advances/eligibility?employeeId=${employeeId}`),
+    enabled: employeeId !== null && employeeId > 0,
+    staleTime: 0,
   });
 
 export const useCreateAdvanceRepayment = () =>

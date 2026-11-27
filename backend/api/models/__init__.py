@@ -231,3 +231,10 @@ from .payroll_excess import PayrollExcessEntry, PayrollExcessHistory
 from .factory import FactoryLabel
 from .enquiries import Enquiry
 from .birthday_compensation import BirthdayCompensationUse
+from .settlement_automation import (
+    SettlementAuditorLink,
+    SettlementBatch,
+    SettlementBatchFile,
+    SettlementBatchItem,
+    SettlementSettings,
+)

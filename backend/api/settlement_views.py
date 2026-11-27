@@ -7,7 +7,8 @@ from rest_framework.decorators import api_view
 from rest_framework.request import Request
 from rest_framework.response import Response
 
-from . import advance_earnings, approval_workflow as approval, hr_access, whatsapp_approvals
+from . import advance_earnings, advance_rules, approval_workflow as approval, hr_access, whatsapp_approvals
+from .audit_utils import log_action
 from .auth import require_hr, require_auth, get_token_employee_id, get_hr_display_name, is_hr
 from .clock import ist_today
 from .models import Advance, AdvanceDecision, AdvanceRepayment, Employee
@@ -119,6 +120,11 @@ def advance_json(a: Advance, include_repayments: bool = False, include_bank: boo
         "typeLabel": TYPE_LABELS.get(a.advance_type, "Advance"),
         "earnings": advance_earnings.earnings_json(a),
         "limitRemark": a.limit_remark or "",
+        # additive (2026-11-27): a Term Loan's limit when asked for (Settings' % of the fixed monthly salary)
+        "termLimit": float(a.term_limit) if getattr(a, "term_limit", None) is not None else None,
+        # additive (2026-11-26): leave taken in the 1st-20th (absent + approved leave; not CL) and its flag:
+        # null | {month, year, throughDay, days, flag: ok|warning|critical, warningAt: 3}
+        "leaveCheck": advance_earnings.leave_check_json(a),
     }
     if include_bank:
         # HR's list only (2026-11-26): the Settlement page's Export Bank File, same fields as the payroll rows
@@ -129,6 +135,26 @@ def advance_json(a: Advance, include_repayments: bool = False, include_bank: boo
         data["repayments"] = [repayment_json(r) for r in a.repayments.order_by("year", "month", "id")]
         data["history"] = [decision_json(d) for d in a.decisions.all()]
     return data
+
+
+# From this day HR raises a request by the employee rules (mobile_settlement_views.apply_for, owner 2026-11-27): its Term
+# Loan EMI is whole rupees like an employee's. Advances HR recorded before it keep the EMI they were created with.
+EMPLOYEE_RULES_FOR_HR_FROM = "2026-11-27"
+
+
+def _raised_by_employee_rules(adv: Advance) -> bool:
+    from .clock import FACTORY_TZ
+
+    if adv.applied_by != Advance.APPLIED_BY_HR or not adv.created_at:
+        return False
+    return adv.created_at.astimezone(FACTORY_TZ).date().isoformat() >= EMPLOYEE_RULES_FOR_HR_FROM
+
+
+def _in_workflow(adv: Advance) -> bool:
+    """Forwarded to the MD (or further) in the Settlement Automation Method's workflow (2026-11-26)."""
+    from .settlement_automation.service import FORWARDED
+
+    return Advance.objects.filter(pk=adv.pk, settlement_item__batch__stage__in=FORWARDED).exists()
 
 
 def decision_json(d: AdvanceDecision) -> dict:
@@ -199,7 +225,9 @@ def advances(request: Request) -> Response:
         # for a waiting one asked for before its month's 20th was over); later reads use what is kept
         if not token_emp_id:  # HR reads only; a few per read (the deploy runs `manage.py fill_advance_earnings`)
             advance_earnings.fill_missing(
-                qs.filter(Q(earned_on__isnull=True) | Q(status="pending"))[: advance_earnings.FILL_PER_READ * 4]
+                qs.filter(Q(earned_on__isnull=True) | Q(leave_days_1_20__isnull=True) | Q(status="pending"))[
+                    : advance_earnings.FILL_PER_READ * 4
+                ]
             )
         if token_emp_id:
             return paginate(request, qs, advance_json)
@@ -208,70 +236,82 @@ def advances(request: Request) -> Response:
     if not is_hr(request):
         return Response({"error": "HR access required"}, status=403)
 
-    # POST -create new advance
-    data = request.data
-    if not data.get("employeeId") or not data.get("amount") or not data.get("advanceType"):
-        return Response({"error": "employeeId, amount, advanceType are required"}, status=400)
-    if data["advanceType"] not in TYPE_LABELS:
-        return Response({"error": "advanceType must be general (Salary Advance) or term (Term Loan)"}, status=400)
+    # POST - HR raises a Salary Advance / Term Loan request on an employee's behalf (owner 2026-11-27): exactly the rules
+    # of a request from the employee apps (mobile_settlement_views.apply_for: the 21st-22nd window and the 50 % limit of
+    # the 1st-20th earned salary for a Salary Advance, one a month, a Term Loan only after 6 months of service, 1-12
+    # months from Rs 1,000, the first deduction month fixed) and the same approval workflow. The old "record any amount,
+    # over the limit with a remark" is gone.
+    from .mobile_settlement_views import apply_for
 
+    data = request.data if hasattr(request.data, "get") else {}
     try:
-        emp = Employee.objects.get(pk=data["employeeId"])
-    except Employee.DoesNotExist:
-        return Response({"error": "Employee not found"}, status=404)
-
-    try:
-        approval.require_enabled("advance")  # HR can switch new advances off in Approval Workflow Control
-    except approval.ApprovalError as exc:
-        return approval.refusal(exc)
-
-    amount = float(data["amount"])
-    repayment_months = int(data["repaymentMonths"]) if data.get("repaymentMonths") else None
-
-    # Salary Advance limit (owner 2026-11-26): 50 % of the salary earned in the 1st-20th of this month. Employees can never
-    # ask for more; HR may record more, with a remark saying why.
-    today = ist_today()
-    earnings = advance_earnings.earned_in_month(emp, today.month, today.year)
-    limit_remark = " ".join(str(data.get("limitRemark") or "").split())[:1000]
-    if data["advanceType"] == "general" and earnings is not None and Decimal(str(amount)) > earnings.limit:
-        if len(limit_remark) < REMARK_MIN:
-            return Response(
-                {
-                    "error": f"{inr(amount)} is above the Salary Advance limit of {inr(earnings.limit)} (50% of "
-                    f"{inr(earnings.earned)} earned from the 1st to the 20th). Write a remark to record it anyway.",
-                    "code": "over_limit",
-                    "limit": float(earnings.limit),
-                },
-                status=400,
-            )
-    else:
-        limit_remark = ""
-    emi = float(data.get("emiAmount", 0))
-
-    # Auto-calculate EMI from months if only months provided
-    if repayment_months and not emi:
-        emi = round(amount / repayment_months, 2)
-
-    adv = Advance.objects.create(
-        employee=emp,
-        advance_type=data["advanceType"],
-        amount=amount,
-        requested_amount=amount,  # what was asked for, kept for audit when a smaller amount is approved (2026-11-20)
-        purpose=data.get("purpose"),
-        emi_amount=emi,
-        repayment_months=repayment_months,
-        outstanding=amount,
-        repayment_start_month=data.get("repaymentStartMonth"),
-        repayment_start_year=data.get("repaymentStartYear"),
-        notes=data.get("notes"),
-        limit_remark=limit_remark,
+        emp = Employee.objects.get(pk=int(data.get("employeeId") or 0))
+    except (Employee.DoesNotExist, TypeError, ValueError):
+        return Response({"error": "Choose the employee.", "code": "employee", "field": "employeeId"}, status=404)
+    result = apply_for(emp, data, applied_by=Advance.APPLIED_BY_HR)
+    if isinstance(result, Response):
+        return result
+    adv = (
+        Advance.objects.select_related("employee", "employee__department", "employee__designation", "employee__branch")
+        .prefetch_related("repayments")
+        .get(pk=result.pk)
     )
-    advance_earnings.store(adv, earnings, today)
-    return Response(advance_json(adv), status=201)
+    log_action(
+        request,
+        "create",
+        "settlement",
+        record_id=adv.pk,
+        description=f"{TYPE_LABELS.get(adv.advance_type, 'Advance')} request of {inr(adv.amount)} raised for "
+        f"{emp.first_name} {emp.last_name} ({emp.employee_code})",
+    )
+    return Response(advance_json(adv, include_bank=True), status=201)
+
+
+@api_view(["GET"])
+@require_hr
+def advance_leave_calendar(request: Request, pk: int) -> Response:
+    """GET /api/advances/<id>/leave-calendar (2026-11-27): the leave days of the 1st-Nth of the month the request was
+    raised in (absent, on leave, half-day leave), for the Leave column's calendar."""
+    adv = Advance.objects.select_related("employee").filter(pk=pk).first()
+    if adv is None:
+        return Response({"error": "Advance not found", "code": "not_found"}, status=404)
+    if hr_access.out_of_branch(request, adv.employee.branch_id):
+        return Response({"error": "Advance not found", "code": "not_found"}, status=404)
+    return Response(advance_earnings.leave_calendar_json(adv))
+
+
+@api_view(["GET"])
+@require_hr
+def advance_eligibility(request: Request) -> Response:
+    """GET /api/advances/eligibility?employeeId= (2026-11-27): what HR's New request dialog shows for one employee - the
+    very eligibility the employee's own app gets (mobile_settlement_views.eligibility_json: the Salary Advance window,
+    the 50 % limit of the 1st-20th earned salary with its figures, a request already this month, the Term Loan's 6-month
+    service check, the rules)."""
+    from .mobile_settlement_views import eligibility_json
+
+    try:
+        emp = Employee.objects.select_related("department", "branch").get(pk=int(request.query_params.get("employeeId") or 0))
+    except (Employee.DoesNotExist, TypeError, ValueError):
+        return Response({"error": "Employee not found", "code": "not_found"}, status=404)
+    body = eligibility_json(emp, ist_today())
+    body["employee"] = {
+        "id": emp.id,
+        "code": emp.employee_code,
+        "name": f"{emp.first_name} {emp.last_name}".strip(),
+        "department": emp.department.name if emp.department_id else None,
+        "branch": emp.branch.name if emp.branch_id else None,
+        "type": emp.employment_type,
+        "joinDate": str(emp.join_date) if emp.join_date else None,
+    }
+    return Response(body)
 
 
 MAX_ADVANCE_AMOUNT = Decimal("99999999.99")  # Advance.amount: max_digits=10, decimal_places=2
-MAX_EMPLOYEE_TERM_MONTHS = 12  # the owner's 1-12 months for a Term Loan an employee applied for
+MAX_EMPLOYEE_TERM_MONTHS = 12  # the absolute most; the months in force are Settings' (advance_rules, default 6)
+
+
+def _max_term_months() -> int:
+    return advance_rules.rules().tl_max_months
 
 
 def whole_rupee_emi(amount, months: int) -> Decimal:
@@ -335,12 +375,14 @@ def _apply_amount_and_start(adv: Advance, data, previous_status: str) -> str | N
             adv.outstanding = max(Decimal("0"), amount - Decimal(adv.total_repaid or 0))
             amount_changed = True
 
-    by_employee = adv.applied_by == Advance.APPLIED_BY_EMPLOYEE
+    # the employee rules: a request from the apps, or one HR raised by the same rules since 2026-11-27 (apply_for)
+    by_employee = adv.applied_by == Advance.APPLIED_BY_EMPLOYEE or _raised_by_employee_rules(adv)
     months_changed = "repaymentMonths" in data
     if adv.advance_type == "term" and months_changed and by_employee:
         months = _int_or_none(adv.repayment_months)
-        if months is None or not 1 <= months <= MAX_EMPLOYEE_TERM_MONTHS:
-            return f"A Term Loan is repaid in 1 to {MAX_EMPLOYEE_TERM_MONTHS} months."
+        most = _max_term_months()
+        if months is None or not 1 <= months <= most:
+            return f"A Term Loan is repaid in 1 to {most} months."
         adv.repayment_months = months
     if (
         adv.advance_type == "term"
@@ -407,6 +449,19 @@ def advance_detail(request: Request, pk: int) -> Response:
             new_status in ("approved", "rejected") or (new_status == "pending" and previous_status != "closed")
         )
         if deciding:
+            # Settlement Automation Method (2026-11-26): advances are decided in the month's workflow (HR -> MD -> HR
+            # final settlement), never one by one here
+            from .settlement_automation import service as settlement_automation
+
+            if settlement_automation.is_automation():
+                return Response(
+                    {
+                        "error": "Settlement runs the Automation Method: this request is decided in the month's "
+                        "settlement workflow (HR review, MD approval, HR final settlement).",
+                        "code": "automation_method",
+                    },
+                    status=409,
+                )
             # approving / rejecting an advance is the approval right of its type (general / term), not the edit right
             if refused := hr_access.approval_refusal(request, hr_access.kind_for("advance", adv)):
                 return refused
@@ -500,6 +555,14 @@ def advance_detail(request: Request, pk: int) -> Response:
 
     # DELETE: only an advance still waiting for a decision (owner 2026-11-26). An approved / rejected / completed one is
     # history, and an approved one's deductions may already be in a payroll.
+    if _in_workflow(adv):
+        return Response(
+            {
+                "error": "This request has been forwarded in the settlement workflow, so it can no longer be deleted.",
+                "code": "in_workflow",
+            },
+            status=409,
+        )
     if adv.status != Advance.STATUS_PENDING:
         return Response(
             {
@@ -560,8 +623,8 @@ def advance_earnings_preview(request: Request) -> Response:
             "employeeType": emp.employment_type,
             "month": month,
             "year": year,
-            "throughDay": advance_earnings.EARNED_THROUGH_DAY,
-            "percent": advance_earnings.SALARY_ADVANCE_PERCENT,
+            "throughDay": advance_rules.rules().sa_earned_through,
+            "percent": advance_rules.rules().sa_percent,
             "earnings": earnings.to_json() if earnings else None,
             "noSalaryReason": no_salary,
             "termLoanService": advance_earnings.term_loan_service(emp, today),

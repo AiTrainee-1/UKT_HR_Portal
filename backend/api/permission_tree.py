@@ -1283,7 +1283,14 @@ COMPENSATION = N(
     N("compensation.reports", "Reports", "page", "Compensation summaries and their export.", routes=[_comp("reports")]),
 )
 
-SETTLEMENT = N("settlement", "Settlement", "page", "Salary advances and term loans, and their repayment.")
+SETTLEMENT = N(
+    "settlement",
+    "Loan & Advance",
+    "page",
+    "Salary advances and term loans, and their repayment; with the Automation Method (Settings -> Settlement) the "
+    "month-wise workflow HR -> MD -> HR final settlement -> auditor -> accounts.",
+    api=["settlement-automation"],
+)
 
 # Main -> Analytics (/hr/analytics, api/hr_analytics/; owner 2026-11-21): who needs HR's attention and why (frequent
 # leave, late arrival, missing punches, On-Duty without punches, HOD patterns ...), Staff and Production tabs. It reads
@@ -1967,6 +1974,13 @@ SETTINGS = N(
         "Requests nobody decided within a number of days of being submitted are rejected every night (never resignations); "
         "the switch, the days, Run now and the history.",
         api=["request-auto-reject"],
+    ),
+    N(
+        "settings.settlement",
+        "Loan & Advance",
+        "tab",
+        "Which method the Settlement page runs (Normal or Automation) and the auditor's and Accounts' e-mail addresses.",
+        api=["settlement-settings"],
     ),
     N("settings.devices", "Devices", "tab", "The biometric devices and how they connect."),
     N(

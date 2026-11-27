@@ -94,7 +94,7 @@ APPROVAL_GROUPS: tuple[dict, ...] = (
     {"id": "outpass", "label": "Outpass"},
     {"id": "other_requests", "label": "Requests page - Other requests (the employee request form)"},
     {"id": "recruitment", "label": "Recruitment"},
-    {"id": "settlement", "label": "Settlement"},
+    {"id": "settlement", "label": "Loan & Advance"},
     {"id": "payroll", "label": "Staff Payroll"},
     {"id": "compensation", "label": "Compensation"},
     {"id": "bonus", "label": "Bonus"},

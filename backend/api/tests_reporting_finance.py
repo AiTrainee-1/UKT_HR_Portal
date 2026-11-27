@@ -1001,6 +1001,28 @@ class AdvanceScheduleTests(_Case):
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _waiting_advance(emp, advance_type, amount, *, emi=0, months=None, purpose="", month=2, year=2026) -> int:
+    """A waiting advance deducted from `month`/`year`, as the reports and the payroll engine see one. Made directly: since
+    2026-11-27 HR's POST /api/advances raises a request only by the employee rules (the 21st-22nd window, the earned
+    limit, the service), which tests_advance_earnings / tests_mobile_settlement cover; these tests are about what payroll
+    and the reports do with an approved advance."""
+    from decimal import Decimal as _D
+
+    adv = Advance.objects.create(
+        employee=emp,
+        advance_type=advance_type,
+        amount=_D(str(amount)),
+        requested_amount=_D(str(amount)),
+        emi_amount=_D(str(emi)),
+        repayment_months=months,
+        repayment_start_month=month,
+        repayment_start_year=year,
+        outstanding=_D(str(amount)),
+        purpose=purpose,
+    )
+    return adv.id
+
+
 class AdvanceEngineAgreementTests(TestCase):
     """Create the advance through the API, deduct it with the real payroll engine, then read it back."""
 
@@ -1052,21 +1074,7 @@ class AdvanceEngineAgreementTests(TestCase):
         return r.json()
 
     def test_ledger_and_schedule_match_the_engine(self):
-        created = self.post(
-            "/api/advances",
-            {
-                "employeeId": self.emp.id,
-                "amount": 5000,
-                "advanceType": "term",
-                "emiAmount": 2000,
-                "repaymentMonths": 3,
-                "repaymentStartMonth": 2,
-                "repaymentStartYear": 2026,
-                "purpose": "Wedding",
-            },
-        )
-        self.assertEqual(created.status_code, 201)
-        adv_id = created.json()["id"]
+        adv_id = _waiting_advance(self.emp, "term", 5000, emi=2000, months=3, purpose="Wedding")
 
         # before approval: a pending request with no balance
         row = self.report("advance-ledger")["rows"][0]
@@ -1118,17 +1126,7 @@ class AdvanceEngineAgreementTests(TestCase):
         self.assertEqual((row["overdueInstalments"], row["overdueAmount"], row["nextDue"]), (2, 3000.0, "Mar 2026"))
 
     def test_final_instalment_closes_the_advance_in_the_report(self):
-        adv_id = self.post(
-            "/api/advances",
-            {
-                "employeeId": self.emp.id,
-                "amount": 2000,
-                "advanceType": "general",
-                "limitRemark": "Above the 1st-20th limit (no attendance in this test)",
-                "repaymentStartMonth": 2,
-                "repaymentStartYear": 2026,
-            },
-        ).json()["id"]
+        adv_id = _waiting_advance(self.emp, "general", 2000)
         self.put(f"/api/advances/{adv_id}", {"status": "approved", "approvedBy": "HR Head"})
         _generate_staff_payroll(self.emp, 2, 2026)
         self.assertEqual(Advance.objects.get(pk=adv_id).status, "closed")
@@ -1155,18 +1153,7 @@ class AdvanceEngineAgreementTests(TestCase):
             )
 
     def approve_term_loan(self, amount=3000, emi=1000, months=3):
-        adv_id = self.post(
-            "/api/advances",
-            {
-                "employeeId": self.emp.id,
-                "amount": amount,
-                "advanceType": "term",
-                "emiAmount": emi,
-                "repaymentMonths": months,
-                "repaymentStartMonth": 2,
-                "repaymentStartYear": 2026,
-            },
-        ).json()["id"]
+        adv_id = _waiting_advance(self.emp, "term", amount, emi=emi, months=months)
         approved = self.put(f"/api/advances/{adv_id}", {"status": "approved", "approvedBy": "HR Head"})
         self.assertEqual(approved.status_code, 200)
         return adv_id
@@ -1275,17 +1262,7 @@ class AdvanceEngineAgreementTests(TestCase):
                 is_half_shift=False,
                 source="manual",
             )
-        adv_id = self.post(
-            "/api/advances",
-            {
-                "employeeId": worker.id,
-                "amount": 1000,
-                "advanceType": "general",
-                "limitRemark": "Above the 1st-20th limit (no attendance in this test)",
-                "repaymentStartMonth": 2,
-                "repaymentStartYear": 2026,
-            },
-        ).json()["id"]
+        adv_id = _waiting_advance(worker, "general", 1000)
         self.put(f"/api/advances/{adv_id}", {"status": "approved", "approvedBy": "HR Head"})
         _generate_production_payroll(worker, date(2026, 2, 2), date(2026, 2, 11))
         slip = SalarySlip.objects.get(employee=worker)

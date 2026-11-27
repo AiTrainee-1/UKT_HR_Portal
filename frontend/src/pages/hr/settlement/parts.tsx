@@ -142,15 +142,15 @@ export function SortHead<K extends string>({
   const Icon = !active ? ChevronsUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
   return (
     <TableHead
-      className={cn("text-[11px] font-bold uppercase tracking-wider text-[#006496]/60", className)}
+      className={cn("whitespace-nowrap", className)}
       aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
     >
       <button
         type="button"
         onClick={() => onSort(column)}
         className={cn(
-          "inline-flex items-center gap-1 rounded uppercase tracking-wider hover:text-[#006496]",
-          active && "text-[#006496]",
+          "inline-flex items-center gap-1 rounded transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300",
+          active && "text-slate-900",
         )}
         data-testid={`sort-${column}`}
       >
@@ -203,64 +203,6 @@ export function EmptyState({
         <p className="mx-auto mt-0.5 max-w-sm text-sm text-muted-foreground">{text}</p>
       </div>
       {children}
-    </div>
-  );
-}
-
-/** Overview / Term Loan / Salary Advance, each with how many wait for approval. */
-export function TabBar<T extends string>({
-  items,
-  value,
-  onChange,
-}: {
-  items: { value: T; label: string; hint: string; pending: number; icon: IconType }[];
-  value: T;
-  onChange: (next: T) => void;
-}) {
-  return (
-    <div className="max-w-full overflow-x-auto pb-0.5">
-      <div
-        className="inline-flex items-center gap-1 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm"
-        role="tablist"
-        aria-label="Settlement views"
-        data-testid="settlement-tabs"
-      >
-        {items.map((t) => {
-          const on = t.value === value;
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.value}
-              type="button"
-              role="tab"
-              aria-selected={on}
-              title={t.hint}
-              onClick={() => onChange(t.value)}
-              className={cn(
-                "inline-flex h-10 items-center gap-1.5 whitespace-nowrap rounded-xl px-3 text-sm font-semibold transition-colors",
-                on ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
-              )}
-              data-view-safe
-              data-testid={`settlement-tab-${t.value}`}
-            >
-              <Icon size={15} />
-              {t.label}
-              {t.pending > 0 && (
-                <span
-                  className={cn(
-                    "rounded-full px-1.5 text-[11px] font-bold tabular-nums",
-                    on ? "bg-amber-400 text-slate-900" : "bg-amber-100 text-amber-800",
-                  )}
-                  title={`${t.pending} waiting for approval`}
-                  aria-label={`${t.pending} waiting for approval`}
-                >
-                  {t.pending}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
     </div>
   );
 }

@@ -95,6 +95,14 @@ def due_queryset(key: str, days: int, today: date | None = None, branch_id: int 
     (a branch login's view and Run now); None = the whole company (the nightly run)."""
     s = spec(key)
     qs = s.model.objects.filter(status__in=s.waiting, created_at__lt=cutoff(days, today), **s.extra_filter)
+    if key == "advance":
+        # Settlement Automation Method (2026-11-26): HR and the MD decide advances in the month's workflow, so the night
+        # never rejects one while it is on, nor one already forwarded into a batch
+        from ..settlement_automation import service as settlement_automation
+
+        if settlement_automation.is_automation():
+            return qs.none()
+        qs = qs.exclude(settlement_item__batch__stage__in=settlement_automation.FORWARDED)
     if branch_id is not None:
         qs = qs.filter(**{s.scope_field: branch_id})
     return qs.order_by("created_at", "id")

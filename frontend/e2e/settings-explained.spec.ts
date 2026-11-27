@@ -21,6 +21,7 @@ const TABS: [id: string, label: string][] = [
   ["production_payroll", "Production Payroll"],
   ["pf_esi", "PF & ESI"],
   ["salary-slip", "Salary Slip"],
+  ["settlement", "Loan & Advance"],
   ["documents", "Company Documents"],
   ["idcard", "ID Card"],
   ["smtp", "SMTP / Email"],

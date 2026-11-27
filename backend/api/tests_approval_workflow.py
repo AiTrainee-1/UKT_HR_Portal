@@ -1062,7 +1062,13 @@ class AttendanceCorrectionAndFixedWorkflowTests(Base):
         r = self.as_employee("post", "/api/employee-requests", {"subject": "Letter", "requestType": "document"})
         self.assertEqual((r.status_code, r.json()["code"]), (403, "workflow_disabled"))
         self.configure("advance", enabled=True)
-        r = self.send("post", "/api/advances", {"employeeId": self.emp.id, "amount": 1000, "advanceType": "term"})
+        # HR raises a Term Loan by the employee rules (2026-11-27): 6 months of service, 1-12 months, a purpose
+        self.emp.join_date = "2020-01-01"
+        self.emp.employment_type, self.emp.salary_amount = "staff", 20000  # a Term Loan is staff only, % of salary
+        self.emp.save(update_fields=["join_date", "employment_type", "salary_amount"])
+        body = {"employeeId": self.emp.id, "amount": 1000, "advanceType": "term", "repaymentMonths": 2,
+                "purpose": "House repair"}  # fmt: skip
+        r = self.send("post", "/api/advances", body)
         self.assertEqual(r.status_code, 201, r.content)
 
 

@@ -1,11 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
 import { loginAsHr } from "./helpers";
 
-// Settlement (advances and term loans) and Missing Punch after their redesign: the count and stat cards (the page opens
-// on this month), search and filters, the report dialog and the bank file, the
-// approval confirmation, the detail view, validation in the new-advance form, bulk approval of missing punches, exports,
-// and the phone layout. Everything made here carries "settle_e2e" in its purpose / reason and is removed again; the
-// approval pipeline is handed back to the built-in one.
+// Loan & Advance (the Settlement page renamed 2026-11-27: Overview, Salary Advance and Term Loan pages from the sidebar)
+// and Missing Punch after their redesign: the count and stat cards (the page opens on this month), search and filters,
+// the report dialog and the bank file, the approval confirmation, the detail view, HR's New request under the employee
+// rules, the old /hr/settlement address, bulk approval of missing punches, exports, and the phone layout. Everything made
+// here carries "settle_e2e" in its purpose / reason (and the two employees "LA-E2E1" / "LA-E2E2") and is removed again;
+// the approval pipeline is handed back to the built-in one.
+//
+// Seeding (2026-11-27): POST /api/advances now runs the employee rules (mobile_settlement_views.apply_for), so a Salary
+// Advance can be raised only on the 21st and 22nd, within 50 % of the salary earned in the 1st-20th of the month: the
+// seeded employees have no attendance this month, so no Salary Advance can be seeded on any day. The requests seeded
+// here are Term Loans (any day, after 6 months of service: the two employees made here joined in 2024); the Salary
+// Advance side is checked through the New request dialog refusing it.
 //
 // The bulk approval really writes punches to attendance (as any approval does), so its requests are for dates in 2020,
 // far from anything another spec looks at.
@@ -26,11 +33,45 @@ async function employeeId(page: Page, code: string): Promise<number> {
   return list.find((e) => e.employeeCode === code)!.id;
 }
 
+/** The two employees the Loan & Advance tests raise requests for: staff, joined in 2024 (6 months of service done). */
+const LOAN_EMPLOYEES = [
+  { employeeCode: "LA-E2E1", firstName: "Lakshmi", lastName: "Loan", phone: "9000000171" },
+  { employeeCode: "LA-E2E2", firstName: "Arun", lastName: "Advance", phone: "9000000172" },
+] as const;
+
+async function loanEmployees(page: Page): Promise<[number, number]> {
+  const list = (await api(page, "GET", "/api/employees")).body as { id: number; employeeCode: string }[];
+  const branches = (await api(page, "GET", "/api/branches")).body as { id: number }[];
+  const ids: number[] = [];
+  for (const e of LOAN_EMPLOYEES) {
+    const known = list.find((x) => x.employeeCode === e.employeeCode);
+    if (known) {
+      ids.push(known.id);
+      continue;
+    }
+    const made = await api(page, "POST", "/api/employees", {
+      ...e,
+      employmentType: "staff",
+      branchId: branches[0].id,
+      salaryType: "monthly",
+      salaryAmount: 24000,
+      joinDate: "2024-01-01",
+    });
+    expect(made.status, JSON.stringify(made.body)).toBe(201);
+    ids.push(made.body.id as number);
+  }
+  return [ids[0], ids[1]];
+}
+
 async function cleanUp(page: Page) {
   for (const a of ((await api(page, "GET", "/api/advances")).body as Row[]).filter((a) => a.purpose?.startsWith(TAG))) {
     // only a waiting advance can be deleted (2026-11-26): put a decided one back to waiting first
     if (a.status && a.status !== "pending") await api(page, "PUT", `/api/advances/${a.id}`, { status: "pending" });
     await api(page, "DELETE", `/api/advances/${a.id}`);
+  }
+  const employees = (await api(page, "GET", "/api/employees")).body as { id: number; employeeCode: string }[];
+  for (const e of employees.filter((x) => LOAN_EMPLOYEES.some((l) => l.employeeCode === x.employeeCode))) {
+    await api(page, "DELETE", `/api/employees/${e.id}`);
   }
   const punches = (await api(page, "GET", "/api/missing-punch-requests?status=all")).body as Row[];
   for (const p of punches.filter((p) => p.reason?.startsWith(TAG))) {
@@ -50,59 +91,88 @@ test.afterEach(async ({ page }) => {
   await cleanUp(page);
 });
 
-// ───────────────────────────── Settlement ─────────────────────────────
+// ───────────────────────────── Loan & Advance ─────────────────────────────
 
+const OVERVIEW = "/hr/Loan&Advance";
+const TERM_LOAN = "/hr/Loan&Advance/term-loan";
+const SALARY_ADVANCE = "/hr/Loan&Advance/salary-advance";
+
+/** Two Term Loan requests raised by HR under the employee rules (see the top: no Salary Advance can be seeded). */
 async function seedAdvances(page: Page) {
-  const asha = await employeeId(page, "E2E001");
-  const general = await api(page, "POST", "/api/advances", {
-    employeeId: asha,
-    advanceType: "general",
-    amount: 4000,
-    purpose: `${TAG} medical`,
-    repaymentStartMonth: 12,
-    repaymentStartYear: 2030,
-  });
-  expect(general.status, JSON.stringify(general.body)).toBe(201);
-  const term = await api(page, "POST", "/api/advances", {
-    employeeId: asha,
+  const [lakshmi, arun] = await loanEmployees(page);
+  const bike = await api(page, "POST", "/api/advances", {
+    employeeId: lakshmi,
     advanceType: "term",
     amount: 9000,
+    repaymentMonths: 3,
     purpose: `${TAG} bike`,
-    emiAmount: 3000,
-    repaymentStartMonth: 1,
-    repaymentStartYear: 2031,
   });
-  expect(term.status, JSON.stringify(term.body)).toBe(201);
-  return { general: general.body.id as number, term: term.body.id as number };
+  expect(bike.status, JSON.stringify(bike.body)).toBe(201);
+  const medical = await api(page, "POST", "/api/advances", {
+    employeeId: arun,
+    advanceType: "term",
+    amount: 4000,
+    repaymentMonths: 2,
+    purpose: `${TAG} medical`,
+  });
+  expect(medical.status, JSON.stringify(medical.body)).toBe(201);
+  return { bike: bike.body.id as number, medical: medical.body.id as number };
 }
 
-test("Settlement shows the summary, and searches and filters the advances", async ({ page }) => {
-  const ids = await seedAdvances(page);
+test("the old Settlement address goes to its Loan & Advance page; the sidebar chooses the page, not a tab row", async ({
+  page,
+}) => {
+  await page.goto("/hr/settlement?tab=loan&month=all");
+  await expect(page).toHaveURL(/\/hr\/Loan&Advance\/term-loan\?month=all$/);
+  await expect(page.getByTestId("loan-advance-title")).toHaveText("Term Loan");
+  await expect(page.getByTestId("loan-advance-breadcrumb")).toContainText("Loan & Advance");
+  await expect(page.getByTestId("settlement-tabs")).toHaveCount(0);
+  const nav = page.locator("nav").filter({ has: page.getByRole("link", { name: "Term Loan", exact: true }) });
+  for (const [name, href] of [
+    ["Overview", OVERVIEW],
+    ["Salary Advance", SALARY_ADVANCE],
+    ["Term Loan", TERM_LOAN],
+  ]) {
+    await expect(nav.getByRole("link", { name, exact: true }).first()).toHaveAttribute("href", href);
+  }
+  await nav.getByRole("link", { name: "Salary Advance", exact: true }).first().click();
+  await expect(page).toHaveURL(/\/hr\/Loan&Advance\/salary-advance$/);
+  await expect(page.getByTestId("loan-advance-title")).toHaveText("Salary Advance");
   await page.goto("/hr/settlement");
-  await expect(page.getByRole("heading", { name: "Settlement" })).toBeVisible();
+  await expect(page).toHaveURL(/\/hr\/Loan&Advance$/);
+  await expect(page.getByRole("heading", { name: "Loan & Advance" })).toBeVisible();
+});
+
+test("Loan & Advance shows the summary, and searches and filters the advances", async ({ page }) => {
+  const ids = await seedAdvances(page);
+  await page.goto(OVERVIEW);
+  await expect(page.getByRole("heading", { name: "Loan & Advance" })).toBeVisible();
   for (const stat of ["stat-pending", "stat-active", "stat-recovered", "stat-left"]) {
     await expect(page.getByTestId(stat)).toBeVisible();
   }
   // opens on the approvals waiting for HR, as it always did
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toBeVisible();
-  await expect(page.getByTestId(`advance-row-${ids.term}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-row-${ids.bike}`)).toBeVisible();
 
   await page.getByTestId("settlement-search").fill(`${TAG} bike`);
-  await expect(page.getByTestId(`advance-row-${ids.term}`)).toBeVisible();
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
+  await expect(page.getByTestId(`advance-row-${ids.bike}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toHaveCount(0);
   await expect(page.getByTestId("settlement-count")).toContainText("Showing 1 of");
 
   await page.getByTestId("settlement-search").fill("nobody at all");
   await expect(page.getByTestId("advances-no-match")).toBeVisible();
   await page.getByTestId("advances-no-match").getByRole("button", { name: "Clear filters" }).click();
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toBeVisible();
 
-  // type filter
+  // type filter (the Overview's own: both seeded requests are Term Loans)
   await page.getByTestId("settlement-search").fill(TAG);
   await page.getByTestId("filter-type").click();
+  await page.getByRole("option", { name: "Salary Advance" }).click();
+  await expect(page.getByTestId("advances-no-match")).toBeVisible();
+  await page.getByTestId("filter-type").click();
   await page.getByRole("option", { name: "Term Loan" }).click();
-  await expect(page.getByTestId(`advance-row-${ids.term}`)).toBeVisible();
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
+  await expect(page.getByTestId(`advance-row-${ids.bike}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toBeVisible();
 
   // a date range in the future shows nothing, an upside-down one says so
   await page.getByTestId("filter-type").click();
@@ -122,87 +192,94 @@ test("Settlement shows the summary, and searches and filters the advances", asyn
 
 test("approving asks first, shows the schedule it creates, and the advance moves to Active", async ({ page }) => {
   const ids = await seedAdvances(page);
-  await page.goto("/hr/settlement");
-  await page.getByTestId(`advance-approve-${ids.term}`).click();
+  await page.goto(TERM_LOAN);
+  await page.getByTestId(`advance-approve-${ids.bike}`).click();
   await expect(page.getByTestId("decision-dialog")).toBeVisible();
-  await expect(page.getByTestId("decision-schedule")).toContainText("3 deductions of ₹3,000 from Jan 2031 to Mar 2031");
+  // a Term Loan is deducted from next month (the employee rules fix the first month)
+  await expect(page.getByTestId("decision-schedule")).toContainText(/3 deductions of ₹3,000 from [A-Z][a-z]{2} \d{4}/);
 
   // cancelling changes nothing
   await page.getByTestId("decision-cancel").click();
-  expect(((await api(page, "GET", `/api/advances/${ids.term}`)).body as { status: string }).status).toBe("pending");
+  expect(((await api(page, "GET", `/api/advances/${ids.bike}`)).body as { status: string }).status).toBe("pending");
 
-  await page.getByTestId(`advance-approve-${ids.term}`).click();
+  await page.getByTestId(`advance-approve-${ids.bike}`).click();
   await page.getByTestId("decision-confirm").click();
   await expect(page.getByText("Advance approved").first()).toBeVisible();
-  await expect(page.getByTestId(`advance-row-${ids.term}`)).toHaveCount(0); // it left the pending list
+  await expect(page.getByTestId(`advance-row-${ids.bike}`)).toHaveCount(0); // it left the pending list
 
   await page.getByRole("tab", { name: /^Active/ }).click();
   await page.getByTestId("settlement-search").fill(`${TAG} bike`);
-  await page.getByTestId(`advance-row-${ids.term}`).click();
+  await page.getByTestId(`advance-row-${ids.bike}`).click();
   const sheet = page.getByTestId("advance-detail");
   await expect(sheet).toContainText("Deduction schedule (3)");
   await expect(sheet).toContainText("Still scheduled through payroll");
   await expect(sheet.getByTestId("detail-print")).toBeVisible();
 });
 
-test("the new-advance form explains what is wrong, previews the schedule, and creates the advance", async ({
+test("New request follows the employee rules: what blocks it, what is wrong, the schedule, and the request made", async ({
   page,
 }) => {
-  await page.goto("/hr/settlement");
-  await page.getByTestId("new-advance").click(); // on Overview it is a menu: New Salary Advance / New Term Loan
-  await page.getByTestId("new-advance-general").click();
-  const dialog = page.getByTestId("create-advance-dialog");
-  await expect(dialog.getByTestId("create-advance-title")).toHaveText("New Salary Advance");
-  await dialog.getByTestId("advance-submit").click();
-  await expect(dialog.getByText("Choose the employee this advance is for.")).toBeVisible();
-  await expect(dialog.getByText("Enter the amount.")).toBeVisible();
+  await loanEmployees(page);
+  await page.goto(TERM_LOAN);
+  await page.getByTestId("new-advance").click();
+  const dialog = page.getByTestId("new-request-dialog");
+  await expect(dialog.getByTestId("new-request-title")).toHaveText("New Term Loan request");
+  await expect(dialog.getByTestId("new-request-submit")).toBeDisabled(); // nobody chosen yet
 
-  await dialog.getByTestId("advance-employee").click();
+  await dialog.getByTestId("new-request-employee-select").click();
   await page
-    .getByRole("button", { name: /E2E001/ })
+    .getByRole("button", { name: /LA-E2E1/ })
     .first()
     .click();
-  await dialog.getByTestId("advance-amount").fill("-5");
-  await dialog.getByTestId("advance-submit").click();
-  await expect(dialog.getByText("The amount must be more than 0.")).toBeVisible();
+  await expect(dialog.getByTestId("new-request-service")).toContainText("months of service");
+  await dialog.getByTestId("new-request-amount").fill("500");
+  await dialog.getByTestId("new-request-months").fill("13");
+  await dialog.getByTestId("new-request-purpose").fill(`${TAG} created`);
+  await dialog.getByTestId("new-request-submit").click();
+  await expect(dialog.getByText("A Term Loan starts from ₹1,000.")).toBeVisible();
+  // 1 to Settings' Max repayment months (6 by default, owner 2026-11-27)
+  await expect(dialog.getByText(/^A Term Loan is repaid in 1 to \d+ months\.$/)).toBeVisible();
 
-  await dialog.getByTestId("advance-type").click();
-  await page.getByRole("option", { name: "Term Loan (monthly EMIs)" }).click();
-  await dialog.getByTestId("advance-amount").fill("6000");
-  await dialog.getByTestId("advance-submit").click();
-  await expect(dialog.getByText("Enter the number of months or the monthly EMI.")).toBeVisible();
-  await dialog.getByTestId("advance-emi").fill("9000");
-  await expect(dialog.getByText("The monthly EMI cannot be more than the amount.")).toBeVisible();
-
-  await dialog.getByTestId("advance-emi").fill("2000");
-  await dialog.getByTestId("advance-start-year").fill("2031");
-  await expect(dialog.getByTestId("advance-preview")).toContainText("3 deductions of ₹2,000");
-  await dialog.getByTestId("advance-purpose").fill(`${TAG} created`);
-  await dialog.getByTestId("advance-submit").click();
-  await expect(page.getByText("Advance created").first()).toBeVisible();
+  await dialog.getByTestId("new-request-amount").fill("6000");
+  await dialog.getByTestId("new-request-months").fill("3");
+  await expect(dialog.getByTestId("new-request-schedule")).toContainText("3 deductions of ₹2,000");
+  await dialog.getByTestId("new-request-submit").click();
+  await expect(page.getByText("Term Loan request raised").first()).toBeVisible();
   await expect(dialog).toHaveCount(0);
   await page.getByTestId("settlement-search").fill(`${TAG} created`);
   await expect(page.getByTestId("advances-table").getByRole("row")).toHaveCount(2); // header + the new one
+
+  // a Salary Advance for someone with nothing earned this month (or outside the 21st-22nd) cannot be raised
+  await page.goto(SALARY_ADVANCE);
+  await page.getByTestId("new-advance").click();
+  await dialog.getByTestId("new-request-employee-select").click();
+  await page
+    .getByRole("button", { name: /LA-E2E2/ })
+    .first()
+    .click();
+  await expect(dialog.getByTestId("new-request-blocked")).toBeVisible();
+  await expect(dialog.getByTestId("new-request-amount")).toBeDisabled();
+  await expect(dialog.getByTestId("new-request-submit")).toBeDisabled();
 });
 
 test("deleting an advance asks first", async ({ page }) => {
   const ids = await seedAdvances(page);
-  await page.goto("/hr/settlement");
-  await page.getByTestId(`advance-delete-${ids.general}`).click();
+  await page.goto(OVERVIEW);
+  await page.getByTestId(`advance-delete-${ids.medical}`).click();
   await expect(page.getByTestId("delete-dialog")).toContainText("cannot be undone");
   await page.getByTestId("delete-cancel").click();
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toBeVisible();
-  await page.getByTestId(`advance-delete-${ids.general}`).click();
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toBeVisible();
+  await page.getByTestId(`advance-delete-${ids.medical}`).click();
   await page.getByTestId("delete-confirm").click();
   await expect(page.getByText("Advance deleted").first()).toBeVisible();
-  await expect(page.getByTestId(`advance-row-${ids.general}`)).toHaveCount(0);
+  await expect(page.getByTestId(`advance-row-${ids.medical}`)).toHaveCount(0);
 });
 
 test("the Export report starts from the page, and names the file after the type, status and month", async ({
   page,
 }) => {
   await seedAdvances(page);
-  await page.goto("/hr/settlement"); // this month, raised in it: the seeded ones were raised today
+  await page.goto(OVERVIEW); // this month, raised in it: the seeded ones were raised today
   await page.getByTestId("settlement-search").fill(TAG);
   // the report's status starts on the page's (Pending); the owner's 12 columns are ticked
   let download = page.waitForEvent("download");
@@ -213,14 +290,13 @@ test("the Export report starts from the page, and names the file after the type,
   await expect(dialog.getByTestId("report-column-purpose")).toHaveAttribute("data-state", "unchecked");
   await dialog.getByTestId("report-xlsx").click();
   expect((await download).suggestedFilename()).toMatch(
-    /^Settlement_All_types_Pending_[A-Za-z]+_\d{4}_\d{4}-\d{2}-\d{2}\.xlsx$/,
+    /^Loan_Advance_All_types_Pending_[A-Za-z]+_\d{4}_\d{4}-\d{2}-\d{2}\.xlsx$/,
   );
   await page.keyboard.press("Escape"); // closes the report (the dialog has two "Close" buttons: the X and the footer's)
   await expect(dialog).toHaveCount(0);
 
-  // the Term Loan tab: the report starts on Term Loan; All statuses, All months, as a PDF
-  await page.getByTestId("settlement-tab-loan").click();
-  await expect(page).toHaveURL(/tab=loan/);
+  // the Term Loan page: the report starts on Term Loan; All statuses, All months, as a PDF
+  await page.goto(TERM_LOAN);
   await page.getByTestId("settlement-export").click();
   await dialog.getByTestId("report-status").click();
   await page.getByRole("option", { name: "All", exact: true }).click();
@@ -229,38 +305,39 @@ test("the Export report starts from the page, and names the file after the type,
   download = page.waitForEvent("download");
   await dialog.getByTestId("report-pdf").click();
   expect((await download).suggestedFilename()).toMatch(
-    /^Settlement_Term_Loan_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/,
+    /^Loan_Advance_Term_Loan_All_statuses_All_months_\d{4}-\d{2}-\d{2}\.pdf$/,
   );
 });
 
 test("Export Bank File pays this month's approved ones, after a confirm", async ({ page }) => {
   const ids = await seedAdvances(page);
-  const approved = await api(page, "PUT", `/api/advances/${ids.general}`, { status: "approved" });
+  const approved = await api(page, "PUT", `/api/advances/${ids.medical}`, { status: "approved" });
   expect(approved.status, JSON.stringify(approved.body)).toBe(200);
-  await page.goto("/hr/settlement");
+  await page.goto(OVERVIEW);
   await page.getByTestId("settlement-search").fill(TAG);
   await page.getByTestId("settlement-bank-file").click();
   const dialog = page.getByTestId("bank-file-dialog");
   await expect(dialog.getByTestId("bank-file-summary")).toContainText("approved (active or completed)");
   const download = page.waitForEvent("download");
   await dialog.getByTestId("bank-file-confirm").click();
-  expect((await download).suggestedFilename()).toMatch(/^Settlement_Bank_File_Overview_[A-Za-z]+_\d{4}\.xlsx$/);
+  expect((await download).suggestedFilename()).toMatch(/^Loan_Advance_Bank_File_Overview_[A-Za-z]+_\d{4}\.xlsx$/);
 });
 
 test("rejecting needs a reason, which is saved and shown in the details", async ({ page }) => {
   const ids = await seedAdvances(page);
-  await page.goto("/hr/settlement?tab=advance");
-  await page.getByTestId(`advance-reject-${ids.general}`).click();
+  await page.goto("/hr/settlement?tab=loan"); // the old address of the Term Loan tab
+  await expect(page).toHaveURL(/\/hr\/Loan&Advance\/term-loan$/);
+  await page.getByTestId(`advance-reject-${ids.medical}`).click();
   const dialog = page.getByTestId("decision-dialog");
   await dialog.getByTestId("decision-confirm").click();
   await expect(dialog.getByTestId("decision-remark-problem")).toHaveText(
     "Write the reason for rejecting (at least 3 characters).",
   );
-  expect(((await api(page, "GET", `/api/advances/${ids.general}`)).body as { status: string }).status).toBe("pending");
+  expect(((await api(page, "GET", `/api/advances/${ids.medical}`)).body as { status: string }).status).toBe("pending");
   await dialog.getByTestId("decision-remark").fill(`${TAG} already has one running`);
   await dialog.getByTestId("decision-confirm").click();
   await expect(page.getByText("Advance rejected").first()).toBeVisible();
-  const saved = (await api(page, "GET", `/api/advances/${ids.general}`)).body as {
+  const saved = (await api(page, "GET", `/api/advances/${ids.medical}`)).body as {
     status: string;
     decisionRemark: string;
     history: { action: string; remark: string }[];
@@ -270,23 +347,23 @@ test("rejecting needs a reason, which is saved and shown in the details", async 
   expect(saved.history[0]).toMatchObject({ action: "rejected", remark: `${TAG} already has one running` });
 
   await page.getByRole("tab", { name: /^Rejected/ }).click();
-  await page.getByTestId(`advance-row-${ids.general}`).click();
+  await page.getByTestId(`advance-row-${ids.medical}`).click();
   await expect(page.getByTestId("advance-decision-remark")).toContainText("already has one running");
   await expect(page.getByTestId("advance-history")).toContainText("Rejected");
 });
 
-test("Settlement on a phone shows cards, not a clipped table", async ({ page }) => {
+test("Loan & Advance on a phone shows cards, not a clipped table", async ({ page }) => {
   const ids = await seedAdvances(page);
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto("/hr/settlement");
-  await expect(page.getByTestId(`advance-card-${ids.general}`)).toBeVisible();
+  await page.goto(OVERVIEW);
+  await expect(page.getByTestId(`advance-card-${ids.medical}`)).toBeVisible();
   await expect(page.getByTestId("advances-table")).toBeHidden();
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
   // the Approve button is on the card, one tap away
-  await expect(page.getByTestId(`advance-card-approve-${ids.general}`)).toBeVisible();
+  await expect(page.getByTestId(`advance-card-approve-${ids.medical}`)).toBeVisible();
 });
 
 // ───────────────────────────── Missing Punch ─────────────────────────────

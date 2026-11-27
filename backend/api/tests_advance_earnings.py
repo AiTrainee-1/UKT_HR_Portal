@@ -175,7 +175,9 @@ class EmployeeApplicationTests(_AppBase):
             (2, 24000.0, 6.0, 6000.0, 6000.0, 3000.0),
         )
         body = self.client.get("/api/my/advances/eligibility", **self.me).json()["salaryAdvance"]
-        self.assertEqual((body["limit"], body["earned"]["earnedAmount"], body["earned"]["final"]), (3000.0, 6000.0, True))
+        self.assertEqual(
+            (body["limit"], body["earned"]["earnedAmount"], body["earned"]["final"]), (3000.0, 6000.0, True)
+        )
 
     def test_a_term_loan_needs_six_months_of_service(self):
         self.emp.join_date = "2025-09-01"
@@ -221,25 +223,66 @@ class HrTests(_AppBase):
         self.assertEqual(self.client.delete(f"/api/advances/{pending.id}", **self.hr).status_code, 204)
         self.assertEqual(Advance.objects.count(), 3)
 
-    def test_hr_may_go_above_the_limit_with_a_remark(self):
+    def test_hr_raises_a_request_by_the_employee_rules(self):
+        """Owner 2026-11-27: HR's manual request on an employee's behalf follows exactly the employee rules - the 50 %
+        limit (no going over it), the 21st-22nd window, one a month, the Term Loan's service - and the same workflow."""
         self.at(self.DAY)
-        body = {"employeeId": self.emp.id, "amount": 4000, "advanceType": "general", "repaymentStartMonth": 2,
-                "repaymentStartYear": 2026}  # fmt: skip
+        body = {"employeeId": self.emp.id, "amount": 4000, "advanceType": "general", "purpose": "Hospital bill"}
         r = self.client.post("/api/advances", body, content_type="application/json", **self.hr)
-        self.assertEqual((r.status_code, r.json()["code"], r.json()["limit"]), (400, "over_limit", 3000.0))
-        r = self.client.post(
-            "/api/advances", {**body, "limitRemark": "Hospital bill"}, content_type="application/json", **self.hr
-        )
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "over_limit"))
+        r = self.client.post("/api/advances", {**body, "amount": 3000}, content_type="application/json", **self.hr)
         self.assertEqual(r.status_code, 201, r.content)
-        self.assertEqual((r.json()["limitRemark"], r.json()["earnings"]["limit"]), ("Hospital bill", 3000.0))
-        self.assertEqual(r.json()["typeLabel"], "Salary Advance")
-        # within the limit no remark is needed; a Term Loan has no such limit
-        ok = self.client.post("/api/advances", {**body, "amount": 3000}, content_type="application/json", **self.hr)
-        self.assertEqual((ok.status_code, ok.json()["limitRemark"]), (201, ""))
-        loan = {**body, "advanceType": "term", "amount": 50000, "repaymentMonths": 10}
-        self.assertEqual(self.client.post("/api/advances", loan, content_type="application/json", **self.hr).status_code, 201)
-        bad = self.client.post("/api/advances", {**body, "advanceType": "loan"}, content_type="application/json", **self.hr)
+        made = r.json()
+        self.assertEqual(
+            (made["appliedBy"], made["status"], made["typeLabel"], made["earnings"]["limit"], made["limitRemark"]),
+            ("hr", "pending", "Salary Advance", 3000.0, ""),
+        )
+        self.assertEqual(
+            (made["repaymentStartMonth"], made["repaymentStartYear"]), (2, 2026)
+        )  # this month, as an employee's
+        # one a month, however it was raised
+        again = self.client.post("/api/advances", {**body, "amount": 100}, content_type="application/json", **self.hr)
+        self.assertEqual((again.status_code, again.json()["code"]), (409, "duplicate"))
+        # the window: not on the 20th
+        self.at(date(2026, 2, 20))
+        other = _staff("ADV_W")
+        early = self.client.post(
+            "/api/advances", {**body, "employeeId": other.id, "amount": 100}, content_type="application/json", **self.hr
+        )
+        self.assertEqual((early.status_code, early.json()["code"]), (400, "window_closed"))
+        # a Term Loan: months, the minimum and the service
+        loan = {
+            "employeeId": self.emp.id,
+            "advanceType": "term",
+            "amount": 20000,
+            "repaymentMonths": 5,
+            "purpose": "House",
+        }
+        self.assertEqual(
+            self.client.post("/api/advances", loan, content_type="application/json", **self.hr).status_code, 201
+        )
+        new = _staff("ADV_N", join_date="2026-01-10")
+        refused = self.client.post(
+            "/api/advances", {**loan, "employeeId": new.id}, content_type="application/json", **self.hr
+        )
+        self.assertEqual((refused.status_code, refused.json()["code"]), (403, "service"))
+        bad = self.client.post(
+            "/api/advances", {**body, "advanceType": "loan"}, content_type="application/json", **self.hr
+        )
         self.assertEqual(bad.status_code, 400)
+
+    def test_the_new_request_dialog_gets_the_employees_eligibility(self):
+        self.at(self.DAY)
+        r = self.client.get(f"/api/advances/eligibility?employeeId={self.emp.id}", **self.hr)
+        self.assertEqual(r.status_code, 200, r.content)
+        body = r.json()
+        self.assertEqual((body["employee"]["code"], body["salaryAdvance"]["limit"]), ("ADV_E", 3000.0))
+        self.assertTrue(body["salaryAdvance"]["canApply"])
+        self.assertTrue(body["termLoan"]["service"]["eligible"])
+        self.assertEqual(self.client.get("/api/advances/eligibility?employeeId=0", **self.hr).status_code, 404)
+        self.assertEqual(
+            self.client.get(f"/api/advances/eligibility?employeeId={self.emp.id}", **self.me).status_code, 403
+        )
 
     def test_the_new_dialogs_figures(self):
         self.at(self.DAY)
@@ -306,7 +349,9 @@ class ReviewFixTests(_AppBase):
 
         from django.core.management import call_command
 
-        Advance.objects.create(employee=self.emp, advance_type="term", amount=Decimal("2000"), outstanding=Decimal("2000"))
+        Advance.objects.create(
+            employee=self.emp, advance_type="term", amount=Decimal("2000"), outstanding=Decimal("2000")
+        )
         out = StringIO()
         call_command("fill_advance_earnings", "--dry-run", stdout=out)
         self.assertIn("1 advance(s)", out.getvalue())
@@ -319,8 +364,12 @@ class BankDetailsTests(_AppBase):
     them in the list."""
 
     def test_hr_list_carries_bank_details_employee_list_does_not(self):
-        Employee.objects.filter(pk=self.emp.pk).update(bank_account="123456789", bank_ifsc="HDFC0001234", bank_name="HDFC")
-        Advance.objects.create(employee=self.emp, advance_type="general", amount=Decimal("500"), outstanding=Decimal("500"))
+        Employee.objects.filter(pk=self.emp.pk).update(
+            bank_account="123456789", bank_ifsc="HDFC0001234", bank_name="HDFC"
+        )
+        Advance.objects.create(
+            employee=self.emp, advance_type="general", amount=Decimal("500"), outstanding=Decimal("500")
+        )
         hr_row = self.client.get("/api/advances", **self.hr).json()[0]
         self.assertEqual(
             (hr_row["bankAccount"], hr_row["bankIfsc"], hr_row["bankName"]), ("123456789", "HDFC0001234", "HDFC")
@@ -341,9 +390,13 @@ class CompanyHolidaysTests(_AppBase):
         Holiday.objects.create(name="On a Sunday", date=date(2026, 2, 15), holiday_type="national")
         _holiday_dates_for_month.cache_clear()
         after = advance_earnings.earned_in_month(self.emp, 2, 2026)
-        self.assertEqual((before.paid_days, before.earned, before.limit), (Decimal("6"), Decimal("6000.00"), Decimal("3000")))
+        self.assertEqual(
+            (before.paid_days, before.earned, before.limit), (Decimal("6"), Decimal("6000.00"), Decimal("3000"))
+        )
         # +2 (10th and 16th); the 24th is after the 20th and the 15th is a Sunday (not a company day), as in payroll
-        self.assertEqual((after.paid_days, after.earned, after.limit), (Decimal("8"), Decimal("8000.00"), Decimal("4000")))
+        self.assertEqual(
+            (after.paid_days, after.earned, after.limit), (Decimal("8"), Decimal("8000.00"), Decimal("4000"))
+        )
         j = after.to_json()
         self.assertEqual((j["workingDays"], j["presentShifts"], j["holidayDays"]), (8.0, 6.0, 2.0))
 

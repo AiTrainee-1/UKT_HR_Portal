@@ -510,7 +510,7 @@ class OverviewTests(EmailBase):
         self.assertEqual((by_type["salary_slip"]["total"], by_type["offer_letter"]["failed"]), (2, 1))
         self.assertEqual(body["byType"][0]["emailType"], "salary_slip")
         self.assertEqual(body["today"]["total"], 5)
-        self.assertEqual([c["key"] for c in body["categories"]], ["documents", "visitors", "recruitment", "other"])
+        self.assertEqual([c["key"] for c in body["categories"]], ["documents", "visitors", "recruitment", "settlement", "other"])
 
     def test_recent_failures_carry_the_reason(self):
         self.row(self.ravi, "salary_slip", "failed", error_message="SMTP authentication failed.")

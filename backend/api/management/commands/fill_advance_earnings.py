@@ -9,6 +9,7 @@ salary_at_request where it was empty); never a payroll, slip or repayment.
 """
 
 from django.core.management.base import BaseCommand
+from django.db.models import Q
 
 from api import advance_earnings
 from api.models import Advance
@@ -21,7 +22,11 @@ class Command(BaseCommand):
         parser.add_argument("--dry-run", action="store_true", help="Only count the advances that would be filled.")
 
     def handle(self, *args, **opts):
-        todo = Advance.objects.filter(earned_on__isnull=True).select_related("employee").order_by("id")
+        todo = (
+            Advance.objects.filter(Q(earned_on__isnull=True) | Q(leave_days_1_20__isnull=True))
+            .select_related("employee")
+            .order_by("id")
+        )
         total = todo.count()
         if opts["dry_run"]:
             self.stdout.write(f"{total} advance(s) have no earned-salary figures yet.")

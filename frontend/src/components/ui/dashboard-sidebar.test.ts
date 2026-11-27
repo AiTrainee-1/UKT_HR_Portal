@@ -67,7 +67,7 @@ describe("the Compensation group", () => {
       "Staff Payroll",
       "Production Payroll",
       "Compensation",
-      "Settlement",
+      "Loan & Advance",
       "Salary Slip",
       "Missed Payroll",
       "Reports",
@@ -122,6 +122,39 @@ describe("the Compensation group", () => {
     expect(navChildActive(all, "/hr/employees")).toBe(true);
     expect(navChildActive(all, "/hr/employees/productionEmployee")).toBe(false);
     expect(navChildActive(production, "/hr/employees/productionEmployee")).toBe(true);
+  });
+});
+
+describe("the Loan & Advance group (owner 2026-11-27: the Settlement page renamed, its types as sub-items)", () => {
+  const group = () => row("/hr/Loan&Advance");
+  const lit = (path: string) =>
+    group()
+      .children!.filter((c) => navChildActive(c, path))
+      .map((c) => c.label);
+
+  it("is a group with Overview, Salary Advance and Term Loan, at their own addresses", () => {
+    expect(group().label).toBe("Loan & Advance");
+    expect(group().children?.map((c) => [c.label, c.path])).toEqual([
+      ["Overview", "/hr/Loan&Advance"],
+      ["Salary Advance", "/hr/Loan&Advance/salary-advance"],
+      ["Term Loan", "/hr/Loan&Advance/term-loan"],
+    ]);
+    expect(navGroups.flatMap((g) => g.items).some((i) => i.path === "/hr/settlement")).toBe(false);
+  });
+
+  it("is lit (so open) on its three pages and not elsewhere", () => {
+    for (const path of ["/hr/Loan&Advance", "/hr/Loan&Advance/salary-advance", "/hr/Loan&Advance/term-loan"]) {
+      expect(navItemActive(group(), path), path).toBe(true);
+    }
+    expect(navItemActive(group(), "/hr/salary-slip")).toBe(false);
+    expect(navItemActive(group(), "/hr/Loan&Advances")).toBe(false);
+  });
+
+  it("lights exactly the page being viewed: Overview only on its own address", () => {
+    expect(lit("/hr/Loan&Advance")).toEqual(["Overview"]);
+    expect(lit("/hr/Loan&Advance/salary-advance")).toEqual(["Salary Advance"]);
+    expect(lit("/hr/Loan&Advance/term-loan")).toEqual(["Term Loan"]);
+    expect(lit("/hr/Loan&Advance/term-loans")).toEqual([]);
   });
 });
 

@@ -95,7 +95,10 @@ class ListContractTests(TestCase):
                 outstanding=Decimal("1000"),
                 purpose=str(n),
             )
-        Advance.objects.update(earned_on=date(2026, 11, 1))  # as if already worked out (fill_missing, 2026-11-26)
+        # as if already worked out (fill_missing, 2026-11-26: the 1st-20th figures and the leave check)
+        from .clock import ist_today
+
+        Advance.objects.update(earned_on=ist_today(), leave_days_1_20=0)
         with CaptureQueriesContext(connection) as five:
             self.get("/api/advances")
         self.assertEqual(len(one), len(five))

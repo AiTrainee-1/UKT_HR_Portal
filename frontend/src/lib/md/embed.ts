@@ -38,7 +38,12 @@ export const HR_TO_MD_PAGES: Readonly<Record<string, string>> = {
   "/hr/production-payroll": "/md/payroll?kind=production",
   "/hr/recruitment": "/md/recruitment",
   "/hr/activity-logs": "/md/activity",
-  "/hr/settlement": "/md/requests",
+  // the MD's own Loan & Advance page (the Settlement Automation Method's MD step; renamed 2026-11-27). The type pages
+  // come before the page itself: the first prefix that matches wins.
+  "/hr/Loan&Advance/salary-advance": "/md/loan-advance?type=general",
+  "/hr/Loan&Advance/term-loan": "/md/loan-advance?type=term",
+  "/hr/Loan&Advance": "/md/loan-advance",
+  "/hr/settlement": "/md/loan-advance",
   "/hr/missing-punch": "/md/requests",
   "/hr/casual-leave": "/md/leave",
   "/hr/reports": "/md/reports",

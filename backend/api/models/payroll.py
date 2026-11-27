@@ -172,6 +172,14 @@ class Advance(models.Model):
     earned_on = models.DateField(null=True, blank=True)
     # Why HR recorded a Salary Advance above that limit (HR may, with a remark; employees never can).
     limit_remark = models.TextField(blank=True, default="", db_default="")
+    # Leave taken in the 1st-20th of that month (owner 2026-11-26): absent days + approved leave on working days (a
+    # half-day leave 0.5; Casual Leave, Sundays and holidays never). 3 = warning (orange), more = critical (red).
+    leave_days_1_20 = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    # the last day the earned figures count (Settings -> Loan & Advance, default the 20th; 2026-11-27)
+    earned_through_day = models.IntegerField(null=True, blank=True)
+    earned_percent = models.IntegerField(null=True, blank=True)  # the Salary Advance % the limit was worked out with
+    # a Term Loan's limit when it was asked for: % of the fixed monthly salary (Settings, 2026-11-27)
+    term_limit = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_column="created_at")
     updated_at = models.DateTimeField(auto_now=True, db_column="updated_at")
 

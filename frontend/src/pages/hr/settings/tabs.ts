@@ -11,6 +11,7 @@ import {
   FileSignature,
   FileText,
   Fingerprint,
+  HandCoins,
   Headset,
   Hourglass,
   IndianRupee,
@@ -220,6 +221,20 @@ export const SETTINGS_TABS: SettingsTabDef[] = [
     ],
   },
   {
+    id: "settlement",
+    label: "Loan & Advance",
+    group: "pay",
+    icon: HandCoins,
+    purpose:
+      "How Salary Advances and Term Loans are decided: the Normal Method (HR approves or rejects each one on the Loan & Advance pages) or the Automation Method (a month-wise workflow per type: HR review, the MD's approval, HR's final settlement, the auditor and the bank file for Accounts), and the auditor's and Accounts' e-mail addresses.",
+    usedBy: [
+      { label: "Loan & Advance", to: "/hr/Loan&Advance" },
+      { label: "Requests", to: "/hr/requests" },
+      { label: "MD portal" },
+      { label: "Gmail Control", to: "/hr/gmail-control" },
+    ],
+  },
+  {
     id: "documents",
     label: "Company Documents",
     group: "documents",
@@ -292,6 +307,7 @@ const loaders: Record<string, () => Promise<{ default: SettingsTabComponent }>> 
   production_payroll: () => import("./ProductionPayrollTab"),
   pf_esi: () => import("./PfEsiTab"),
   "salary-slip": () => import("./SalarySlipTab"),
+  settlement: () => import("./SettlementTab"),
   documents: () => import("./DocumentsTab"),
   idcard: () => import("./IdCardTab"),
   smtp: () => import("./SmtpTab"),

@@ -29,6 +29,7 @@ export const SETTINGS_TAB_MODULE: Record<string, string> = {
   // PF & ESI is read by every HR login that may see it; changing it is the super admin's alone (the API decides)
   pf_esi: "settings.pf_esi",
   "salary-slip": "settings.salary_slip",
+  settlement: "settings.settlement",
   smtp: "settings.smtp",
   whatsapp: "settings.whatsapp",
   backup: "settings.backup",

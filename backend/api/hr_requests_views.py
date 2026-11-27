@@ -261,8 +261,8 @@ KINDS: tuple[Kind, ...] = (
         "settlement",
         "Advance",
         "link",
-        "/hr/settlement",
-        "Settlement",
+        "/hr/Loan&Advance",  # the Settlement page, renamed Loan & Advance (owner 2026-11-27)
+        "Loan & Advance",
         ("pending",),
         search=("purpose",),
     ),
@@ -1203,10 +1203,16 @@ def hr_requests(request: Request) -> Response:
         items.sort(key=lambda i: (i["submittedAt"] or "", i["id"]), reverse=True)
 
     kinds_json = []
+    from .settlement_automation.service import is_automation
+
+    # Settlement Automation Method (2026-11-26): advances are decided in the month's settlement workflow, so the hub only
+    # links to it (no Approve / Reject here; PUT /api/advances refuses them anyway)
+    advances_by_workflow = is_automation()
     for kind in allowed:
         defn = approval.definition(kind.key)
         cfg = approval.get_config(kind.key)
         waiting = waiting_by_kind[kind.key]
+        by_workflow = advances_by_workflow and kind.key == "advance"
         kinds_json.append(
             {
                 "key": kind.key,
@@ -1214,10 +1220,10 @@ def hr_requests(request: Request) -> Response:
                 "group": defn.group,
                 "access": access[kind.key],
                 # added 2026-11-10: whether this account may approve / reject this kind (apart from its access level)
-                "canApprove": may_approve.get(kind.key, False),
-                "mode": kind.mode,
-                "openPath": kind.open_path,
-                "openLabel": kind.open_label,
+                "canApprove": False if by_workflow else may_approve.get(kind.key, False),
+                "mode": "link" if by_workflow else kind.mode,
+                "openPath": "/hr/Loan&Advance" if by_workflow else kind.open_path,
+                "openLabel": "Open the Loan & Advance workflow" if by_workflow else kind.open_label,
                 "pipeline": approval.pipeline_text(defn.requested_by, cfg.steps),
                 "enabled": cfg.enabled,
                 "waiting": waiting["total"],

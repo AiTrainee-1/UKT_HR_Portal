@@ -114,6 +114,19 @@ def withdraw_my_request(request: Request, module: str, pk: int) -> Response:
         if obj is None or obj.employee_id != employee_id:
             # Someone else's request is reported exactly like a missing one.
             return Response({"error": "Request not found.", "code": "not_found"}, status=404)
+        if module == "advance":
+            from .settlement_views import _in_workflow
+
+            if _in_workflow(obj):
+                # Settlement Automation Method (2026-11-26): HR already forwarded it to the MD
+                return Response(
+                    {
+                        "error": "HR has already forwarded this request for approval, so it can no longer be deleted. "
+                        "Please contact HR.",
+                        "code": "in_workflow",
+                    },
+                    status=409,
+                )
         if module == "advance" and obj.applied_by != Advance.APPLIED_BY_EMPLOYEE:
             # an advance HR recorded is not the employee's application: only HR may remove it
             return Response(

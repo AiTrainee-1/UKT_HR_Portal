@@ -39,7 +39,12 @@ describe("hrToMd: where the browser goes when an HR page navigates", () => {
     expect(hrToMd("/hr/production-payroll/weekly?period=2")).toBe("/md/payroll?kind=production&period=2");
     expect(hrToMd("/hr/recruitment/resume-screening")).toBe("/md/recruitment");
     expect(hrToMd("/hr/activity-logs")).toBe("/md/activity");
-    expect(hrToMd("/hr/settlement")).toBe("/md/requests");
+    expect(hrToMd("/hr/settlement")).toBe("/md/loan-advance");
+    expect(hrToMd("/hr/settlement?month=2026-10")).toBe("/md/loan-advance?month=2026-10");
+    expect(hrToMd("/hr/Loan&Advance")).toBe("/md/loan-advance");
+    expect(hrToMd("/hr/Loan&Advance/salary-advance")).toBe("/md/loan-advance?type=general");
+    expect(hrToMd("/hr/Loan&Advance/term-loan?month=2026-10")).toBe("/md/loan-advance?type=term&month=2026-10");
+    expect(hrToMd("/hr/loan&advance/Term-Loan")).toBe("/md/loan-advance?type=term");
     expect(hrToMd("/md/payroll")).toBe("/md/payroll");
     expect(hrToMd("/hr/settings")).toBe("/hr/settings");
     expect(hrToMd("/employee/dashboard")).toBe("/employee/dashboard");

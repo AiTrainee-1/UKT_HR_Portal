@@ -164,6 +164,7 @@ const SETTINGS_TABS = [
   "production_payroll",
   "pf_esi",
   "salary-slip",
+  "settlement",
   "documents",
   "idcard",
   "smtp",

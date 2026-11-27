@@ -180,7 +180,7 @@ const PAGES: [string, string][] = [
   ["staff payroll", "/hr/payroll?month=2&year=2026"],
   ["production payroll", "/hr/production-payroll/weekly"],
   ["bonus", "/hr/bonus"],
-  ["settlement", "/hr/settlement"],
+  ["loan & advance", "/hr/Loan&Advance"],
   ["promotion", "/hr/promotion"],
   ["increment", "/hr/increment"],
   ["reports", "/hr/reports"],

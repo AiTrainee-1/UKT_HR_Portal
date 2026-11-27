@@ -27,6 +27,7 @@ MODULES = {
     "documents": "Documents",
     "visitors": "Visitors",
     "recruitment": "Recruitment",
+    "settlement": "Loan & Advance",
     "other": "Other",
 }
 
@@ -293,6 +294,76 @@ _add(
         V("employee_type", "Staff, Production or all employees", "Staff"),
         COMPANY,
     ),
+)
+# ── Settlement (Automation Method, 2026-11-26) ─────────────────────────────────
+
+_SETTLEMENT_VARS = (
+    V("type", "Salary Advance or Term Loan", "Salary Advance"),
+    V("period", "The month of the requests", "November 2026"),
+    V("batch", "The batch of the month", "1"),
+    V("approved_count", "Requests approved", "12"),
+    V("rejected_count", "Requests rejected", "2"),
+    V("total_approved", "Total approved amount, with the rupee sign", "₹1,24,000.00"),
+    V("finalized_by", "Who finalized the settlement", "Meena (HR)"),
+    V("request_count", "Requests in the settlement", "14"),
+    COMPANY,
+)
+_AUDITOR_VARS = (
+    *_SETTLEMENT_VARS,
+    V(
+        "review_link",
+        "The auditor's secure review link (the button carries it too)",
+        "https://hrms.example/auditor-review/…",
+    ),
+)
+_add(
+    key="settlement_auditor",
+    label="Loan & Advance Review Request to Auditor",
+    module="settlement",
+    description=(
+        "The auditor's review request for a month's finalized Salary Advance / Term Loan settlement (Automation Method): "
+        "a summary, a secure Review & Confirm Settlement button to the Auditor Review Portal, and the report as PDF "
+        "and Excel."
+    ),
+    subject="Review & confirm: {{type}} settlement – {{period}} (Batch {{batch}}) | {{company_name}}",
+    heading="{{type}} settlement – {{period}}",
+    attachment="Settlement report (PDF and Excel)",
+    accent="#1E3A8A",
+    body=(
+        "Dear Auditor,\n\n"
+        "The **{{type}}** settlement for **{{period}}** (Batch {{batch}}) has been finalized by HR and is ready for "
+        "your review.\n\n"
+        "{{details}}\n\n"
+        "Please open the settlement with the button above: you can check every employee's figures and attendance, add "
+        "remarks, reduce or reject a request, and confirm the settlement. The report is also attached as PDF and Excel."
+    ),
+    variables=_AUDITOR_VARS,
+    details=(
+        ("Settlement", "type"),
+        ("Month", "period"),
+        ("Batch", "batch"),
+        ("Requests", "request_count"),
+        ("Approved", "approved_count"),
+        ("Approved amount", "total_approved"),
+        ("Rejected", "rejected_count"),
+        ("Finalized by", "finalized_by"),
+    ),
+)
+_add(
+    key="settlement_accounts",
+    label="Loan & Advance Bank File to Accounts",
+    module="settlement",
+    description="The bank file of a month's approved Salary Advances / Term Loans (Automation Method), Excel.",
+    subject="{{type}} bank file – {{period}} (Batch {{batch}}) | {{company_name}}",
+    heading="{{type}} bank file – {{period}}",
+    attachment="Bank file (Excel, the payroll bank-file format)",
+    body=(
+        "Dear Accounts Team,\n\n"
+        "Please find attached the bank file for the approved **{{type}}** requests of **{{period}}** "
+        "(Batch {{batch}}): **{{approved_count}}** payments, **{{total_approved}}** in all.\n\n"
+        "The settlement has been reviewed by the auditor."
+    ),
+    variables=_SETTLEMENT_VARS,
 )
 _add(
     key="test_email",

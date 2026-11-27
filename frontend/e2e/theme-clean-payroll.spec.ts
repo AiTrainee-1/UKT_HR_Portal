@@ -2,7 +2,8 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 
 // The payroll area of the "Clean Professional" theme (src/themes/clean/areas/payroll.css): Staff Payroll, Production Payroll, a
-// payroll's details page, Bonus, Settlement, Promotion and Salary Increment, with their dialogs and the settlement sheet.
+// payroll's details page, Bonus, Loan & Advance (the Settlement page until 2026-11-27), Promotion and Salary Increment, with
+// their dialogs and the advance sheet.
 // What is held here:
 //   * every page of the area, at a laptop and a phone width, is flat: nothing sticks out sideways, no frosted blur, no drop
 //     shadow outside a floating layer, no gradient fill;
@@ -11,13 +12,23 @@ import { HR_PASSWORD, HR_USERNAME } from "./helpers";
 //   * the same pages in the default theme keep the look they always had (the values below were read from the application
 //     before the area file existed).
 // Data: February 2026 from seed_e2e.py (Asha, Ravi, Meena) paid through the API, and two advances made here and removed again.
+// Since 2026-11-27 HR raises an advance under the employee rules (POST /api/advances: a Salary Advance only on the 21st and
+// 22nd, within 50 % of the salary earned in the 1st-20th, which the e2e employees do not have this month; a Term Loan any
+// day after 6 months of service, which the seeded ones lack: no joining date). So two staff members who joined in 2024 are
+// made here ("TCP-E2E1", "TCP-E2E2") with a Term Loan each, and removed again.
 
 const DEVICE_KEY = "uk_textile_theme_device";
 const FEB = "/hr/payroll?month=2&year=2026";
+const LOAN_ADVANCE = "/hr/Loan&Advance";
+const LOAN_EMPLOYEES = [
+  { employeeCode: "TCP-E2E1", firstName: "Tara", lastName: "Theme", phone: "9000000181" },
+  { employeeCode: "TCP-E2E2", firstName: "Vijay", lastName: "Theme", phone: "9000000182" },
+] as const;
 const WIDTHS = [1366, 390] as const;
 
 let token = "";
 let advanceIds: number[] = [];
+let loanEmployeeIds: number[] = [];
 let ashaPayrollId = 0;
 
 async function api(request: APIRequestContext, method: string, url: string, data?: unknown) {
@@ -36,22 +47,28 @@ test.beforeAll(async ({ request }) => {
   }[];
   ashaPayrollId = payrolls.find((p) => p.employeeCode === "E2E001")!.id;
   const employees = (await api(request, "GET", "/api/employees")).body as { id: number; employeeCode: string }[];
-  const asha = employees.find((e) => e.employeeCode === "E2E001")!;
-  const ravi = employees.find((e) => e.employeeCode === "E2E002")!;
-  for (const [employee, amount] of [
-    [asha, 6000],
-    [ravi, 9000],
-  ] as const) {
+  const branches = (await api(request, "GET", "/api/branches")).body as { id: number }[];
+  for (const [i, e] of LOAN_EMPLOYEES.entries()) {
+    const known = employees.find((x) => x.employeeCode === e.employeeCode);
+    const id =
+      known?.id ??
+      ((
+        await api(request, "POST", "/api/employees", {
+          ...e,
+          employmentType: "staff",
+          branchId: branches[0].id,
+          salaryType: "monthly",
+          salaryAmount: 24000,
+          joinDate: "2024-01-01",
+        })
+      ).body.id as number);
+    loanEmployeeIds.push(id);
     const made = await api(request, "POST", "/api/advances", {
-      employeeId: employee.id,
-      advanceType: "general",
-      amount,
-      emiAmount: amount,
+      employeeId: id,
+      advanceType: "term",
+      amount: i === 0 ? 6000 : 9000,
+      repaymentMonths: 3,
       purpose: "theme-clean-payroll",
-      // the e2e employees have no attendance this month, so the 1st-20th limit is 0 (HR may go over it with a reason)
-      limitRemark: "theme-clean-payroll e2e: above the 1st-20th limit",
-      repaymentStartMonth: 3,
-      repaymentStartYear: 2026,
     });
     expect(made.status, JSON.stringify(made.body)).toBe(201);
     advanceIds.push(made.body.id);
@@ -67,6 +84,8 @@ test.afterAll(async ({ request }) => {
     await api(request, "DELETE", `/api/advances/${id}`);
   }
   advanceIds = [];
+  for (const id of loanEmployeeIds) await api(request, "DELETE", `/api/employees/${id}`);
+  loanEmployeeIds = [];
 });
 
 async function open(page: Page, theme: "clean" | "default", path: string, width: number = 1366) {
@@ -187,8 +206,8 @@ const PAGES: PageSpec[] = [
   { name: "production payroll", path: () => "/hr/production-payroll/weekly", ready: '[data-testid="pcp-cycle-badge"]' },
   { name: "bonus", path: () => "/hr/bonus", ready: '[data-ui-area="payroll"]' },
   {
-    name: "settlement",
-    path: () => "/hr/settlement",
+    name: "loan & advance",
+    path: () => LOAN_ADVANCE,
     ready: '[data-testid="settlement-toolbar"]',
   },
   { name: "promotion", path: () => "/hr/promotion", ready: '[data-testid="stat-this-year"]' },
@@ -223,7 +242,7 @@ test("the figure tiles are white tiles with a 1px line and a tinted icon chip, n
   // (the production payroll pages had their own dashboard of tiles until 2026-11-16, when the owner removed it: the
   // pages below write their own copy of the tile)
   for (const [path, ids] of [
-    ["/hr/settlement", ["stat-pending", "stat-active", "stat-recovered", "stat-left"]],
+    [LOAN_ADVANCE, ["stat-pending", "stat-active", "stat-recovered", "stat-left"]],
     ["/hr/promotion", ["stat-this-year", "stat-employees", "stat-dept-moves", "stat-due"]],
     ["/hr/increment", ["stat-total", "stat-employees", "stat-amount", "stat-avg"]],
   ] as const) {
@@ -305,7 +324,7 @@ test("initials avatars are one colour", async ({ page }) => {
       "border-top-left-radius"
     ],
   ).toBe("6px");
-  await open(page, "clean", "/hr/settlement");
+  await open(page, "clean", LOAN_ADVANCE);
   const advance = await page.evaluate(() =>
     Array.from(document.querySelectorAll('[data-testid="advances-table"] div[aria-hidden="true"]')).map(
       (el) => getComputedStyle(el).backgroundColor,
@@ -315,7 +334,7 @@ test("initials avatars are one colour", async ({ page }) => {
   expect(new Set(advance).size).toBe(1);
 });
 
-test("the settlement table is no wider than it was, and its dialogs and sheet are flat", async ({ page }) => {
+test("the Loan & Advance table is no wider than it was, and its dialogs and sheet are flat", async ({ page }) => {
   const overflowOf = () =>
     page.evaluate(() => {
       const container = document
@@ -323,14 +342,14 @@ test("the settlement table is no wider than it was, and its dialogs and sheet ar
         .closest('[data-slot="table-container"]')!;
       return container.scrollWidth - container.clientWidth;
     });
-  await open(page, "default", "/hr/settlement");
+  await open(page, "default", LOAN_ADVANCE);
   const before = await overflowOf();
-  await open(page, "clean", "/hr/settlement");
+  await open(page, "clean", LOAN_ADVANCE);
   // 12px cell padding would add about 100px to this eight-column table; a table that wide has 6px (tables.css)
   expect(await overflowOf()).toBeLessThanOrEqual(before);
 
-  await page.getByRole("button", { name: "New Advance" }).click();
-  const dialog = '[data-testid="create-advance-dialog"]';
+  await page.getByRole("button", { name: "New request" }).click();
+  const dialog = '[data-testid="new-request-dialog"]';
   await expect(page.locator(dialog)).toBeVisible();
   expect(await styleOf(page, dialog, ["border-top-left-radius", "backdrop-filter", "background-image"])).toEqual({
     "border-top-left-radius": "8px",
@@ -348,7 +367,7 @@ test("the settlement table is no wider than it was, and its dialogs and sheet ar
 });
 
 test("a count bubble in the open menu row keeps white text on red", async ({ page }) => {
-  await open(page, "clean", "/hr/settlement");
+  await open(page, "clean", LOAN_ADVANCE);
   const bubble =
     'aside .clay-nav-active span[style*="linear-gradient"], [data-ui-shell="sidebar"] .clay-nav-active span[style*="linear-gradient"]';
   // the bubble only exists while an advance waits for a decision (the first one made here does)
@@ -465,7 +484,7 @@ test("the same pages in the default theme keep the look they always had", async 
   );
   expect(new Set(avatars).size).toBeGreaterThan(1);
 
-  await open(page, "default", "/hr/settlement");
+  await open(page, "default", LOAN_ADVANCE);
   expect(await styleOf(page, '[data-testid="stat-pending"]', ["border-top-width", "border-top-left-radius"])).toEqual({
     "border-top-width": "0px",
     "border-top-left-radius": "16px",

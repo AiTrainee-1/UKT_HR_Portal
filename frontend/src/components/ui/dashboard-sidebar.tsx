@@ -10,6 +10,7 @@ import { moduleForPath } from '@/lib/permission-modules';
 import { hrCanAct } from '@/lib/approval-workflow';
 import { COMPENSATION_BASE, COMPENSATION_PAGES, pagePath } from '@/pages/hr/compensation/routes';
 import { GEO_BASE, GEO_SECTIONS, GEO_SECTION_LABEL, geoPath } from '@/pages/hr/geo-tracking/routes';
+import { LOAN_ADVANCE_BASE, LOAN_ADVANCE_PAGES, LOAN_ADVANCE_TITLE } from '@/pages/hr/settlement/routes';
 import { useQuery } from '@tanstack/react-query';
 import { useListLeaveRequests, useListPermissions, useListResignations, useListAdvances } from '@/lib/api-client';
 import { customFetch } from '@/lib/api-client/custom-fetch';
@@ -156,7 +157,14 @@ export const navGroups: NavGroupData[] = [
           matchSubpaths: true,
         })),
       },
-      { path: '/hr/settlement', label: 'Settlement', icon: Wallet },
+      {
+        // Loan & Advance (the Settlement page, renamed 2026-11-27): the Overview and one page per type, chosen here (the
+        // pages have no tab row for the type). Overview is a path prefix of the other two, so it is lit on its own path only.
+        path: LOAN_ADVANCE_BASE,
+        label: LOAN_ADVANCE_TITLE,
+        icon: Wallet,
+        children: LOAN_ADVANCE_PAGES.map((page) => ({ path: page.path, label: page.label })),
+      },
       // slips for any employee, independent of payroll (2026-11-20)
       { path: '/hr/salary-slip', label: 'Salary Slip', icon: ReceiptText },
       // employees the regular payroll missed for a month; Done adds them to its payroll (2026-11-23)
@@ -671,7 +679,7 @@ function HrSidebarView({
   const [isSearchOpen, setIsSearchOpen] = useState(false);
 
   // Gated on the nav item each badge actually attaches to -if "Requests" (or
-  // "Recruitment > Resignations" / "Settlement") is hidden for this role, the
+  // "Recruitment > Resignations" / "Loan & Advance") is hidden for this role, the
   // badge never renders, so there's no reason to fetch the full record list
   // just to compute a count nobody sees (and these endpoints correctly 403
   // when hidden, since they're also the full-detail pages, not counts-only).
@@ -816,7 +824,7 @@ function HrSidebarView({
       ? { ...item, badge: pendingCount || undefined }
       : item.path === '/hr/enquiries'
       ? { ...item, badge: pendingEnquiryCount || undefined }
-      : item.path === '/hr/settlement'
+      : item.path === LOAN_ADVANCE_BASE
       ? { ...item, badge: pendingAdvancesCount || undefined }
       : item.path === '/hr/notifications'
       ? { ...item, badge: unreadNotificationCount || undefined }
