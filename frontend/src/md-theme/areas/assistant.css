@@ -23,6 +23,22 @@
     display: none;
   }
 }
+/* Nothing the MD clicks may sit under the floating radio (owner 2026-11-27: the Loan & Advance "Review decisions" button
+   was under it and its "Ask AI" bubble). It steps aside while a dialog or a side sheet is open (they lie under it
+   otherwise); a bar docked to the bottom of a page (.md-dock-clear) ends before the radio's corner (the character and
+   the bubble that sticks out to its left); and every page ends with room for the radio, so its last rows scroll clear
+   of it. */
+html[data-md-theme]:has([role="dialog"][data-state="open"]) .md-assistant-launcher {
+  display: none;
+}
+@media (min-width: 640px) {
+  html[data-md-theme]:has(.md-assistant-launcher[data-state="shown"]) .md-dock-clear {
+    margin-right: 13rem;
+  }
+  html[data-md-theme]:has(.md-assistant-launcher[data-state="shown"]) [data-md-main] {
+    padding-bottom: 10.5rem;
+  }
+}
 /* Its motion, in CSS (the keyframes are in AssistantHost.tsx): it springs in when it appears, grows a little under the
    pointer and shrinks away when the panel opens. The springs are framer-motion's (stiffness 380 / damping 26 for the
    launcher, 320 / 24 for the bubble, mass 1) written out as linear() curves, so it moves as it always did without the

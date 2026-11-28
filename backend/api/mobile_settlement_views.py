@@ -47,7 +47,7 @@ from .auth import get_token_employee_id, require_auth
 from .clock import FACTORY_TZ, ist_today
 from .models import Advance, Employee
 from .payroll_insights import inr
-from .settlement_views import advance_json, whole_rupee_emi
+from .settlement_views import _in_workflow, advance_json, whole_rupee_emi
 
 WORKFLOW = "advance"
 
@@ -99,10 +99,12 @@ def _salary_advance_days(month: int, year: int, r=None) -> tuple[date, date]:
 TERM_LOAN_ANY_DAY = "You can apply for a Term Loan on any day."
 
 
-def window(today: date) -> dict:
+def window(today: date, *, term_line: bool = True) -> dict:
     """The Salary Advance window around `today`: open on the 21st and the 22nd of the month. Before the 21st it is this
     month's window that is coming; after the 22nd, next month's. Also the `window` key older apps read
-    (until 2026-11-25 one window, the 20th to the month end, held both forms)."""
+    (until 2026-11-25 one window, the 20th to the month end, held both forms). `term_line`: end the message with "a Term
+    Loan on any day" (not for a production employee: Term Loans are staff only)."""
+    tail = (" " + TERM_LOAN_ANY_DAY) if term_line else ""
     r = advance_rules.rules()
     opens_on, closes_on = _salary_advance_days(today.month, today.year, r)
     if today > closes_on:
@@ -113,14 +115,13 @@ def window(today: date) -> dict:
     if is_open:
         days_left = (closes_on - today).days + 1  # today included
         message = (
-            f"Salary Advance applications are open until {_day_month(closes_on)} ({advance_rules.window_text(r)}). "
-            + TERM_LOAN_ANY_DAY
+            f"Salary Advance applications are open until {_day_month(closes_on)} ({advance_rules.window_text(r)})."
+            + tail
         )
     else:
         days_left = 0
         message = (
-            f"Salary Advance applications open on {_day_month(opens_on)} and close on {_day_month(closes_on)}. "
-            + TERM_LOAN_ANY_DAY
+            f"Salary Advance applications open on {_day_month(opens_on)} and close on {_day_month(closes_on)}." + tail
         )
     return {
         "isOpen": is_open,
@@ -157,19 +158,20 @@ def term_window(today: date) -> dict:
     }
 
 
-def windows(today: date) -> dict:
+def windows(today: date, *, term_line: bool = True) -> dict:
     """Each form's own window (the eligibility reply's `windows`)."""
-    return {"general": window(today), "term": term_window(today)}
+    return {"general": window(today, term_line=term_line), "term": term_window(today)}
 
 
-def window_closed_message(today: date) -> str:
+def window_closed_message(today: date, *, term_line: bool = True) -> str:
     """Why a Salary Advance cannot be sent today (outside the 21st and 22nd)."""
     w = window(today)
     opens_on = date.fromisoformat(w["opensOn"])
     closes_on = date.fromisoformat(w["closesOn"])
     return (
         f"A Salary Advance can be applied for only on {advance_rules.window_text(advance_rules.rules())}. "
-        f"The next window is {_day_month(opens_on)} to {_day_month(closes_on)}. " + TERM_LOAN_ANY_DAY
+        f"The next window is {_day_month(opens_on)} to {_day_month(closes_on)}."
+        + ((" " + TERM_LOAN_ANY_DAY) if term_line else "")
     )
 
 
@@ -282,8 +284,18 @@ def pending_term_loan(emp: Employee) -> Advance | None:
     return Advance.objects.filter(employee=emp, advance_type="term", status="pending").order_by("-id").first()
 
 
-def rules_text() -> list[str]:
-    """The rules in words, from Settings -> Loan & Advance (shown in the apps and in HR's New request dialog)."""
+def automation_on() -> bool:
+    from .settlement_automation import service as automation
+
+    return automation.is_automation()
+
+
+def rules_text(automation: bool | None = None) -> list[str]:
+    """The rules in words, from Settings -> Loan & Advance (shown in the apps and in HR's New request dialog). Under the
+    Automation Method (owner 2026-11-28) the review and the withdrawal lines say what really happens: HR reviews, then it
+    is under review for approval; the approved amount may differ from the ask (a Salary Advance is rounded to the
+    nearest ₹500 within the limit); once under review it can no longer be withdrawn."""
+    automation = automation_on() if automation is None else automation
     r = advance_rules.rules()
     per_month = "One Salary Advance" if r.sa_per_month == 1 else f"Up to {r.sa_per_month} Salary Advances"
     rejected = " (a rejected one does not count)" if r.sa_rejected_allows_reapply else ""
@@ -300,9 +312,20 @@ def rules_text() -> list[str]:
         f"A Term Loan can be given {yearly} (January to December)"
         + (", one waiting or being repaid at a time" if r.tl_one_open else "")
         + ("; after a rejection you can apply again from the next month." if r.tl_reapply_next_month else "."),
-        "HR approves every application. HR may approve a smaller amount, change the months or the month deductions start.",
-        "You can delete an application while it is still waiting for HR; once HR approves or rejects it, it stays.",
     ]
+    if automation:
+        lines += [
+            "HR reviews every application first; then it is under review for approval. The approved amount may differ "
+            "from what you asked for: a Salary Advance is rounded to the nearest ₹500 within your limit.",
+            "You can withdraw an application while it is still with HR; once it is under review it can no longer be "
+            "withdrawn.",
+        ]
+    else:
+        lines += [
+            "HR approves every application. HR may approve a smaller amount, change the months or the month deductions "
+            "start.",
+            "You can delete an application while it is still waiting for HR; once HR approves or rejects it, it stays.",
+        ]
     return lines
 
 
@@ -319,18 +342,31 @@ STATUS_LABEL = {
 
 def my_advance_json(a: Advance, today: date | None = None) -> dict:
     """One application as the employee sees it: advance_json (with the repayment rows) plus the schedule, the money
-    figures and a plain-English timeline."""
+    figures and a plain-English timeline.
+
+    Since 2026-11-28: a waiting application says where it is - `reviewStatus` "with_hr" (HR can still change it, the
+    employee can still withdraw it) or "under_review" (HR forwarded it in the Automation Method: with the management /
+    the auditor; the internal steps stay private, owner's choice) - and `canWithdraw`; a decided one says whether the
+    approved amount is more than asked (`approvedMore`: a Salary Advance rounded up to the nearest ₹500)."""
     today = today or ist_today()
     data = advance_json(a, include_repayments=True)
     requested = a.requested_amount if a.requested_amount is not None else a.amount
     decided = a.status in ("approved", "closed")
+    in_workflow = a.status == "pending" and _in_workflow(a)
+    review = ("under_review" if in_workflow else "with_hr") if a.status == "pending" else None
     data.update(
         {
             "typeLabel": TYPE_LABEL.get(a.advance_type, "Advance"),
-            "statusLabel": STATUS_LABEL.get(a.status, a.status.title()),
+            "statusLabel": "Under review" if in_workflow else STATUS_LABEL.get(a.status, a.status.title()),
             "requestedAmount": float(requested),
             "approvedAmount": float(a.amount) if decided else None,
             "approvedLess": decided and Decimal(a.amount) < Decimal(requested),
+            # additive (2026-11-28)
+            "approvedMore": decided and Decimal(a.amount) > Decimal(requested),
+            "inWorkflow": in_workflow,
+            "reviewStatus": review,
+            "reviewLabel": {"with_hr": "With HR", "under_review": "Under review"}.get(review or ""),
+            "canWithdraw": a.status == "pending" and a.applied_by == Advance.APPLIED_BY_EMPLOYEE and not in_workflow,
         }
     )
 
@@ -387,12 +423,22 @@ def my_advance_json(a: Advance, today: date | None = None) -> dict:
             month_label(a.repayment_start_month, a.repayment_start_year) if a.status != "rejected" else ""
         )
 
-    data["timeline"] = timeline(a, requested, schedule)
+    data["timeline"] = timeline(a, requested, schedule, in_workflow=in_workflow)
+    if hasattr(a, "settlement_item"):
+        # decided through the Automation Method's review: the employee never sees who inside it decided (the MD, the
+        # auditor - owner 2026-11-28, "Under review" only). No name at all: both apps then say "Approved by HR".
+        data["approvedBy"] = None
+        for entry in data.get("history") or []:
+            entry["by"] = None
+        for event in data["timeline"]:
+            if "by" in event:
+                event["by"] = None
     return data
 
 
-def timeline(a: Advance, requested: Decimal, schedule: list[dict]) -> list[dict]:
+def timeline(a: Advance, requested: Decimal, schedule: list[dict], *, in_workflow: bool = False) -> list[dict]:
     """What happened, oldest first: applied, HR's decision, each deduction made."""
+    workflow = hasattr(a, "settlement_item")  # decided through the Automation Method's review (not HR alone)
     events = []
     who = "You" if a.applied_by == Advance.APPLIED_BY_EMPLOYEE else "HR"
     events.append(
@@ -409,12 +455,14 @@ def timeline(a: Advance, requested: Decimal, schedule: list[dict]) -> list[dict]
         text = f"Approved {inr(a.amount)}"
         if Decimal(a.amount) < Decimal(requested):
             text += f" of the {inr(requested)} asked for"
+        elif Decimal(a.amount) > Decimal(requested):
+            text += f" (rounded up from the {inr(requested)} asked for)"
         text += "."
         events.append(
             {
                 "kind": "approved",
                 "at": a.approved_at.isoformat() if a.approved_at else None,
-                "title": "Approved by HR",
+                "title": "Approved" if workflow else "Approved by HR",
                 "by": a.approved_by,
                 "text": text,
                 "comment": a.decision_remark or a.notes or None,
@@ -425,10 +473,19 @@ def timeline(a: Advance, requested: Decimal, schedule: list[dict]) -> list[dict]
             {
                 "kind": "rejected",
                 "at": (a.decided_at or a.updated_at).isoformat() if (a.decided_at or a.updated_at) else None,
-                "title": "Rejected by HR",
+                "title": "Rejected" if workflow else "Rejected by HR",
                 "by": a.approved_by,
                 "text": "Nothing will be deducted from your salary.",
                 "comment": a.decision_remark or a.notes or None,
+            }
+        )
+    elif in_workflow:
+        events.append(
+            {
+                "kind": "waiting",
+                "at": None,
+                "title": "Under review",
+                "text": "HR has reviewed it; it is now under review for approval.",
             }
         )
     else:
@@ -477,7 +534,10 @@ def _own_rows(emp: Employee):
 
 
 def eligibility_json(emp: Employee, today: date) -> dict:
-    win = window(today)  # the Salary Advance window (a Term Loan has none since 2026-11-25)
+    # Applying is for staff on a monthly salary (owner 2026-11-28): a production employee (paid per shift, Term Loans
+    # staff only) sees their history but no applying, so no "Term Loan on any day" either.
+    staff = emp.employment_type == Employee.EMPLOYMENT_TYPE_STAFF
+    win = window(today, term_line=staff)  # the Salary Advance window (a Term Loan has none since 2026-11-25)
     cfg = approval.get_config(WORKFLOW)
     workflow_message = None
     if not cfg.enabled:
@@ -504,7 +564,7 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             else "Your monthly salary is not recorded yet, so a Salary Advance cannot be worked out. Please contact HR."
         )
     elif not win["isOpen"]:
-        general_reason = window_closed_message(today)
+        general_reason = window_closed_message(today, term_line=staff)
     elif earnings is not None and earnings.limit <= 0:
         general_reason = (
             f"No salary was earned from the 1st to the {advance_rules.ordinal(earnings.through.day)} of this month (no "
@@ -531,13 +591,23 @@ def eligibility_json(emp: Employee, today: date) -> dict:
     # The salary a Salary Advance would come out of: this month's while its window is open or still ahead; after the 22nd
     # the next chance is next month's window, so next month's salary (2026-11-25: the closed card said "November").
     ded_month, ded_year = (nm, ny) if today.day > r.sa_window_to else (today.month, today.year)
+    automation = automation_on()
+    can_apply_at_all = staff or salary is not None
 
     return {
         "today": today.isoformat(),
         # what older apps (and the Employee Web App) read: the Salary Advance window
         "window": win,
         # additive (2026-11-25): each form's own window; a Term Loan's is always open
-        "windows": windows(today),
+        "windows": windows(today, term_line=staff),
+        # additive (2026-11-28): the method HR runs ("automation": HR review, then under review for approval; a
+        # forwarded request cannot be withdrawn), and whether this employee can apply at all (a production employee:
+        # no - the apps show the history only, with `applyUnavailableReason`)
+        "method": "automation" if automation else "normal",
+        "applyAvailable": can_apply_at_all,
+        "applyUnavailableReason": None
+        if can_apply_at_all
+        else "Loan & Advance is for staff on a monthly salary. Your earlier requests stay here.",
         "workflowEnabled": cfg.enabled,
         "workflowMessage": workflow_message,
         "employeeActive": active,
@@ -589,8 +659,8 @@ def eligibility_json(emp: Employee, today: date) -> dict:
             "code": term_status["code"],
             "rules": r.tl_json(),
         },
-        "rules": rules_text(),
-        "approvalPath": approval.pipeline_text("Employee", cfg.steps),
+        "rules": rules_text(automation),
+        "approvalPath": "Employee → HR → Under review" if automation else approval.pipeline_text("Employee", cfg.steps),
     }
 
 
@@ -701,9 +771,10 @@ def apply_for(emp: Employee, data, *, applied_by: str, today: date | None = None
             )
         existing = salary_advance_this_month(emp, today)
         if existing is not None:
+            allowed = advance_rules.rules().sa_per_month
             return _bad(
                 f"You already have a Salary Advance for {month_label(today.month, today.year)}. "
-                "Only one is allowed each month.",
+                + ("Only one is allowed each month." if allowed == 1 else f"Up to {allowed} are allowed each month."),
                 "duplicate",
                 status=409,
             )
@@ -719,7 +790,7 @@ def apply_for(emp: Employee, data, *, applied_by: str, today: date | None = None
         status = advance_rules.term_loan_status(emp, today, r)
         if not status["eligible"]:
             code = status["code"]
-            http = {"staff_only": 400, "no_salary": 400, "service": 403}.get(code, 409)
+            http = {"staff_only": 400, "no_salary": 400, "service": 403, "below_minimum": 400}.get(code, 409)
             # older apps know "duplicate" for a request still waiting
             return _bad(status["reason"], "duplicate" if code == "pending" else code, status=http)
         if amount < r.tl_min_amount:

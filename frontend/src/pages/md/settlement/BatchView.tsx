@@ -426,6 +426,36 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
 
   return (
     <div className="space-y-5" data-testid="md-settlement-batch" data-batch={batch.id} data-stage={batch.stage}>
+      {/* Review decisions at the top too (owner 2026-11-27: easier to reach than the bar at the bottom) */}
+      {canDecide && view !== "history" && (
+        <div
+          className="md-card flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3"
+          data-testid="md-settlement-top-review"
+        >
+          <p className="min-w-0 text-[13px] font-extrabold text-md-ink">
+            {num(summary.decided)} of {num(summary.total)} decided
+            <span className="font-semibold text-md-ink-soft">
+              {" "}
+              · approving {money(summary.approvedTotal)} of {money(summary.requestedTotal)} asked
+            </span>
+          </p>
+          <button
+            type="button"
+            className={cn(
+              "md-btn md-btn-sm",
+              changes > 0 ? "md-btn-soft" : summary.undecided === 0 ? "md-btn-primary" : "md-btn-ink",
+              BTN_MOTION,
+            )}
+            onClick={() => {
+              setConfirmError(null);
+              setReviewOpen(true);
+            }}
+            data-testid="md-settlement-review-top"
+          >
+            <ClipboardCheck size={14} aria-hidden="true" /> Review decisions
+          </button>
+        </div>
+      )}
       {view === "overview" && (
         <>
           <ReworkState batch={batch} />
@@ -592,7 +622,8 @@ export default function BatchView({ batch, view }: { batch: SettlementBatch; vie
                 />
               </section>
 
-              <div className="sticky bottom-3 z-20" data-testid="md-settlement-bar">
+              {/* md-dock-clear: the bar ends before the floating AI radio's corner (md-theme/areas/assistant.css) */}
+              <div className="md-dock-clear sticky bottom-3 z-20" data-testid="md-settlement-bar">
                 <div className="md-card md-card-strong flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <p className="text-[13px] font-extrabold text-md-ink" data-testid="md-settlement-progress">

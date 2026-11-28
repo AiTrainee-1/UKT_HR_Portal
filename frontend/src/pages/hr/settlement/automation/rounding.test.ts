@@ -65,6 +65,10 @@ describe("the rounding in words", () => {
     expect(roundingSteps(roundingFor(4800, null))).toBe(
       "₹4,800 asked → rounded to the nearest ₹500 = ₹5,000 (no eligible limit known)",
     );
+    // a limit under ₹500 forces ₹0 although ₹250 or more is left: the limit is the reason, not "less than ₹250"
+    expect(roundingSteps(roundingFor(5000, 450))).toBe(
+      "₹5,000 asked → brought down to the ₹450 limit → rounded to ₹0 (the nearest ₹500, ₹500, is above the ₹450 limit): reject it",
+    );
   });
 
   it("changed / zero / the base amount, with an older server's fallbacks", () => {

@@ -20,6 +20,7 @@ from django.db.models import Q, TextField, Value
 from django.db.models.functions import Replace, Upper
 
 from api.branch_scope import get_branch_scope
+from api.salary_slip_center.bank_file import whole_rupees
 from api.models import Employee, Payroll
 
 from ..common import EMP_COLS, EMP_COLS_SHORT, emp_cells
@@ -332,7 +333,7 @@ def _bank_xlsx(ctx, out) -> bytes:
                 None,
                 None,
                 safe_cell(_acct(r["bankAccount"]).upper()),
-                round(float(r["netPay"]), 2),
+                whole_rupees(r["netPay"]),
                 safe_cell((r["employeeName"] or "").upper()[:35]),
                 _ifsc(r["bankIfsc"])[:11],
                 safe_cell((r["bankName"] or "").upper()[:40]),
@@ -349,7 +350,8 @@ def _bank_xlsx(ctx, out) -> bytes:
             c.number_format = "@"
             if isinstance(c.value, str):
                 c.data_type = "s"  # an account number is never a formula or a float
-        ws.cell(row=row_idx, column=4).number_format = "#,##0.00"
+        # the bank's upload (owner 2026-11-28): the amount General, a whole number with no commas or decimals
+        ws.cell(row=row_idx, column=4).number_format = "General"
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

@@ -104,14 +104,17 @@ describe("the shared bank file writer", () => {
     expect(dump.columns).toEqual(golden.payroll.columns);
     expect(dump.rows.slice(0, 2)).toEqual(golden.payroll.rows.slice(0, 2));
     expect(dump.sheet).toBe("Term Loan Nov 2026");
-    // the amount is written as given (no rounding: the caller decides)
+    // the amount in whole rupees (owner 2026-11-28: General format, no commas or decimals): a paisa rounds UP, as every
+    // caller pays; the account number and the code are Text cells
     const first = (wb.worksheets[0].getRow(3).values as unknown[]).slice(1);
+    expect(wb.worksheets[0].getRow(3).getCell(4).numFmt).toBe("@");
+    expect(wb.worksheets[0].getRow(3).getCell(5).numFmt).toBe("General");
     expect(first).toEqual([
       "",
       "",
       "0123",
       "38083488840",
-      13481.48,
+      13482,
       "ABIRAMI T",
       "SBIN0007921",
       "STATE BANK OF INDIA",

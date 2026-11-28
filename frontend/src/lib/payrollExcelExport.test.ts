@@ -61,8 +61,11 @@ describe("bank file (Export bank file)", () => {
       "STATE BANK OF INDIA",
     ]);
     expect(ws.getRow(4).getCell(3).value).toBe("2671");
-    // the amount keeps its money format and the red header, in its new place
-    expect(ws.getColumn(5).numFmt).toBe("#,##0.00");
+    // the bank's format (owner 2026-11-28): the amount General (a whole number, no commas or decimals), the account
+    // number and the code as Text; the amount keeps its red header
+    expect(ws.getColumn(5).numFmt).toBe("General");
+    expect(ws.getRow(3).getCell(4).numFmt).toBe("@");
+    expect(ws.getRow(3).getCell(3).numFmt).toBe("@");
     expect(ws.getRow(1).getCell(5).font?.color?.argb).toBe("FFFF0000");
     expect(ws.getRow(1).getCell(3).font?.color?.argb).toBe("FFFFFFFF");
     expect(saved.name).toBe("Payroll_Staff_October_2026.xlsx");

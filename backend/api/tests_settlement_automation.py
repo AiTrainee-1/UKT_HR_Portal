@@ -458,7 +458,14 @@ class HubAndBranchTests(_FlowBase):
         ]  # fmt: skip
         counts, amounts = _figures(items)
         self.assertEqual((counts["total"], counts["approved"], counts["rejected"], counts["warning"]), (2, 1, 1, 1))
-        self.assertEqual(amounts, {"requested": 7000.0, "mdApproved": 4000.0, "finalApproved": 3500.0})
+        # the same keys as the full batch (2026-11-27): the rounded total (no baseAmount: what was asked) and payable
+        self.assertEqual(
+            amounts,
+            {"requested": 7000.0, "rounded": 7000.0, "mdApproved": 4000.0, "finalApproved": 3500.0, "payable": 0.0},
+        )
+        items[0]["baseAmount"], items[1]["baseAmount"] = 4500.0, 2000.0
+        items[0]["effective"] = {"decision": "approved", "amount": 3500.0}
+        self.assertEqual((_figures(items)[1]["rounded"], _figures(items)[1]["payable"]), (6500.0, 3500.0))
 
 
 class SplitMigrationTests(_FlowBase):
@@ -990,4 +997,50 @@ class RoundingTests(_FlowBase):
         self.assertEqual((r.status_code, r.json()["code"]), (400, "rounds_to_zero"))
         r = self.patch_(f"/api/settlement-automation/items/{item['id']}", {"action": "reject", "hrNote": "Below Rs 250"})
         self.assertEqual(r.status_code, 200, r.content)
+
+    def test_a_lower_limit_reopens_an_hr_reduction_that_is_no_longer_below_the_rounding(self):
+        # review finding 2026-11-27: a reduced figure must never go forward above the rounded amount (or the limit)
+        self.automation()
+        pk = self.apply(self.a, "general", 5000)
+        Advance.objects.filter(pk=pk).update(earned_limit=Decimal("10000"))
+        item = self.month()["batches"][0]["items"][0]
+        r = self.patch_(f"/api/settlement-automation/items/{item['id']}", {"action": "reduce", "amount": 4700, "hrNote": "Cap it"})
+        self.assertEqual(r.status_code, 200, r.content)
+        Advance.objects.filter(pk=pk).update(earned_limit=Decimal("4600"))  # the limit worked out again, lower
+        row = self.month()["batches"][0]["items"][0]
+        self.assertEqual(
+            (row["rounding"]["rounded"], row["hr"]["action"], row["hr"]["amount"], row["review"], row["hrNote"]),
+            (4500.0, None, None, "pending", "Cap it"),
+        )
+
+    def test_a_zero_request_goes_forward_only_as_hr_rejection_and_the_md_rejecting_it_is_no_change(self):
+        self.automation()
+        zero = self.apply(self.a, "general", 5000)
+        other = self.apply(self.b, "general", 5000)
+        Advance.objects.filter(pk=zero).update(earned_limit=Decimal("240"))
+        batch = self.month()["batches"][0]
+        rows = {i["advance"]["id"]: i["id"] for i in batch["items"]}
+        bid = batch["id"]
+        r = self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": [zero, other]})
+        self.assertEqual((r.status_code, r.json()["code"], r.json()["zero"]), (400, "rounds_to_zero", [rows[zero]]))
+        self.patch_(f"/api/settlement-automation/items/{rows[zero]}", {"action": "reject", "hrNote": "Rounds to Rs 0"})
+        r = self.post(f"/api/settlement-automation/batches/{bid}/forward", {"advanceIds": [zero, other]})
+        self.assertEqual((r.status_code, r.json()["stage"]), (200, "md_review"), r.content)
+        self.post(f"/api/md/settlement/batches/{bid}/bulk", {"itemIds": [rows[other]], "decision": "approved"}, self.md)
+        self.patch_(f"/api/md/settlement/items/{rows[zero]}", {"decision": "rejected", "remark": "Nothing to pay"}, self.md)
+        md = self.month(self.md, "/api/md/settlement/month?month=2&year=2026")["batches"][0]
+        self.assertEqual((md["counts"]["mdChanges"], md["actions"]["canConfirmMd"]), (0, True))
+
+    def test_the_rounded_amount_is_the_strict_top_when_paying(self):
+        from .settlement_views import _apply_amount_and_start
+
+        self.automation()
+        pk = self.apply(self.a, "general", 5000)
+        adv = Advance.objects.get(pk=pk)
+        # rounded below what was asked: nothing above the rounding is paid (was: up to the amount asked)
+        self.assertIn("rounded", _apply_amount_and_start(adv, {"amount": "4700"}, "pending", ceiling=Decimal("4500")))
+        self.assertIsNone(_apply_amount_and_start(adv, {"amount": "4500"}, "pending", ceiling=Decimal("4500")))
+        # the Normal Method (no ceiling): the amount asked is the top, as before
+        adv = Advance.objects.get(pk=pk)
+        self.assertIn("asked for", _apply_amount_and_start(adv, {"amount": "5001"}, "pending"))
 

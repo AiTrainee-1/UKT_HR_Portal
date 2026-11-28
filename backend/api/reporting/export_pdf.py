@@ -1,4 +1,4 @@
-"""PDF export: a letterhead, filter summary, KPI strip and a zebra table with repeating header,
+"""PDF export: a letterhead, filter summary and a zebra table with repeating header,
 totals row and "Page X of Y" footer, built with reportlab.
 
 Text uses the bundled DejaVu Sans (reporting/fonts) so the rupee sign and long names render the same
@@ -325,42 +325,8 @@ def build_pdf(out: RunOutput) -> bytes:
     story.append(fbox)
     story.append(Spacer(1, 6))
 
-    # ── KPI strip ────────────────────────────────────────────────────────────
-    if out.summary:
-        cards = []
-        for s in out.summary[:12]:
-            fake = ColumnSpec("v", s["label"], s.get("format", INTEGER))
-            cards.append(
-                [
-                    Paragraph(escape(str(s["label"])), style("kl", fontSize=7, leading=9, textColor=MUTED)),
-                    Paragraph(
-                        f"<b>{escape(pdf_text(fake, s.get('value'), rupee_ok))}</b>",
-                        style("kv", fontName=bold, fontSize=11, leading=14, textColor=BRAND),
-                    ),
-                ]
-            )
-        # At most 6 cards to a line; the cards are shared out evenly over the lines (7 -> 4 + 3, not 6 + 1) and each
-        # line fills the whole width, so the strip lines up with the title bar above it.
-        lines = -(-len(cards) // 6)
-        per_row = -(-len(cards) // lines)
-        rows_ = [cards[i : i + per_row] for i in range(0, len(cards), per_row)]
-        for chunk in rows_:
-            cells = [[c[0], c[1]] for c in chunk]
-            kt = Table([[cell for cell in cells]], colWidths=[avail / len(cells)] * len(cells), hAlign="LEFT")
-            kt.setStyle(
-                TableStyle(
-                    [
-                        ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-                        ("INNERGRID", (0, 0), (-1, -1), 0.5, GRID),
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
-                        ("TOPPADDING", (0, 0), (-1, -1), 4),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                    ]
-                )
-            )
-            story.append(kt)
-        story.append(Spacer(1, 6))
+    # No KPI strip (owner 2026-11-28: "for all reports I don't need this breakdown at the top"): the PDF goes from the
+    # filters straight to the table. The report's summary cards stay on the screen.
 
     # ── main table ───────────────────────────────────────────────────────────
     # Plain strings are ~10x cheaper than Paragraphs, so only a cell whose text does not fit its

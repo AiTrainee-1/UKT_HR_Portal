@@ -204,6 +204,8 @@ export default function MdShell({ children }: { children: ReactNode }) {
             says nothing about how many columns fit. */}
         <main
           ref={mainRef}
+          // ends with room for the floating AI radio, so nothing at the bottom of a page stays under it (assistant.css)
+          data-md-main
           className={cn(
             "@container relative flex-1 overflow-y-auto p-3 pb-6 transition-[padding] duration-300 ease-out sm:p-4 lg:p-6 print:static print:h-auto print:overflow-visible print:p-0",
             assistantOpen && "xl:pr-[444px]",

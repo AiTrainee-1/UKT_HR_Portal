@@ -54,12 +54,15 @@ export function roundingSteps(r: SettlementRounding, money: (n: number) => strin
   const base = r.capped && r.limit != null ? r.limit : r.requested;
   if (r.capped && r.limit != null) parts.push(`brought down to the ${money(r.limit)} limit`);
   const nearest = nearest500(base);
-  if (r.zero) return [...parts, "rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it"].join(" → ");
+  // over the limit first: a limit under ₹500 can force ₹0 although ₹250 or more is left
   if (r.limit != null && nearest > r.limit && Math.abs(nearest - r.rounded) >= 0.005)
     return [
       ...parts,
-      `rounded to ${money(r.rounded)} (the nearest ₹500, ${money(nearest)}, is above the ${money(r.limit)} limit)`,
+      `rounded to ${money(r.rounded)} (the nearest ₹500, ${money(nearest)}, is above the ${money(r.limit)} limit)${
+        r.zero ? ": reject it" : ""
+      }`,
     ].join(" → ");
+  if (r.zero) return [...parts, "rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it"].join(" → ");
   parts.push(`rounded to the nearest ₹500 = ${money(r.rounded)}`);
   const tail = r.limit == null ? " (no eligible limit known)" : r.capped ? "" : ` (within the ${money(r.limit)} limit)`;
   return parts.join(" → ") + tail;

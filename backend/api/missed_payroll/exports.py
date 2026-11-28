@@ -479,7 +479,7 @@ def build_bank_xlsx(entries: list[MissedPayroll], sheet: str) -> bytes:
             "",
             emp.employee_code or "",
             (emp.bank_account or "").strip().upper(),
-            float(e.net),
+            slip_bank.whole_rupees(e.net),
             lists._name(emp).upper(),
             (emp.bank_ifsc or "").strip().upper(),
             (emp.bank_name or "").strip().upper(),
@@ -492,7 +492,7 @@ def build_bank_xlsx(entries: list[MissedPayroll], sheet: str) -> bytes:
             if i in (3, 4):
                 c.number_format = "@"
             if i == slip_bank.AMOUNT_COLUMN:
-                c.number_format = "#,##0.00"
+                c.number_format = "General"  # a whole number, no commas or decimals (2026-11-28)
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()

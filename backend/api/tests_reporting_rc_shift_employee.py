@@ -337,7 +337,8 @@ class LayoutTests(_World):
         for rid in EMP_IDS:
             self.assertEqual(registry.get_spec(rid).category, "employees", rid)
         self.assertEqual(LAYOUT["shift"], SHIFT_IDS + RECAT_IDS)
-        self.assertEqual(LAYOUT["employees"], EMP_IDS)
+        # + the Staff Age Analysis (rc_staff_age.py, 2026-11-28; tests_reporting_staff_age)
+        self.assertEqual(LAYOUT["employees"], (*EMP_IDS, "staff-age-analysis"))
         catalog = self.client.get("/api/reports/catalog", **hdr(self.admin)).json()
         listed = [r["id"] for r in catalog["reports"]]
         self.assertEqual([i for i in listed if i in SHIFT_IDS + RECAT_IDS], list(SHIFT_IDS + RECAT_IDS))

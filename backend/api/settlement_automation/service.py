@@ -365,13 +365,20 @@ def base_amount(item: I) -> Decimal:
 
 
 def _round_open(batch: B) -> None:
-    """Keep the rounded amounts of a batch at HR Review up to date (a limit worked out again changes them)."""
+    """Keep the rounded amounts of a batch at HR Review up to date (a limit worked out again changes them). When the
+    rounded amount drops to or below HR's reduced figure, HR's reduction is no reduction any more: it is cleared and the
+    request waits for HR's review again (the remark stays), so a reduced figure can never go forward above the rounded
+    amount (or the limit)."""
     changed = []
     for item in batch.items.select_related("advance"):
-        if apply_rounding(item):
+        moved = apply_rounding(item)
+        stale = item.hr_action == "reduce" and item.hr_amount is not None and Decimal(item.hr_amount) >= base_amount(item)
+        if stale:
+            item.hr_action, item.hr_amount = "", None
+        if moved or stale:
             changed.append(item)
     if changed:
-        I.objects.bulk_update(changed, ["rounded_amount", "rounding_limit"])
+        I.objects.bulk_update(changed, ["rounded_amount", "rounding_limit", "hr_action", "hr_amount"])
 
 
 # ─────────────────────────── HR Review ───────────────────────────
@@ -407,7 +414,7 @@ def set_hr_review(item: I, data) -> I:
         asked = "rounded amount" if item.rounded_amount is not None else "amount asked for"
         if action == "approve" and requested <= 0:
             raise WorkflowError(
-                "This request rounds to ₹0 (less than ₹250 within the limit): reject it.", "rounds_to_zero"
+                "This request rounds to ₹0 within the limit: reject it.", "rounds_to_zero"
             )
         if action == "reduce":
             amount = _money(data.get("amount"), "reduced amount")
@@ -612,6 +619,15 @@ def forward(batch: B, advance_ids, note, by: str) -> B:
         if not held:
             raise WorkflowError("There are no requests in this batch to forward.", "empty")
         _round_open(batch)  # frozen from here on
+        zero = [
+            i for i in batch.items.select_related("advance") if base_amount(i) <= 0 and i.hr_action != "reject"
+        ]
+        if zero:
+            raise WorkflowError(
+                f"{len(zero)} request(s) round to ₹0 within the limit: reject them before forwarding to the MD.",
+                "rounds_to_zero",
+                zero=[i.id for i in zero],
+            )
         seen = {int(x) for x in (advance_ids or []) if str(x).isdigit()}
         if advance_ids is not None and seen != held:
             raise WorkflowError(
@@ -647,6 +663,8 @@ def hr_expected(item: I) -> tuple[str, Decimal | None]:
         return I.DECISION_REJECTED, None
     if item.hr_action == "reduce" and item.hr_amount is not None:
         return I.DECISION_APPROVED, Decimal(item.hr_amount)
+    if base_amount(item) <= 0:
+        return I.DECISION_REJECTED, None  # rounds to ₹0: only a rejection is possible, so it is no change
     return I.DECISION_APPROVED, base_amount(item)
 
 
@@ -680,7 +698,7 @@ def md_decide(item: I, decision, amount, remark, by: str) -> I:
         item.md_decision, item.md_amount, item.md_remark, item.md_decided_at = "", None, remark, None
     elif decision == I.DECISION_APPROVED:
         if requested <= 0 and amount in (None, ""):
-            raise WorkflowError("This request rounds to ₹0: reject it.", "rounds_to_zero")
+            raise WorkflowError("This request rounds to ₹0 within the limit: reject it.", "rounds_to_zero")
         value = requested if amount in (None, "") else _money(amount, "approved amount")
         if value > requested:
             raise WorkflowError(f"The approved amount cannot be more than the ₹{requested:,.2f} {asked}.", "amount")
@@ -715,7 +733,11 @@ def md_bulk(batch: B, item_ids, decision, remark, by: str) -> tuple[B, list]:
                 if requested <= 0:
                     skipped.append({"id": item.id, "reason": "It rounds to ₹0: reject it."})
                     continue
-                amount = item.hr_amount if item.hr_action == "reduce" and item.hr_amount is not None else requested
+                amount = (
+                    min(Decimal(item.hr_amount), requested)
+                    if item.hr_action == "reduce" and item.hr_amount is not None
+                    else requested
+                )
                 note = remark or (item.hr_note if amount < requested else item.md_remark)
                 if amount < requested and len(note or "") < REMARK_MIN:
                     skipped.append({"id": item.id, "reason": "A reduced amount needs a remark."})

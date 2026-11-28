@@ -242,6 +242,7 @@ export function fourItems(): SettlementItem[] {
 function expected(i: SettlementItem): { decision: "approved" | "rejected"; amount: number | null } {
   if (i.hr?.action === "reject") return { decision: "rejected", amount: null };
   if (i.hr?.action === "reduce" && i.hr.amount != null) return { decision: "approved", amount: i.hr.amount };
+  if (baseOf(i) <= 0) return { decision: "rejected", amount: null };
   return { decision: "approved", amount: baseOf(i) };
 }
 

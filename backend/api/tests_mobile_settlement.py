@@ -532,3 +532,102 @@ class RecordsTests(_Base):
             before = self.client.get("/api/my/advances/eligibility", **self.me).json()["salaryAdvance"]
         self.assertEqual(after["deductionLabel"], "January 2027")
         self.assertEqual(before["deductionLabel"], "December 2026")
+
+
+class EmployeeAppContractTests(_Base):
+    """What the mobile app and the Employee Web App read since 2026-11-28 (owner: "Under review" only, production
+    employees see their history but no applying, the name "Loan & Advance")."""
+
+    def eligibility(self, auth=None, day: date = DAY):
+        with on(day):
+            r = self.client.get("/api/my/advances/eligibility", **(auth or self.me))
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def mine(self, day: date = DAY):
+        with on(day):
+            r = self.client.get("/api/my/advances", **self.me)
+        self.assertEqual(r.status_code, 200, r.content)
+        return r.json()
+
+    def automation(self):
+        from .models import SettlementSettings
+
+        row = SettlementSettings.objects.order_by("id").first() or SettlementSettings.objects.create()
+        row.method = "automation"
+        row.save()
+
+    def test_normal_method_waiting_with_hr_and_withdrawable(self):
+        e = self.eligibility()
+        self.assertEqual((e["method"], e["applyAvailable"], e["applyUnavailableReason"]), ("normal", True, None))
+        self.assertIn("HR approves every application", " ".join(e["rules"]))
+        self.assertIn("Term Loan", e["window"]["message"])
+        pk = self.general(5000).json()["id"]
+        row = next(a for a in self.mine() if a["id"] == pk)
+        self.assertEqual(
+            (row["reviewStatus"], row["reviewLabel"], row["canWithdraw"], row["inWorkflow"], row["statusLabel"]),
+            ("with_hr", "With HR", True, False, "Waiting for HR"),
+        )
+
+    def test_automation_under_review_cannot_be_withdrawn_and_says_so_everywhere(self):
+        from .models import SettlementBatch, SettlementBatchItem
+
+        self.automation()
+        pk = self.general(5000).json()["id"]
+        batch = SettlementBatch.objects.create(month=10, year=2026, advance_type="general", number=1, stage="md_review")
+        SettlementBatchItem.objects.create(batch=batch, advance_id=pk)
+        row = next(a for a in self.mine() if a["id"] == pk)
+        self.assertEqual(
+            (row["reviewStatus"], row["reviewLabel"], row["canWithdraw"], row["inWorkflow"], row["statusLabel"]),
+            ("under_review", "Under review", False, True, "Under review"),
+        )
+        self.assertEqual(row["timeline"][-1]["title"], "Under review")
+        e = self.eligibility()
+        self.assertEqual((e["method"], e["approvalPath"]), ("automation", "Employee → HR → Under review"))
+        self.assertIn("rounded to the nearest ₹500", " ".join(e["rules"]))
+        self.assertIn("can no longer be withdrawn", " ".join(e["rules"]))
+        with on(DAY):
+            pending = self.client.get("/api/my/pending-requests", **self.me).json()["items"]
+        item = next(i for i in pending if i["module"] == "advance" and i["id"] == pk)
+        self.assertEqual(item["stage"], "Under review")
+
+    def test_an_amount_approved_above_the_ask_is_flagged(self):
+        pk = self.general(4800).json()["id"]
+        Advance.objects.filter(pk=pk).update(
+            status="approved", amount=Decimal("5000"), requested_amount=Decimal("4800")
+        )
+        row = next(a for a in self.mine() if a["id"] == pk)
+        self.assertEqual((row["approvedMore"], row["approvedLess"], row["reviewStatus"]), (True, False, None))
+        approved = next(t for t in row["timeline"] if t["kind"] == "approved")
+        self.assertIn("rounded up from", approved["text"])
+
+    def test_a_production_employee_sees_no_applying_and_no_term_loan_line(self):
+        prod = Employee.objects.create(
+            employee_code="PR1", first_name="Mani", last_name="K", status="active", employment_type="production",
+            department=self.emp.department, join_date="2020-01-01",
+        )  # fmt: skip
+        e = self.eligibility(_bearer({"role": "employee", "employeeId": prod.id}))
+        self.assertFalse(e["applyAvailable"])
+        self.assertIn("staff on a monthly salary", e["applyUnavailableReason"])
+        self.assertNotIn("Term Loan", e["window"]["message"])
+        self.assertEqual((e["salaryAdvance"]["canApply"], e["termLoan"]["code"]), (False, "staff_only"))
+
+    def test_a_term_loan_limit_below_the_minimum_is_refused_up_front(self):
+        Employee.objects.filter(pk=self.emp.pk).update(salary_amount=Decimal("800"))
+        e = self.eligibility()
+        self.assertEqual((e["termLoan"]["canApply"], e["termLoan"]["code"]), (False, "below_minimum"))
+        self.assertIn("below the", e["termLoan"]["reason"])
+        r = self.term(900, 3)
+        self.assertEqual((r.status_code, r.json()["code"]), (400, "below_minimum"))
+
+    def test_a_workflow_decision_never_names_the_auditor_or_the_md(self):
+        from .models import AdvanceDecision, SettlementBatch, SettlementBatchItem
+
+        pk = self.general(5000).json()["id"]
+        batch = SettlementBatch.objects.create(month=10, year=2026, advance_type="general", number=1, stage="completed")
+        SettlementBatchItem.objects.create(batch=batch, advance_id=pk, applied=True)
+        Advance.objects.filter(pk=pk).update(status="rejected", approved_by="Auditor", decision_remark="Leave record")
+        AdvanceDecision.objects.create(advance_id=pk, action="rejected", remark="Leave record", actor_name="Auditor")
+        row = next(a for a in self.mine() if a["id"] == pk)
+        self.assertIsNone(row["approvedBy"])  # the apps then say "Rejected by HR"
+        self.assertNotIn("Auditor", str(row["timeline"]) + str(row.get("history")))

@@ -369,11 +369,15 @@ def _apply_amount_and_start(adv: Advance, data, previous_status: str, ceiling=No
                 return "The amount can only be changed while the advance is waiting for approval."
             # `ceiling`: the Automation Method's rounded Salary Advance amount (owner 2026-11-27: ₹4,800 asked may be
             # paid as ₹5,000), never above the eligible limit; else what the employee asked for
-            top = Decimal(adv.requested_amount) if adv.requested_amount is not None else None
-            if top is not None and ceiling is not None:
-                top = max(top, Decimal(ceiling))
+            # the Automation Method passes its "as asked" amount (a Salary Advance's rounded amount, else what was
+            # asked): it is the strict top, so a rounded or capped Salary Advance is never paid above its rounding
+            top = (
+                Decimal(ceiling)
+                if ceiling is not None
+                else (Decimal(adv.requested_amount) if adv.requested_amount is not None else None)
+            )
             if top is not None and amount > top:
-                if ceiling is not None and Decimal(ceiling) > Decimal(adv.requested_amount):
+                if ceiling is not None and (adv.requested_amount is None or top != Decimal(adv.requested_amount)):
                     return f"The approved amount cannot be more than the rounded {inr(top)}."
                 return (
                     f"The approved amount cannot be more than the {inr(adv.requested_amount)} the employee asked for."

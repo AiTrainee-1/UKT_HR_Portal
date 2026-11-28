@@ -9,10 +9,17 @@ The amount is the slip's NET, already a whole rupee (engine.py rounds it up like
 from __future__ import annotations
 
 import io
-from decimal import Decimal
+from decimal import ROUND_CEILING, Decimal
 
 from ..models import Employee, StandaloneSalarySlip
 from . import engine
+
+
+def whole_rupees(value) -> int:
+    """A bank-file amount (owner 2026-11-28): whole rupees, a paisa rounded UP (as the payroll pays its NET), written in
+    General format with no commas or decimals; every bank file of the HRMS uses it."""
+    return int(Decimal(str(value or 0)).quantize(Decimal("0.01")).to_integral_value(rounding=ROUND_CEILING))
+
 
 HEADERS = [
     "TXN TYPE\nRTGS-R\nNEFT-N\nHDFC TRF-I\nIMPS - M(1)",
@@ -91,7 +98,7 @@ def build_xlsx(employees: list[Employee], slips: dict[int, StandaloneSalarySlip]
             "",
             emp.employee_code or "",
             (emp.bank_account or "").strip().upper(),
-            float(slips[emp.id].net),
+            whole_rupees(slips[emp.id].net),
             engine.full_name(emp).upper(),
             (emp.bank_ifsc or "").strip().upper(),
             (emp.bank_name or "").strip().upper(),
@@ -104,7 +111,7 @@ def build_xlsx(employees: list[Employee], slips: dict[int, StandaloneSalarySlip]
             if i in (3, 4):
                 c.number_format = "@"  # as text: an account number or a code like 0123 keeps its zeros
             if i == AMOUNT_COLUMN:
-                c.number_format = "#,##0.00"
+                c.number_format = "General"  # the bank's upload: a whole number, no commas or decimals (2026-11-28)
         ws.row_dimensions[r].height = 16
     out = io.BytesIO()
     wb.save(out)

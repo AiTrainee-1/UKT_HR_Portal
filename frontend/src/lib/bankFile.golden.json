@@ -28,7 +28,7 @@
       {
         "key": "E",
         "width": 14,
-        "numFmt": "#,##0.00"
+        "numFmt": "General"
       },
       {
         "key": "F",
@@ -154,7 +154,7 @@
           },
           {
             "value": "AMOUNT\n(20)",
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": {
               "bold": true,
               "color": {
@@ -389,7 +389,7 @@
           },
           {
             "value": "M",
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": {
               "bold": true,
               "color": {
@@ -554,7 +554,7 @@
           },
           {
             "value": "0123",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -565,7 +565,7 @@
           },
           {
             "value": "38083488840",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -576,7 +576,7 @@
           },
           {
             "value": 13482,
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": null,
             "fill": null,
             "alignment": {
@@ -669,7 +669,7 @@
           },
           {
             "value": "",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -680,7 +680,7 @@
           },
           {
             "value": "",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -691,7 +691,7 @@
           },
           {
             "value": 20000,
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": null,
             "fill": null,
             "alignment": {
@@ -788,7 +788,7 @@
       {
         "key": "E",
         "width": 14,
-        "numFmt": "#,##0.00"
+        "numFmt": "General"
       },
       {
         "key": "F",
@@ -914,7 +914,7 @@
           },
           {
             "value": "AMOUNT\n(20)",
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": {
               "bold": true,
               "color": {
@@ -1149,7 +1149,7 @@
           },
           {
             "value": "M",
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": {
               "bold": true,
               "color": {
@@ -1314,7 +1314,7 @@
           },
           {
             "value": "2671",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -1325,7 +1325,7 @@
           },
           {
             "value": "38083488840",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -1336,7 +1336,7 @@
           },
           {
             "value": 9001,
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": null,
             "fill": null,
             "alignment": {
@@ -1429,7 +1429,7 @@
           },
           {
             "value": "3003",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -1440,7 +1440,7 @@
           },
           {
             "value": "38083488840",
-            "numFmt": null,
+            "numFmt": "@",
             "font": null,
             "fill": null,
             "alignment": {
@@ -1451,7 +1451,7 @@
           },
           {
             "value": 7778,
-            "numFmt": "#,##0.00",
+            "numFmt": "General",
             "font": null,
             "fill": null,
             "alignment": {

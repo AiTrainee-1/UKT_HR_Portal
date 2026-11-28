@@ -17,8 +17,7 @@ from reportlab.pdfgen import canvas as canvas_mod
 from reportlab.platypus import Image as RLImage
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
-from ..export_pdf import BRAND, BRAND_SOFT, GRID, INK, MUTED, pdf_text
-from ..types import INTEGER, ColumnSpec
+from ..export_pdf import BRAND, BRAND_SOFT, GRID, INK, MUTED
 
 
 def numbered_canvas(footer_left: str, regular: str, margin: float = 1.2 * cm):
@@ -129,34 +128,9 @@ def filter_box(pairs, avail: float, style) -> Table:
 
 
 def kpi_strip(summary: list[dict], avail: float, bold: str, style, rupee_ok: bool = True) -> Table | None:
-    """The report's summary cards as one row of label / value boxes (at most eight)."""
-    cards = []
-    for s in summary[:8]:
-        fake = ColumnSpec("v", str(s["label"]), s.get("format", INTEGER))
-        cards.append(
-            [
-                Paragraph(escape(str(s["label"])), style("kl", fontSize=6.5, leading=8, textColor=MUTED)),
-                Paragraph(
-                    f"<b>{escape(pdf_text(fake, s.get('value'), rupee_ok))}</b>",
-                    style("kv", fontName=bold, fontSize=10, leading=12, textColor=BRAND),
-                ),
-            ]
-        )
-    if not cards:
-        return None
-    strip = Table([cards], colWidths=[avail / len(cards)] * len(cards))
-    strip.setStyle(
-        TableStyle(
-            [
-                ("BOX", (0, 0), (-1, -1), 0.5, GRID),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, GRID),
-                ("LEFTPADDING", (0, 0), (-1, -1), 5),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    return strip
+    """No summary strip on a PDF any more (owner 2026-11-28: "for all reports I don't need this breakdown at the top"):
+    the callers skip it when this is None. The report's summary cards stay on the screen."""
+    return None
 
 
 def short(text: str | None, limit: int) -> str:

@@ -130,10 +130,24 @@ def _figures(items: list[dict]) -> tuple[dict, dict]:
         "warning": flags.count("warning"),
         "critical": flags.count("critical"),
     }
+    final = float(sum(i["final"]["amount"] or 0 for i in items if i["final"]["decision"] == "approved"))
+    finalized = any(i["final"]["decision"] for i in items)
     amounts = {
         "requested": float(sum(i["requestedAmount"] for i in items)),
+        # the "as asked" total after the Salary Advance rounding (as service.batch_json)
+        "rounded": float(sum(i.get("baseAmount", i["requestedAmount"]) for i in items)),
         "mdApproved": float(sum(i["md"]["amount"] or 0 for i in items)),
-        "finalApproved": float(sum(i["final"]["amount"] or 0 for i in items if i["final"]["decision"] == "approved")),
+        "finalApproved": final,
+        # what will be paid: the effective settlement once finalized (the auditor's changes included)
+        "payable": float(
+            sum(
+                (i.get("effective") or {}).get("amount") or 0
+                for i in items
+                if (i.get("effective") or {}).get("decision") == "approved"
+            )
+        )
+        if finalized
+        else final,
     }
     return counts, amounts
 

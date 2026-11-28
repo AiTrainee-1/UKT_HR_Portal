@@ -67,6 +67,7 @@ LAYOUT: dict[str, tuple[str, ...]] = {
         "employee-monthly-shift",
         "employee-time-card",
         "employee-punch-details",
+        "staff-age-analysis",
     ),
 }
 

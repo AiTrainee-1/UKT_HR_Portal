@@ -122,7 +122,7 @@ export const roundingChanged = (r: SettlementRounding | null | undefined): r is 
 /** A request that rounds to ₹0: it can only be rejected (the server refuses an approval). */
 export const roundsToZero = (item: { rounding?: SettlementRounding | null }): boolean => !!item.rounding?.zero;
 
-export const ROUNDS_TO_ZERO = "This request rounds to ₹0 (less than ₹250 within the limit): reject it.";
+export const ROUNDS_TO_ZERO = "This request rounds to ₹0 within the limit: reject it.";
 
 const nearest500 = (amount: number): number => {
   if (!(amount > 0)) return 0;
@@ -137,12 +137,15 @@ export function roundingSteps(r: SettlementRounding): string {
   const capped = r.capped && r.limit != null;
   if (capped) parts.push(`brought down to the ${money(r.limit)} limit`);
   const nearest = nearest500(capped ? (r.limit as number) : r.requested);
-  if (r.zero) return [...parts, "rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it"].join(" → ");
+  // over the limit first: a limit under ₹500 can force ₹0 although ₹250 or more is left
   if (r.limit != null && nearest > r.limit && Math.abs(nearest - r.rounded) >= 0.005)
     return [
       ...parts,
-      `rounded to ${money(r.rounded)} (the nearest ₹500, ${money(nearest)}, is above the ${money(r.limit)} limit)`,
+      `rounded to ${money(r.rounded)} (the nearest ₹500, ${money(nearest)}, is above the ${money(r.limit)} limit)${
+        r.zero ? ": reject it" : ""
+      }`,
     ].join(" → ");
+  if (r.zero) return [...parts, "rounded to the nearest ₹500 = ₹0 (less than ₹250): reject it"].join(" → ");
   parts.push(`rounded to the nearest ₹500 = ${money(r.rounded)}`);
   const tail = r.limit == null ? " (no eligible limit known)" : capped ? "" : ` (within the ${money(r.limit)} limit)`;
   return parts.join(" → ") + tail;
@@ -869,6 +872,8 @@ type Expected = { decision: MdDecision; amount: number | null };
 export function hrExpected(item: Pick<SettlementItem, "hr"> & Based): Expected {
   if (item.hr?.action === "reject") return { decision: "rejected", amount: null };
   if (item.hr?.action === "reduce" && item.hr.amount != null) return { decision: "approved", amount: item.hr.amount };
+  // rounds to ₹0: only a rejection is possible, so the MD rejecting it is no change (service.py hr_expected)
+  if (baseOf(item) <= 0) return { decision: "rejected", amount: null };
   return { decision: "approved", amount: baseOf(item) };
 }
 

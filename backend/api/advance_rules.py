@@ -292,5 +292,15 @@ def term_loan_status(emp, today: date, r: Rules | None = None) -> dict:
                 f"{nxt.strftime('%B %Y')}.",
                 nxt,
             )
+    limit_now = out.get("limit")
+    from .payroll_insights import inr as inr_text
+
+    if limit_now is not None and Decimal(str(limit_now)) < Decimal(str(r.tl_min_amount)):
+        # 2026-11-28: every amount would be refused (below the minimum, or above the limit)
+        return refuse(
+            "below_minimum",
+            f"Your Term Loan limit is {inr_text(limit_now)} ({out.get('limitPercent')}% of your monthly salary), below "
+            f"the {inr_text(r.tl_min_amount)} a Term Loan starts from, so a Term Loan is not possible now.",
+        )
     out["eligible"] = True
     return out

@@ -139,7 +139,7 @@ export type SettlementRounding = {
   capped: boolean;
   /** The rounded amount against what was asked. */
   direction: "up" | "down" | "same";
-  /** Rounds to ₹0 (less than ₹250 within the limit): it can only be rejected. */
+  /** Rounds to ₹0 within the limit: it can only be rejected. */
   zero: boolean;
 };
 

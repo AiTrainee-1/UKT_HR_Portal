@@ -143,6 +143,7 @@ EXPECTED_LAYOUT = {
         "employee-monthly-shift",
         "employee-time-card",
         "employee-punch-details",
+        "staff-age-analysis",
     ),
 }
 FLAT_LAYOUT = [rid for ids in EXPECTED_LAYOUT.values() for rid in ids]
@@ -181,6 +182,7 @@ TITLES = {
     "employee-monthly-shift": "Employee Monthly Shift Details",
     "employee-time-card": "Employee Time Card",
     "employee-punch-details": "Employee Punch Details",
+    "staff-age-analysis": "Staff Age Analysis",
 }
 
 # The categories the catalog shows, in order (id, label); the MD also gets "md" after them.
@@ -584,7 +586,7 @@ class LayoutTests(_Catalog):
         self.assertEqual(len(FLAT_LAYOUT), len(set(FLAT_LAYOUT)), "a report is listed twice")
         self.assertEqual(
             {cat: len(ids) for cat, ids in EXPECTED_LAYOUT.items()},
-            {"hr": 10, "attendance": 16, "shift": 5, "payroll": 8, "employees": 5},
+            {"hr": 10, "attendance": 16, "shift": 5, "payroll": 8, "employees": 6},
         )
         for cat, ids in EXPECTED_LAYOUT.items():
             for rid in ids:
@@ -839,6 +841,7 @@ MUST_HAVE_ROWS = {
     "employee-monthly-shift",
     "employee-time-card",
     "employee-punch-details",
+    "staff-age-analysis",
     # last month = June (the salary reports open on last month; HR's Production Salary Statement opens on Weekly)
     "hr-salary-statement",
     "salary-statement",

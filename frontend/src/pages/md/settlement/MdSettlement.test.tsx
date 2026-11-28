@@ -258,6 +258,18 @@ describe("the batch waiting for the MD", () => {
     expect(server.calls).toHaveLength(0);
   });
 
+  it("offers Review decisions at the top of the batch too, and the bottom bar keeps clear of the AI radio", async () => {
+    await open([batch({ month: M, year: Y })]);
+    expect(text('[data-testid="md-settlement-top-review"]')).toContain("0 of 4 decided");
+    expect(el('[data-testid="md-settlement-bar"]')?.className).toContain("md-dock-clear");
+    await page!.click('[data-testid="md-settlement-review-top"]');
+    expect(el('[data-testid="md-settlement-confirm-hr-mode"]')).not.toBeNull(); // the review sheet is open
+    // on the overview as well; not on the history
+    await page!.click('[data-testid="md-settlement-review"] button.md-btn-ghost');
+    await page!.click(tab("overview"));
+    expect(el('[data-testid="md-settlement-review-top"]')).not.toBeNull();
+  });
+
   it("keeps Confirm & Proceed off until every request is decided, then sends the instructions and turns read-only", async () => {
     const server = await open([batch({ month: M, year: Y })]);
     await page!.click('[data-testid="md-settlement-review-open"]');
@@ -853,9 +865,7 @@ describe("the Salary Advance rounding (owner 2026-11-27)", () => {
     // choosing Approve anyway is stopped before anything is sent
     await page!.click(dialog("md-settlement-mode-approve"));
     await page!.click(dialog("md-settlement-save"));
-    expect(text(dialog("md-settlement-dialog-error"))).toBe(
-      "This request rounds to ₹0 (less than ₹250 within the limit): reject it.",
-    );
+    expect(text(dialog("md-settlement-dialog-error"))).toBe("This request rounds to ₹0 within the limit: reject it.");
     expect(server.calls).toHaveLength(0);
   });
 

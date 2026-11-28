@@ -143,6 +143,16 @@ def _person(emp) -> str:
     return f"{emp.first_name} {emp.last_name}".strip()
 
 
+def _advance_in_workflow(module: str, obj) -> bool:
+    """An advance HR forwarded in the Loan & Advance Automation Method: it is under review (owner 2026-11-28: the
+    employee sees "Under review", not the internal steps)."""
+    if module != "advance":
+        return False
+    from .settlement_views import _in_workflow
+
+    return _in_workflow(obj)
+
+
 def _stage_text(waiting: tuple[str, ...], target: dict) -> str:
     if target["role"] == approval.HOD:
         name = _person(target["manager"].employee)
@@ -312,7 +322,7 @@ def _item(module: str, obj, *, cfg, heads: _Heads, extra: dict, last, count: int
         "date": parts.get("date"),
         "submittedAt": _iso(obj.created_at),
         "status": obj.status,
-        "stage": _stage_text(waiting, target),
+        "stage": "Under review" if _advance_in_workflow(module, obj) else _stage_text(waiting, target),
         "waitingFor": list(waiting),
         "approver": _approver_json(target),
         "steps": _steps_json(prog),
