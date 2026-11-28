@@ -1694,6 +1694,33 @@ class HolidayWorkClaim(models.Model):
     raised_by_role = models.TextField(
         choices=RAISED_BY_CHOICES, default=RAISED_BY_HR, db_default=RAISED_BY_HR, db_column="raised_by_role"
     )
+    # ── a compensation day HR chose on the calendar (owner 2026-11-28, migration 0196; compensation_placement.py) ──
+    # True: decided by the Department Head THEN HR (approval workflow `compensation_placement`) instead of the Department
+    # Head alone. Set only by HR's "Choose date" (a use_balance claim, or a credit claim placed at once); the employees'
+    # own claims and use requests keep the one-step pipeline. db_default: an older backend inserts rows without it.
+    hr_step = models.BooleanField(default=False, db_default=False, db_column="hr_step")
+    # A CREDIT claim (holiday_work / ot_shift) placed at once: the date its compensation is taken on and how much of the
+    # credit goes there (the rest stays in the balance). Approval writes the credit, a debit of use_shifts on use_date
+    # and relaxes that day. Null on every other row (a use_balance claim's day off is work_date, as always).
+    use_date = models.DateField(null=True, blank=True, db_column="use_date")
+    use_shifts = models.DecimalField(max_digits=3, decimal_places=2, null=True, blank=True, db_column="use_shifts")
+    # A use_balance claim HR placed FROM one approved credit claim (the Sunday worked, the OT credit ...): what is left
+    # of that credit to place is its shifts less the open placements that name it. Null = from the balance as a whole.
+    source_claim = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, db_column="source_claim_id",
+        related_name="placements",
+    )  # fmt: skip
+
+    @property
+    def approval_workflow_key(self) -> str:
+        """The pipeline this row follows (approval_workflow.routed_key): a date HR chose on the calendar goes to the
+        Department Head and then HR; every other claim to the Department Head alone."""
+        return "compensation_placement" if self.hr_step else "holiday_work"
+
+    @property
+    def placed_at_once(self) -> bool:
+        """A credit claim that also places its compensation on a chosen date (use_date set)."""
+        return self.use_date is not None and self.kind in self.CREDIT_KINDS
 
     class Meta:
         db_table = "holiday_work_claims"

@@ -747,13 +747,20 @@ def create_claim(
     raised_by_name: str,
     request: Request | None = None,
     ctx: Context | None = None,
+    placement: Placement | None = None,
 ) -> HolidayWorkClaim:
     """Validates everything (switches, staff only, the claim window, eligibility for `kind` on `date` / the OT record,
     one open claim, an HOD who can approve compensation, for use_balance the balance covering pending + requested) and
     saves one pending claim, then tells the approval workflow (notify the HOD) and writes the audit row. Raises
     ClaimError; nothing is saved then. `raised_by_role` is HolidayWorkClaim.RAISED_BY_HR or RAISED_BY_EMPLOYEE;
     `raised_by_name` goes to requested_by. `minutes` is ignored: an allowance claim always carries the minutes detection
-    granted."""
+    granted.
+
+    `placement` (2026-11-28, HR only, compensation_placement.py): a compensation day HR chose on the calendar. For
+    use_balance `date` is that day (placement.use_date) and placement.source_claim_id the approved credit it comes from
+    (optional); for holiday_work / ot_shift the claim credits as usual AND places placement.shifts of it on
+    placement.use_date. Either way the claim is hr_step (the Department Head, then HR) and the day must be one the
+    calendar offers (compensation_placement.day_refusal)."""
     if kind not in ALL_KINDS:
         raise ClaimError("invalid", "kind must be holiday_work, ot_allowance, ot_shift, birthday or use_balance.")
     if raised_by_role not in (HolidayWorkClaim.RAISED_BY_HR, HolidayWorkClaim.RAISED_BY_EMPLOYEE):
@@ -763,13 +770,18 @@ def create_claim(
     ctx = ctx or context(for_employee=raised_by_role == HolidayWorkClaim.RAISED_BY_EMPLOYEE)
     # a list's snapshot of the open claims is never trusted for a write; a write may work the birthday's day out again
     ctx = replace(ctx, known=None, refresh=True)
-    text = _clean_reason(reason, kind)
+    # a date HR chose on the calendar may come without a reason: the placement's own sentence is the reason then
+    text = _clean_reason(reason or (placement.reason_default if placement is not None else ""), kind)
 
     asked = None
     if shifts not in (None, ""):
         asked = parse_shifts(shifts)
         if asked is None:
             raise ClaimError("invalid", f"shifts must be {SHIFT_TEXT}.")
+    if placement is not None:
+        _placement_precheck(kind, raised_by_role, placement)
+        if kind == HolidayWorkClaim.KIND_USE_BALANCE:
+            date, asked = placement.use_date, placement.shifts
 
     with transaction.atomic():
         # The employee row is the lock every balance change takes (HR's redeem too): two claims of one employee are
@@ -788,6 +800,10 @@ def create_claim(
         if kind == HolidayWorkClaim.KIND_USE_BALANCE:
             if asked is None:
                 raise ClaimError("invalid", f"shifts is required: {SHIFT_TEXT}.")
+            if placement is not None:
+                # a date HR chose: the calendar's answer for the day first (one code, date_not_allowed, for every day
+                # it cannot be), then the balance
+                _placement_check(locked, kind, asked, placement, ctx)
             _use_balance_check(locked, date, asked, ctx)
             value = asked
         else:
@@ -823,6 +839,8 @@ def create_claim(
         problem = ctx.hod_problem(locked)
         if problem:
             raise ClaimError("no_hod", problem, 409)
+        if placement is not None and kind != HolidayWorkClaim.KIND_USE_BALANCE:
+            _placement_check(locked, kind, value, placement, ctx)
 
         claim = HolidayWorkClaim(
             employee=locked,
@@ -837,7 +855,14 @@ def create_claim(
             raised_by_role=raised_by_role,
             approval_trail=[],
         )
-        if kind in (HolidayWorkClaim.KIND_USE_BALANCE, HolidayWorkClaim.KIND_OT_ALLOWANCE):
+        if placement is not None:
+            claim.hr_step = True
+            claim.source_claim_id = placement.source_claim_id if kind == HolidayWorkClaim.KIND_USE_BALANCE else None
+            if kind != HolidayWorkClaim.KIND_USE_BALANCE:
+                claim.use_date, claim.use_shifts = placement.use_date, placement.shifts
+            if placement.reason_default and not text:
+                claim.reason = placement.reason_default
+        if kind in (HolidayWorkClaim.KIND_USE_BALANCE, HolidayWorkClaim.KIND_OT_ALLOWANCE) or claim.placed_at_once:
             refused = _effects().check_claim_effects(claim)
             if refused:
                 raise ClaimError("not_eligible", refused)
@@ -872,9 +897,95 @@ def create_claim(
                 "overtimeRecordId": claim.overtime_record_id,
                 "reason": claim.reason,
                 "raisedByRole": raised_by_role,
+                **(
+                    {
+                        "hrStep": True,
+                        "useDate": (claim.use_date or claim.work_date).isoformat(),
+                        "useShifts": str(claim.use_shifts if claim.use_date else claim.shifts),
+                        "sourceClaimId": claim.source_claim_id,
+                    }
+                    if claim.hr_step
+                    else {}
+                ),
             },
         )
     return claim
+
+
+@dataclass(frozen=True)
+class Placement:
+    """A compensation day HR chose on the calendar (compensation_placement.py): the day, the shifts given there, the
+    approved credit a use_balance placement comes from (or None: the balance as a whole), and the reason written when HR
+    gave none."""
+
+    use_date: dt.date
+    shifts: Decimal
+    source_claim_id: int | None = None
+    reason_default: str = ""
+
+
+PLACEABLE_KINDS = (
+    HolidayWorkClaim.KIND_USE_BALANCE,
+    HolidayWorkClaim.KIND_HOLIDAY_WORK,
+    HolidayWorkClaim.KIND_OT_SHIFT,
+)
+PLACEMENT_WORKFLOW = "compensation_placement"
+
+
+def _placement_precheck(kind: str, raised_by_role: str, placement: Placement) -> None:
+    """The checks of a placement that need no lock: HR only, a placeable kind, a real day and amount, the workflow on."""
+    if raised_by_role != HolidayWorkClaim.RAISED_BY_HR:
+        raise ClaimError("invalid", "Only HR chooses compensation dates on the calendar.", 403)
+    if kind not in PLACEABLE_KINDS:
+        raise ClaimError(
+            "invalid", "Only Sunday / holiday work, an OT shift credit or the balance can be placed on a date."
+        )
+    if not isinstance(placement.use_date, dt.date):
+        raise ClaimError("invalid", "useDate must be a date (YYYY-MM-DD).")
+    if placement.shifts not in (Decimal("0.25"), Decimal("0.50"), Decimal("0.75"), ONE):
+        raise ClaimError("invalid", f"shifts must be {SHIFT_TEXT}.")
+    if not approval.get_config(PLACEMENT_WORKFLOW).enabled:
+        raise ClaimError(
+            "switched_off",
+            "Compensation days on chosen dates are switched off in Approval Workflow Control, so a date can't be "
+            "chosen right now.",
+            403,
+        )
+
+
+def _placement_check(employee: Employee, kind: str, value: Decimal, placement: Placement, ctx: Context) -> None:
+    """Under the employee lock: the credit covers the shifts placed (a credit placed at once) or the source credit still
+    has them (a use_balance placement from a credit), and the calendar offers that day for that amount."""
+    from . import compensation_placement as places
+
+    shifts = placement.shifts
+    if kind != HolidayWorkClaim.KIND_USE_BALANCE:
+        if shifts > value:
+            raise ClaimError(
+                "not_eligible",
+                f"The credit is {shifts_text(value)} shift, so {shifts_text(shifts)} cannot be placed from it.",
+            )
+    elif placement.source_claim_id is not None:
+        source = (
+            HolidayWorkClaim.objects.select_for_update(of=("self",))
+            .filter(pk=placement.source_claim_id, employee=employee)
+            .first()
+        )
+        if source is None or source.kind not in HolidayWorkClaim.CREDIT_KINDS:
+            raise ClaimError("not_found", "That compensation credit was not found for this employee.", 404)
+        if source.status != HolidayWorkClaim.STATUS_APPROVED:
+            raise ClaimError("not_eligible", "That credit is not approved, so nothing can be placed from it yet.")
+        _placed, left = places.credit_left(source)
+        if shifts > left:
+            raise ClaimError(
+                "nothing_left",
+                f"Only {shifts_text(left)} shift of that credit is left to place, so {shifts_text(shifts)} cannot "
+                "be placed.",
+                409,
+            )
+    refusal = places.day_refusal(employee, placement.use_date, shifts, ctx.today)
+    if refusal:
+        raise ClaimError("date_not_allowed", refusal)
 
 
 def hod_dedupe(claim: HolidayWorkClaim) -> str:
@@ -947,10 +1058,16 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
     OT record in step with corrected punches, so the record may be gone or earn less now; a holiday-work claim needs the
     day still on record; a birthday credit needs the birthday still worked (compensation_effects.birthday_outcome)."""
     kind = claim.kind
-    if kind in (HolidayWorkClaim.KIND_USE_BALANCE, HolidayWorkClaim.KIND_OT_ALLOWANCE) and not master_enabled():
+    if (
+        kind in (HolidayWorkClaim.KIND_USE_BALANCE, HolidayWorkClaim.KIND_OT_ALLOWANCE) or claim.placed_at_once
+    ) and not master_enabled():
         # with the master switch off the engine applies no allowance and tops up no day: a debit or an allowance
         # approved now would change nothing on the day (the credit kinds stay decidable: they only add to the balance)
-        what = "a day off from the balance" if kind == HolidayWorkClaim.KIND_USE_BALANCE else "a late-in allowance"
+        what = (
+            "a day off from the balance"
+            if kind == HolidayWorkClaim.KIND_USE_BALANCE or claim.placed_at_once
+            else "a late-in allowance"
+        )
         return (
             "The OT / Compensation features are switched off in Settings > Payroll, so "
             f"{what} cannot be approved right now: it would not change the attendance. Ask HR to switch them on, or "
@@ -1038,6 +1155,14 @@ def _approval_problem(claim: HolidayWorkClaim) -> str | None:
                 f"The compensation balance is {shifts_text(balance)} shift now, so {shifts_text(claim.shifts)} cannot be "
                 "used. Reject this request instead."
             )
+    if claim.hr_step:
+        # a date HR chose on the calendar (2026-11-28): the day must still take it (Casual Leave, Birthday Compensation,
+        # another placement given on it since, a holiday declared, worked since ...), at every approval
+        from . import compensation_placement
+
+        refused = compensation_placement.approval_refusal(claim, ist_today())
+        if refused:
+            return refused
     return _effects().check_claim_effects(claim)
 
 
@@ -1081,6 +1206,29 @@ def credit_or_debit(claim: HolidayWorkClaim, actor: str | None = None) -> Compen
             "overtime_record": claim.overtime_record if kind == HolidayWorkClaim.KIND_OT_SHIFT else None,
             "note": note,
             "created_by": who,
+        },
+    )
+    return entry
+
+
+def debit_placed(claim: HolidayWorkClaim, actor: str | None = None) -> CompensationLedger | None:
+    """The debit of a CREDIT claim placed at once (2026-11-28): `use_shifts` dated `use_date`, exactly once (the claim
+    carries its credit AND this debit: uniq_ledger_debit_per_claim). None for any other claim."""
+    if not claim.placed_at_once or not claim.use_shifts:
+        return None
+    entry, _ = CompensationLedger.objects.get_or_create(
+        claim=claim,
+        entry_type=CompensationLedger.ENTRY_DEBIT,
+        defaults={
+            "employee": claim.employee,
+            "shifts": claim.use_shifts,
+            "date": claim.use_date,
+            "source": CompensationLedger.SOURCE_REDEMPTION,
+            "note": (
+                f"Used on {claim.use_date.isoformat()} (claim #{claim.id}: date chosen by HR, approved by the Department "
+                "Head and HR)"
+            ),
+            "created_by": actor or claim.reviewed_by,
         },
     )
     return entry
@@ -1135,6 +1283,11 @@ def effect_text(claim: HolidayWorkClaim) -> str:
         return f"Late-in allowance of {claim.minutes or 0} min applies on {when}."
     if kind == HolidayWorkClaim.KIND_USE_BALANCE:
         return f"{shifts_text(claim.shifts)} shift taken from {name}'s balance for {_short_day(claim.work_date)}."
+    if claim.placed_at_once:
+        return (
+            f"{shifts_text(claim.shifts)} shift added to {name}'s balance and {shifts_text(claim.use_shifts)} of it "
+            f"given on {_short_day(claim.use_date)}."
+        )
     return f"{shifts_text(claim.shifts)} shift added to {name}'s balance."
 
 
@@ -1179,7 +1332,9 @@ def decide(
             .get(pk=claim_id)
         )
         outcome = approval.decide(WORKFLOW, claim, role, decision, actor=actor, comment=comment)
-        if outcome.final:
+        # a date HR chose (hr_step: the Department Head, then HR) is re-checked at EVERY approval, like Birthday
+        # Compensation, so the head is never asked to pass on a day that can no longer take it
+        if outcome.final or (claim.hr_step and decision == HolidayWorkClaim.STATUS_APPROVED):
             refused = _approval_problem(claim)
             if refused:
                 raise approval.ApprovalError(refused, status=409, code="claim_refused")
@@ -1191,10 +1346,18 @@ def decide(
         claim.save()
         if outcome.final:
             credit_or_debit(claim, actor)
+            debit_placed(claim, actor)
             if claim.kind == HolidayWorkClaim.KIND_OT_SHIFT:
                 _mark_record_credited(claim, actor)
         tail = ""
-        if outcome.final and claim.kind in HolidayWorkClaim.CREDIT_KINDS:
+        if outcome.final and claim.placed_at_once:
+            tail = f" and {shifts_text(claim.use_shifts)} shift is given to you on {date_text(claim.use_date)}" + (
+                f" ({shifts_text(Decimal(claim.shifts) - Decimal(claim.use_shifts))} shift stays in your "
+                "compensation balance)"
+                if Decimal(claim.shifts) > Decimal(claim.use_shifts)
+                else ""
+            )
+        elif outcome.final and claim.kind in HolidayWorkClaim.CREDIT_KINDS:
             tail = f" and {shifts_text(claim.shifts)} shift was added to your compensation balance"
         approval.stage_notice(
             claim.employee, "compensation", approval.notice_for(what_text(claim), outcome, tail), outcome
@@ -1250,7 +1413,13 @@ def _ledger_entry(claim: HolidayWorkClaim) -> CompensationLedger | None:
 
 
 def status_label(claim: HolidayWorkClaim, applies_on: dt.date | None = None) -> str:
+    if claim.hr_step and claim.status == HolidayWorkClaim.STATUS_PENDING:
+        from . import compensation_placement
+
+        return compensation_placement.STAGE_LABELS[compensation_placement.stage(claim) or "hod"]
     if claim.status == HolidayWorkClaim.STATUS_APPROVED:
+        if claim.placed_at_once:
+            return f"Approved: given on {date_text(claim.use_date)}"
         if claim.kind in HolidayWorkClaim.CREDIT_KINDS:
             return "Approved: added to the balance"
         if claim.kind == HolidayWorkClaim.KIND_USE_BALANCE:
@@ -1267,6 +1436,7 @@ def claim_json(
     cfg: approval.Config | None = None,
     holidays: dict | None = None,
     hods: dict | None = None,
+    placed: dict | None = None,
 ) -> dict:
     """One claim as JSON (camelCase) for `for_role` ("hr" | "employee" | "hod"). The keys the holiday-work claim always
     had (id, the employee columns, workDate, dayKind, holidayName, shifts, reason, status, requestedBy, reviewedBy,
@@ -1274,7 +1444,15 @@ def claim_json(
     overtime {id, date, shiftEnd, lastPunch, lastPunchNextDay, extraMinutes, ...} | null, overtimeRecordId, useDate,
     appliesOn (ot_allowance: the working day the allowance applies to), ledger {id, type, shifts, date, source} | null,
     statusLabel, canWithdraw. `holidays` ({date: name}) and `hods` ({employee_id: HOD name}) are passed by a list so it
-    does not query once per row."""
+    does not query once per row.
+
+    Since 2026-11-28 (compensation days on a chosen date, compensation_placement.py), additive: hrStep (the Department
+    Head, then HR), stage ("hod" | "hr" | null), useDate / useShifts (the day a placement gives off and how much: a
+    use_balance claim's work_date / shifts, a credit placed at once's use_date / use_shifts; null otherwise),
+    sourceClaimId, compType / compTypeLabel (Shift / Overtime / Sunday / Holiday work compensation, birthday credit,
+    balance), and for an approved credit claim placed / leftToPlace (what of it is already placed, what is still to
+    place: never more than the credit; the balance still caps it). `placed` ({credit claim id: shifts placed}) is passed
+    by a list."""
     work_date = claim.work_date
     names = holidays if holidays is not None else holiday_names(work_date, work_date)
     kind = claim.kind or HolidayWorkClaim.KIND_HOLIDAY_WORK
@@ -1302,6 +1480,14 @@ def claim_json(
         except Exception:
             logger.exception("next_working_day failed for claim %s", claim.pk)
     pending = claim.status == HolidayWorkClaim.STATUS_PENDING
+    from . import compensation_placement as places
+
+    use_day, use_shifts = places.placed_day(claim)
+    credit_placed = credit_left = None
+    if kind in HolidayWorkClaim.CREDIT_KINDS and claim.status == HolidayWorkClaim.STATUS_APPROVED:
+        done, rest = places.credit_left(claim, placed.get(claim.id, ZERO) if placed is not None else None)
+        credit_placed, credit_left = float(done), float(rest)
+    comp_type = places.claim_type(claim, names) if (claim.hr_step or kind in places_kinds()) else None
     return {
         "id": claim.id,
         **employee_json(claim.employee),
@@ -1327,7 +1513,15 @@ def claim_json(
         "minutes": claim.minutes,
         "overtimeRecordId": claim.overtime_record_id,
         "overtime": overtime_json(claim.overtime_record) if claim.overtime_record_id else None,
-        "useDate": work_date.isoformat() if kind == HolidayWorkClaim.KIND_USE_BALANCE else None,
+        "useDate": use_day.isoformat() if use_day else None,
+        "useShifts": float(use_shifts) if use_day else None,
+        "hrStep": bool(claim.hr_step),
+        "stage": places.stage(claim) if claim.hr_step else None,
+        "sourceClaimId": claim.source_claim_id,
+        "compType": comp_type,
+        "compTypeLabel": places.TYPE_LABELS.get(comp_type) if comp_type else None,
+        "placed": credit_placed,
+        "leftToPlace": credit_left,
         "appliesOn": _iso(applies_on),
         "ledger": (
             {
@@ -1355,16 +1549,26 @@ def claims_json(claims: list[HolidayWorkClaim], *, for_role: str = "hr") -> list
         return []
     from .holiday_work_views import hod_names
 
+    from . import compensation_placement as places
+
     cfg = approval.get_config(WORKFLOW)
     dates = [c.work_date for c in claims]
     holidays = holiday_names(min(dates), max(dates))
     hods = hod_names({c.employee_id for c in claims})
-    return [claim_json(c, for_role=for_role, cfg=cfg, holidays=holidays, hods=hods) for c in claims]
+    placed = places.placed_from(
+        c.id for c in claims if c.kind in HolidayWorkClaim.CREDIT_KINDS and c.status == HolidayWorkClaim.STATUS_APPROVED
+    )
+    return [claim_json(c, for_role=for_role, cfg=cfg, holidays=holidays, hods=hods, placed=placed) for c in claims]
+
+
+def places_kinds() -> tuple[str, ...]:
+    """The claim kinds that carry a compensation type (credits and uses of the balance)."""
+    return (*HolidayWorkClaim.CREDIT_KINDS, HolidayWorkClaim.KIND_USE_BALANCE)
 
 
 def claim_queryset():
     return HolidayWorkClaim.objects.select_related(
-        "employee__department", "employee__designation", "employee__branch", "overtime_record"
+        "employee__department", "employee__designation", "employee__branch", "overtime_record", "source_claim"
     ).prefetch_related("ledger_entries")
 
 

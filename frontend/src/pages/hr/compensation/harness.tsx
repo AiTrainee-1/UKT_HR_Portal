@@ -19,6 +19,7 @@ import type {
   LedgerRow,
   OvertimeConfig,
   OvertimeRow,
+  PlacementCalendar,
 } from "@/lib/api-client/custom-hooks";
 import Compensation from "../Compensation";
 import {
@@ -43,6 +44,8 @@ import {
   birthdaysOf,
   compUse,
   malaEntitlement,
+  placementCalendar,
+  placementSource,
   reportOf,
 } from "./fixtures";
 
@@ -74,6 +77,8 @@ export type World = {
   birthdayEnabled: boolean;
   /** Birthday Compensation of each employee (GET /birthday-compensation?employeeId=), by employee id. */
   birthdayComp: Record<number, BirthdayCompEntitlement>;
+  /** The calendar of compensation days on a chosen date (GET /placements/calendar?employeeId=&month=&source=). */
+  placement: (qs: URLSearchParams) => PlacementCalendar;
   report: (qs: URLSearchParams) => CompensationReport;
   departments: { id: number; name: string }[];
   branches: { id: number; name: string }[];
@@ -128,6 +133,7 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     credits: copy(CREDITS),
     birthdayEnabled: true,
     birthdayComp: { 31: malaEntitlement() },
+    placement: (qs) => placementOf(world, qs),
     report: (qs) => reportOf(qs),
     departments: DEPARTMENTS,
     branches: BRANCHES,
@@ -412,6 +418,52 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
         }
         throw apiError(404, { error: "Birthday Compensation request not found.", code: "not_found" });
       }
+      // ── compensation days on a chosen date (2026-11-28) ──
+      case GET && path === "/api/compensation/placements/calendar":
+        return copy(world.placement(qs));
+      case method === "POST" && path === "/api/compensation/placements": {
+        // placed for the employee, as the server would: one claim waiting for the Department Head, then HR
+        const source = (body.source ?? {}) as { type?: string; id?: number; date?: string };
+        const kind =
+          source.type === "overtime" ? "ot_shift" : source.type === "holiday_work" ? "holiday_work" : "use_balance";
+        const made = {
+          ...copy(CLAIMS[0]),
+          id: 3400 + world.claims.length,
+          employeeId: Number(body.employeeId),
+          kind,
+          workDate: kind === "use_balance" ? String(body.useDate) : String(source.date ?? body.useDate),
+          shifts: Number(body.creditShifts ?? body.shifts),
+          hrStep: true,
+          stage: "hod",
+          useDate: String(body.useDate),
+          useShifts: Number(body.shifts),
+          statusLabel: "Waiting for the Department Head",
+          reason: String(body.reason ?? ""),
+        } as CompensationClaim;
+        world.claims.unshift(made);
+        const row = kind === "use_balance" ? world.balances.find((x) => x.employeeId === made.employeeId) : undefined;
+        if (row) {
+          row.pending += made.useShifts ?? 0;
+          row.available -= made.useShifts ?? 0;
+        }
+        return {
+          claim: made,
+          message: `Sent to the Department Head: ${Number(body.shifts).toFixed(2)} shift on ${String(body.useDate)}. HR approves it after the Department Head.`,
+        };
+      }
+      case method === "PATCH" && /^\/api\/compensation\/placements\/\d+\/decision$/.test(path): {
+        const id = Number(path.split("/")[4]);
+        const found = world.claims.find((c) => c.id === id);
+        if (!found) throw apiError(404, { error: "Claim not found.", code: "not_found" });
+        Object.assign(found, {
+          status: body.status,
+          stage: null,
+          reviewedBy: "Meena",
+          reviewComment: (body.comment as string | undefined) ?? null,
+          statusLabel: body.status === "approved" ? "Approved" : "Rejected",
+        });
+        return { claim: copy(found) };
+      }
       // ── the claim workflow (Compensation Leave B) ──
       case GET && path === "/api/compensation/claims": {
         const month = qs.get("month");
@@ -524,6 +576,72 @@ export function installWorld(fetchMock: Mock, over: Partial<World> = {}): World 
     }
   });
   return world;
+}
+
+/** The calendar the fake server answers for a source: the employee's balance, a credit claim, a Type 2 OT record or a
+ *  day off worked, read from the world (October 2026 unless `month` says otherwise). */
+function placementOf(world: World, qs: URLSearchParams): PlacementCalendar {
+  const employeeId = Number(qs.get("employeeId"));
+  const month = qs.get("month") ?? "2026-10";
+  const raw = qs.get("source") ?? "balance";
+  const [type, value = ""] = raw.split(":");
+  let source = placementSource();
+  if (type === "claim") {
+    const c = world.claims.find((x) => x.id === Number(value));
+    if (!c)
+      throw apiError(404, { error: "That compensation credit was not found for this employee.", code: "not_found" });
+    const overtime = c.kind === "ot_shift";
+    source = placementSource({
+      type: "claim",
+      id: c.id,
+      compType: overtime ? "overtime" : "sunday",
+      compTypeLabel: overtime ? "Overtime compensation" : "Sunday compensation",
+      title: overtime ? `OT credit of ${c.workDate}` : `Sunday worked on ${c.workDate}`,
+      workDate: c.workDate,
+      claimId: c.id,
+      total: c.shifts,
+      placed: c.placed ?? 0,
+      left: c.leftToPlace ?? 0,
+    });
+  } else if (type === "overtime") {
+    const row = world.ot.find((r) => r.id === Number(value));
+    if (!row)
+      throw apiError(404, { error: "That overtime record was not found for this employee.", code: "not_found" });
+    const credit = row.creditShifts ?? 0;
+    source = placementSource({
+      type: "overtime",
+      id: row.id,
+      compType: "shift",
+      compTypeLabel: "Shift compensation",
+      title: `Overtime of ${row.date}`,
+      workDate: row.date,
+      overtimeRecordId: row.id,
+      total: credit,
+      left: credit,
+      placesAtOnce: true,
+    });
+  } else if (type === "holiday_work") {
+    source = placementSource({
+      type: "holiday_work",
+      date: value,
+      compType: "sunday",
+      compTypeLabel: "Sunday compensation",
+      title: `Sunday worked on ${value}`,
+      workDate: value,
+      creditFixed: false,
+      placesAtOnce: true,
+    });
+  } else {
+    const available = world.balances.find((b) => b.employeeId === employeeId)?.available ?? 0;
+    source = placementSource({
+      total: available,
+      left: available,
+      canPlace: available > 0,
+      refusal: available > 0 ? null : "There is no compensation balance available to place.",
+      refusalCode: available > 0 ? null : "nothing_left",
+    });
+  }
+  return placementCalendar(source, month);
 }
 
 // ── mounting ──

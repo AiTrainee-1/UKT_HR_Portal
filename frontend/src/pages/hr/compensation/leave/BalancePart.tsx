@@ -28,8 +28,9 @@ import { KIND_LABEL, ledgerSourceText, signedShifts } from "./claims-logic";
 import { OrgFilters } from "./LeaveFilters";
 import { claimLink, creditLink, idOf, pageOf, useLeaveUrl, type LeaveUrl } from "./leave-url";
 import { REDEEM_NOW } from "./leave-logic";
+import { BALANCE_SOURCE, placementStageText } from "./place-comp-logic";
+import { PlaceCompDialog, type PlaceCompTarget } from "./PlaceCompDialog";
 import { RedeemDialog, type RedeemTarget } from "./RedeemDialog";
-import { UseBalanceDialog, type UseBalanceTarget } from "./UseBalanceDialog";
 
 const PAGE_SIZE = 25;
 
@@ -37,12 +38,17 @@ const LINK = "font-semibold text-indigo-700 underline-offset-2 hover:underline";
 
 type Person = { employeeId: number; employeeName: string; employeeCode: string };
 
+/** What Use balance does, for its tooltip. */
+const balanceUseTitle = (name: string) =>
+  `Use balance: choose a day off for ${name} on the calendar and send it to the Department Head, then HR`;
+
 /**
  * The compensation balance of every staff member: what they EARNED (approved claims: Sunday / holiday work, OT shift
  * credits, birthday credits, and the earlier Alternative-Day credits), what they USED (days off taken), what is WAITING
  * (asked to use and not decided yet) and what is AVAILABLE. Filtered by department, branch and name or code, a page at a
  * time. A row opens the employee's drawer: every entry behind the balance, with a link to the claim that made it. Use
- * balance asks the Department Head on the employee's behalf; Redeem (HR, direct and audited) takes it at once.
+ * balance opens the calendar (PlaceCompDialog): HR chooses the day off and it goes to the Department Head, then HR;
+ * Redeem (HR, direct and audited) takes it at once.
  */
 export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedReason: string }) {
   const [lu, setLu] = useLeaveUrl();
@@ -53,7 +59,7 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
     page: pageOf(lu.balpage),
     pageSize: PAGE_SIZE,
   });
-  const [using, setUsing] = useState<UseBalanceTarget | null>(null);
+  const [using, setUsing] = useState<PlaceCompTarget | null>(null);
   const [redeeming, setRedeeming] = useState<RedeemTarget | null>(null);
   const rows = useMemo(() => query.data?.items ?? [], [query.data]);
   const s = query.data?.summary;
@@ -69,7 +75,13 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
   const drawerId = idOf(lu.balemp) ?? null;
   const drawerRow = rows.find((r) => r.employeeId === drawerId) ?? null;
 
-  const startUse = (who: Person, available: number) => setUsing({ ...who, available });
+  const startUse = (who: Person) =>
+    setUsing({
+      employeeId: who.employeeId,
+      employeeName: who.employeeName,
+      employeeCode: who.employeeCode,
+      source: BALANCE_SOURCE,
+    });
   const startRedeem = (who: Person, available: number) => setRedeeming({ ...who, balance: available });
 
   const columns = useMemo<DataColumn<BalanceListRow>[]>(
@@ -122,18 +134,14 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
               disabled={paused || r.available <= 0}
               aria-label={`Use the balance of ${r.employeeName}`}
               title={
-                paused
-                  ? pausedReason
-                  : r.available <= 0
-                    ? "Nothing available to use"
-                    : `Use balance: send a request for ${r.employeeName} to the Department Head`
+                paused ? pausedReason : r.available <= 0 ? "Nothing available to use" : balanceUseTitle(r.employeeName)
               }
               onClick={() =>
                 setUsing({
                   employeeId: r.employeeId,
                   employeeName: r.employeeName,
                   employeeCode: r.employeeCode,
-                  available: r.available,
+                  source: BALANCE_SOURCE,
                 })
               }
               data-testid={`balance-use-${r.employeeCode}`}
@@ -293,7 +301,7 @@ export function BalancePart({ paused, pausedReason }: { paused: boolean; pausedR
         onUse={startUse}
         onRedeem={startRedeem}
       />
-      <UseBalanceDialog target={using} onOpenChange={(open) => !open && setUsing(null)} />
+      <PlaceCompDialog target={using} onClose={() => setUsing(null)} />
       <RedeemDialog target={redeeming} onOpenChange={(open) => !open && setRedeeming(null)} />
     </div>
   );
@@ -314,7 +322,7 @@ function BalanceDrawer({
   onClose: () => void;
   paused: boolean;
   pausedReason: string;
-  onUse: (who: Person, available: number) => void;
+  onUse: (who: Person) => void;
   onRedeem: (who: Person, available: number) => void;
 }) {
   const detail = useCompensationBalance(employeeId);
@@ -357,10 +365,8 @@ function BalanceDrawer({
               variant="outline"
               className="h-11 sm:h-9"
               disabled={paused || figures.available <= 0}
-              title={
-                paused ? pausedReason : `Use balance: send a request for ${who.employeeName} to the Department Head`
-              }
-              onClick={() => onUse(who, figures.available)}
+              title={paused ? pausedReason : balanceUseTitle(who.employeeName)}
+              onClick={() => onUse(who)}
               data-testid="ledger-use"
             >
               Use balance
@@ -411,7 +417,7 @@ function BalanceDrawer({
                   <li key={c.id} className="flex flex-wrap items-center justify-between gap-2">
                     <span>
                       {shiftsText(c.shifts)} on {dateShort(c.workDate)}
-                      {c.hodName ? ` · HOD: ${c.hodName}` : ""}
+                      {placementStageText(c) ? ` · ${placementStageText(c)}` : c.hodName ? ` · HOD: ${c.hodName}` : ""}
                     </span>
                     <Link href={claimLink(c.id, c.employeeId)} className={LINK} data-testid={`ledger-waiting-${c.id}`}>
                       Open the request

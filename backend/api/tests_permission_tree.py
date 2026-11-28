@@ -241,7 +241,8 @@ class TreeShape(SimpleTestCase):
         self.assertEqual(len(old.old_all_module_keys()), 55)
         self.assertGreater(len(all_module_keys()), 300)
         # 28: Birthday Compensation (HR's step after the Department Head's), 2026-11-25
-        self.assertEqual(len(hr_access.APPROVAL_KINDS), 28)
+        # 29: Compensation days on a chosen date (HR's step after the Department Head's), 2026-11-28
+        self.assertEqual(len(hr_access.APPROVAL_KINDS), 29)
 
 
 # ───────────────────────────── nothing missed ─────────────────────────────

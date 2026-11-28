@@ -21,6 +21,7 @@ export type KindKey =
   | "request"
   | "attendance_correction"
   | "holiday_work"
+  | "compensation_placement"
   | "birthday_compensation"
   | "resignation"
   | "advance";
@@ -37,6 +38,7 @@ export const KIND_KEYS = [
   "request",
   "attendance_correction",
   "holiday_work",
+  "compensation_placement",
   "birthday_compensation",
   "resignation",
   "advance",

@@ -83,6 +83,8 @@ const BALANCE_API = "/api/compensation/balance";
 const LEDGER_API = "/api/compensation/ledger";
 const REDEEM = "/api/compensation/balance/redeem";
 const USE = "/api/compensation/use";
+const CALENDAR = "/api/compensation/placements/calendar";
+const PLACE = "/api/compensation/placements";
 
 const balanceReady = () => rowKeys("balance-table").length > 0;
 const ledgerReady = () => rowKeys("ledger-table").length > 0;
@@ -240,45 +242,45 @@ describe("the drawer of a balance", () => {
   });
 });
 
-describe("Use balance: a request for the Department Head, on the employee's behalf", () => {
-  it("asks for the day, the shifts and a reason, and says what happens", async () => {
-    await openBalance();
+describe("Use balance: a day off HR chooses on the calendar, for the Department Head then HR", () => {
+  it("opens the calendar of the balance, from the row and from the drawer", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=21`);
     click(must("balance-use-E21"));
-    await waitFor(() => !!q("use-dialog"), "the dialog");
-    expect(text(q("use-dialog"))).toContain("Use the balance of Fara Khan");
-    expect(text(q("use-available"))).toBe("1 shift");
-    expect(text(q("use-dialog"))).toContain("This asks the employee's Department Head");
-    click(must("use-submit"));
-    await settle();
-    expect(text(q("use-dialog"))).toContain("Choose the day off.");
-    expect(text(q("use-dialog"))).toContain("Choose how many shifts.");
-    expect(text(q("use-dialog"))).toContain("Give a reason");
-    expect(bodiesOf(world, "POST", USE)).toEqual([]);
-    typeInto(input("use-date"), "2026-10-20");
-    click(must("use-shifts-0.5"));
-    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
-    expect(text(q("use-summary"))).toContain(
-      "Tue, 20 Oct 2026 is topped up by 0.50 shifts once the Department Head approves",
-    );
-    expect(text(q("use-summary"))).toContain("the available balance goes from 1 to 0.50");
+    await waitFor(() => !!q("pc-calendar"), "the calendar");
+    expect(text(q("pc-title"))).toBe("Compensation balance for Fara Khan");
+    expect(text(q("pc-source-figures"))).toBe("Total 1.00 · placed 0.00 · left 1.00");
+    expect(lastQuery(world.requests(), CALENDAR)?.get("source")).toBe("balance");
+    expect(lastQuery(world.requests(), CALENDAR)?.get("employeeId")).toBe("21");
+    // the old free-date form is gone
+    expect(q("use-dialog")).toBeNull();
   });
 
-  it("sends the employee, the day, the shifts and the reason, then the balance shows it waiting", async () => {
+  it("opens it from the drawer too", async () => {
+    await openBalance(`${BALANCE_PATH}?balemp=21`);
+    await waitFor(() => !!q("ledger-table"), "the drawer");
+    click(must("ledger-use"));
+    await waitFor(() => !!q("pc-calendar"), "the calendar");
+    expect(text(q("pc-title"))).toBe("Compensation balance for Fara Khan");
+  });
+
+  it("sends the chosen day to the Department Head, then the balance shows it waiting", async () => {
     await openBalance();
     click(must("balance-use-E21"));
-    await waitFor(() => !!q("use-dialog"), "the dialog");
-    typeInto(input("use-date"), "2026-10-20");
-    click(must("use-shifts-0.5"));
-    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
-    click(must("use-submit"));
-    await waitFor(() => bodiesOf(world, "POST", USE).length === 1, "the request");
-    expect(bodiesOf(world, "POST", USE)[0]).toEqual({
+    await waitFor(() => !!q("pc-calendar"), "the calendar");
+    click(must("pc-day-2026-10-20"));
+    click(must("pc-amount-0.50"));
+    typeInto(must("pc-reason") as HTMLTextAreaElement, "Family function");
+    click(must("pc-send"));
+    await waitFor(() => bodiesOf(world, "POST", PLACE).length === 1, "the request");
+    expect(bodiesOf(world, "POST", PLACE)[0]).toEqual({
       employeeId: 21,
-      date: "2026-10-20",
+      source: { type: "balance" },
+      useDate: "2026-10-20",
       shifts: 0.5,
       reason: "Family function",
     });
-    await waitFor(() => !q("use-dialog"), "the dialog to close");
+    expect(bodiesOf(world, "POST", USE)).toEqual([]);
+    await waitFor(() => !q("pc-dialog"), "the dialog to close");
     expect(h.toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Sent to the Department Head" }));
     // every Compensation list is read again: the balance now shows 1 shift waiting and 0.50 available
     await waitFor(() => text(q("balance-available-E21")) === "0.50 shifts", "the new balance");
@@ -290,28 +292,27 @@ describe("Use balance: a request for the Department Head, on the employee's beha
     expect(button("balance-use-E26").disabled).toBe(true);
     expect(button("balance-use-E26").title).toBe("Nothing available to use");
     click(must("balance-use-E24"));
-    await waitFor(() => !!q("use-dialog"), "the dialog");
-    expect(button("use-shifts-0.25").disabled).toBe(false);
-    for (const choice of ["0.5", "0.75", "1"]) expect(button(`use-shifts-${choice}`).disabled).toBe(true);
+    await waitFor(() => !!q("pc-calendar"), "the calendar");
+    click(must("pc-day-2026-10-20"));
+    expect(must("pc-amount-0.25").getAttribute("aria-checked")).toBe("true");
+    for (const choice of ["0.50", "0.75", "1.00"]) expect(button(`pc-amount-${choice}`).disabled).toBe(true);
   });
 
   it("shows the server's sentence when the day cannot be used, and stays open", async () => {
-    world.on.set(`POST ${USE}`, () =>
+    world.on.set(`POST ${PLACE}`, () =>
       apiError(400, {
-        error: "20 Oct 2026 is outside the request window: only this month can be asked for.",
-        code: "not_eligible",
+        error: "Fara Khan is on Casual Leave on Tue 20 Oct 2026: choose another day.",
+        code: "date_not_allowed",
       }),
     );
     await openBalance();
     click(must("balance-use-E21"));
-    await waitFor(() => !!q("use-dialog"), "the dialog");
-    typeInto(input("use-date"), "2026-10-20");
-    click(must("use-shifts-0.5"));
-    typeInto(must("use-reason") as unknown as HTMLInputElement, "Family function");
-    click(must("use-submit"));
-    await waitFor(() => !!q("use-error"), "the refusal");
-    expect(text(q("use-error"))).toContain("outside the request window");
-    expect(q("use-dialog")).not.toBeNull();
+    await waitFor(() => !!q("pc-calendar"), "the calendar");
+    click(must("pc-day-2026-10-20"));
+    click(must("pc-send"));
+    await waitFor(() => !!q("pc-error"), "the refusal");
+    expect(text(q("pc-error"))).toContain("on Casual Leave on Tue 20 Oct 2026");
+    expect(q("pc-dialog")).not.toBeNull();
   });
 });
 
@@ -373,14 +374,16 @@ describe("Redeem: HR's direct day off, kept", () => {
     expect(bodiesOf(world, "POST", REDEEM)).toHaveLength(1);
   });
 
-  it("says plainly that HR redeems now, without the Department Head, while Use balance goes to the HOD", async () => {
+  it("says plainly that HR redeems now, without the Department Head, while Use balance goes to the Department Head", async () => {
     await openBalance(`${BALANCE_PATH}?balemp=21`);
     expect(text(button("balance-redeem-E21"))).toBe("Redeem now (HR, without the Department Head)");
     expect(button("balance-redeem-E21").title).toBe(
       "Redeem now (HR, without the Department Head): create a day off for Fara Khan from the balance at once, with no Department Head approval",
     );
     expect(text(button("balance-use-E21"))).toBe("Use balance");
-    expect(button("balance-use-E21").title).toBe("Use balance: send a request for Fara Khan to the Department Head");
+    expect(button("balance-use-E21").title).toBe(
+      "Use balance: choose a day off for Fara Khan on the calendar and send it to the Department Head, then HR",
+    );
     await waitFor(() => !!q("ledger-table"), "the drawer");
     expect(text(button("ledger-redeem"))).toBe("Redeem now (HR, without the Department Head)");
     expect(text(button("ledger-use"))).toBe("Use balance");
@@ -410,7 +413,7 @@ describe("what pauses Use balance and Redeem", () => {
   it("locks Use balance and Redeem for a View Only role", async () => {
     await openBalance();
     expect(button("balance-redeem-E21").title).toMatch(/create a day off/);
-    expect(button("balance-use-E21").title).toMatch(/send a request/);
+    expect(button("balance-use-E21").title).toMatch(/choose a day off/);
     lockMutatingControls(document.body);
     await settle();
     expect(button("balance-redeem-E21").disabled).toBe(true);

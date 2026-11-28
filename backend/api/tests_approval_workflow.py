@@ -217,6 +217,7 @@ class CatalogTests(ConfigCacheMixin, TestCase):
             "resignation": HOD_THEN_HR,
             "attendance_correction": HOD_THEN_HR,
             "holiday_work": HOD_ONLY,
+            "compensation_placement": HOD_THEN_HR,
             "birthday_compensation": HOD_THEN_HR,
             "on_duty_punch": HR_ONLY,
             "advance": HR_ONLY,

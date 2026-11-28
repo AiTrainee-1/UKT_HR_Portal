@@ -104,6 +104,8 @@ def after_claim_decided(claim: HolidayWorkClaim) -> None:
             _apply_allowance(claim)
         elif claim.kind == HolidayWorkClaim.KIND_USE_BALANCE:
             _apply_use_balance(claim)
+        elif claim.placed_at_once:
+            _apply_placed(claim)
     except Exception:
         logger.exception("Applying the effect of compensation claim %s (%s) failed", claim.pk, claim.kind)
 
@@ -133,6 +135,18 @@ def _apply_use_balance(claim: HolidayWorkClaim) -> None:
     apply_relaxation(claim.employee, claim.work_date, Decimal(claim.shifts), "the compensation balance")
 
 
+def _apply_placed(claim: HolidayWorkClaim) -> None:
+    """A credit placed at once on a chosen date (2026-11-28): its debit is already written; make the day show it now (a
+    future day is topped up when it comes; a day set by hand is topped up in place, once)."""
+    from .compensation_apply import apply_relaxation
+
+    if claim.use_date is None or not claim.use_shifts or month_locked(claim.use_date):
+        return
+    apply_relaxation(
+        claim.employee, claim.use_date, Decimal(claim.use_shifts), f"the compensation of {_date_text(claim.work_date)}"
+    )
+
+
 def check_claim_effects(claim: HolidayWorkClaim) -> str | None:
     """A plain sentence when approving `claim` must be refused because of what it would change (no working day to apply
     an allowance to, a manual day, a locked / Payroll Done month, not a working day, more than 1.00 shift on the day ...),
@@ -143,6 +157,8 @@ def check_claim_effects(claim: HolidayWorkClaim) -> str | None:
         return _allowance_problem(claim)
     if claim.kind == HolidayWorkClaim.KIND_USE_BALANCE:
         return _use_balance_problem(claim)
+    if claim.placed_at_once:
+        return _placed_problem(claim)
     return None
 
 
@@ -177,6 +193,20 @@ def _use_balance_problem(claim: HolidayWorkClaim) -> str | None:
         return _locked_text(day, "a day off from the balance")
     try:
         check_relaxation_day(claim.employee, day, Decimal(claim.shifts))
+    except RelaxationRefused as exc:
+        return str(exc)
+    return None
+
+
+def _placed_problem(claim: HolidayWorkClaim) -> str | None:
+    """A credit placed at once: the chosen day must still take `use_shifts` (the credit itself never refuses here)."""
+    from .compensation_apply import RelaxationRefused, check_relaxation_day
+
+    day = claim.use_date
+    if month_locked(day):
+        return _locked_text(day, "the compensation day")
+    try:
+        check_relaxation_day(claim.employee, day, Decimal(claim.use_shifts or 0))
     except RelaxationRefused as exc:
         return str(exc)
     return None

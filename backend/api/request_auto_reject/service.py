@@ -15,6 +15,7 @@ hands it: whatsapp_approvals.decision_message, whatsapp_notifications.geo_sessio
     on_duty_punch          geo_attendance_views.resolve_on_duty_punch_hr      (called, without its WhatsApp)
     attendance_correction  attendance_edit_views.attendance_override_decision - (a rejection changes no attendance)
     holiday_work           compensation_claims.decide                         after_claim_decided on commit (no-op for a rejection)
+    compensation_placement compensation_claims.decide (HR's step)             as holiday_work: nothing credited, the day freed
     birthday_compensation  birthday_compensation_service.decide_use           - (a rejection changes no attendance; frees the 0.50 / 1.00)
     outpass                outpass_request_views.resolve_outpass_request      - (no pass issued)
     request                leave_views.employee_request_action                -
@@ -267,6 +268,21 @@ def _reject_holiday_work(obj, ctx: Context) -> None:
     _announce_decision("holiday_work", obj, ctx)
 
 
+def _reject_compensation_placement(obj, ctx: Context) -> None:
+    """A compensation day HR placed on a chosen date (2026-11-28): the same claim row and rejection as holiday_work, under
+    its own (Department Head, then HR) trail. Nothing is credited or taken; the day and the balance it held are free."""
+    from .. import compensation_claims
+
+    _append_trail("compensation_placement", obj, ctx)
+    obj.status = "rejected"
+    obj.reviewed_by = AUTO_BY
+    obj.reviewed_at = ctx.now
+    obj.review_comment = ctx.remark
+    obj.save()
+    transaction.on_commit(lambda cid=obj.id: compensation_claims._after_decided(cid))
+    _announce_decision("holiday_work", obj, ctx)
+
+
 def _reject_birthday_compensation(obj, ctx: Context) -> None:
     """birthday_compensation_service.decide_use's rejection (2026-11-25): HR's stamps (the step a rejection ends), no
     attendance change; the day it held is free again (only waiting / approved uses hold the birthday's 1.00)."""
@@ -330,6 +346,7 @@ REJECTORS = {
     "on_duty_punch": _reject_on_duty_punch,
     "attendance_correction": _reject_attendance_correction,
     "holiday_work": _reject_holiday_work,
+    "compensation_placement": _reject_compensation_placement,
     "birthday_compensation": _reject_birthday_compensation,
     "outpass": _reject_outpass,
     "request": _reject_request,
@@ -383,7 +400,7 @@ def reject_one(
     today = today or ist_today()
     describe = describe or engine.Describer()
     with transaction.atomic():
-        if key == "holiday_work":
+        if key in ("holiday_work", "compensation_placement"):
             # employee first, then the claim: the lock order every compensation writer uses (compensation_claims.decide)
             emp_id = s.model.objects.filter(pk=pk).values_list("employee_id", flat=True).first()
             if emp_id is None:

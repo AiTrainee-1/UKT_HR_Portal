@@ -680,3 +680,6 @@ api/advance_rules.py
 api/tests_advance_rules.py
 api/reporting/definitions/rc_staff_age.py
 api/tests_reporting_staff_age.py
+api/compensation_placement.py
+api/compensation_placement_views.py
+api/tests_compensation_placement.py

@@ -237,6 +237,8 @@ from .compensation_claims_views import (
     compensation_balance_overview, compensation_claim_detail, compensation_claims, compensation_ledger, compensation_use,
     employee_compensation_claim_detail, employee_compensation_claims, employee_compensation_use, holiday_work_month,
 )
+# Compensation days on a chosen date (2026-11-28): see the "Compensation days on a chosen date" block of routes below.
+from .compensation_placement_views import placement_calendar, placement_decision, placements
 from .system_settings_views import (
     biometric_devices, biometric_device_detail, idcard_settings_view,
     production_shift_config_view, production_shift_segments, production_shift_segment_detail,
@@ -750,6 +752,11 @@ urlpatterns = [
     path("compensation/birthday-compensation/uses", hr_birthday_compensation_uses),
     path("compensation/birthday-compensation/uses/<int:pk>", hr_birthday_compensation_use_detail),
     path("compensation/birthday-compensation/uses/<int:pk>/decision", hr_birthday_compensation_decision),
+    # ── Compensation days on a chosen date (2026-11-28, compensation_placement_views.py; HR key
+    #    compensation.leave.holiday_work.claims, HR's decision needs the approval right compensation_placement). ──
+    path("compensation/placements", placements),
+    path("compensation/placements/calendar", placement_calendar),
+    path("compensation/placements/<int:pk>/decision", placement_decision),
     # employee tokens (the mobile app / Employee Web App; allowlisted as employee/*)
     path("employee/compensation/birthday", employee_birthday_compensation),
     path("employee/compensation/birthday/uses", employee_birthday_compensation_uses),

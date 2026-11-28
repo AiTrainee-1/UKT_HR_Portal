@@ -1951,7 +1951,20 @@ class AccessReportTests(_Base):
         trimmed = self.run_report("role-access-matrix", role="Payroll", hideNoAccess="true")
         keys = {r["moduleKey"] for r in trimmed["rows"]}
         granted = ("employees.departments", "payroll", "salary_slip")  # and every part of them (they follow)
-        self.assertEqual(keys, {k for k in all_module_keys() if any(k == g or k.startswith(g + ".") for g in granted)})
+        from .permission_registry import INHERITS
+
+        def follows(key: str) -> bool:
+            # a part of a granted key, or a page that follows one until a role sets it (permission_tree `inherits`:
+            # Salary Slip -> Payslip, Missed Payroll -> Payroll, 2026-11-20 / 23)
+            seen = set()
+            while key and key not in seen:
+                seen.add(key)
+                if any(key == g or key.startswith(g + ".") for g in granted):
+                    return True
+                key = INHERITS.get(key)
+            return False
+
+        self.assertEqual(keys, {k for k in all_module_keys() if follows(k)})
         self.assertNotIn("dashboard", keys)
 
     def test_role_matrix_with_many_roles_still_exports(self):

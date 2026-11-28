@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { customFetch } from "@/lib/api-client/custom-fetch";
-import { birthdayCompDecisionPath, invalidateCompensation } from "@/lib/api-client/custom-hooks";
+import { birthdayCompDecisionPath, invalidateCompensation, placementDecisionPath } from "@/lib/api-client/custom-hooks";
 import { exportParams, normalizeHub, type HubItem, type HubResponse, type KindKey } from "./logic";
 
 export const HUB_KEY = "/api/hr-requests";
@@ -59,6 +59,10 @@ export function decisionCall({ item, status, comment }: Decision): Call | null {
     case "birthday_compensation":
       // HR's step after the Department Head's (400 not_your_turn before it); the final approval pays the day
       return { url: birthdayCompDecisionPath(item.id), method: "PATCH", body: { status, comment: note } };
+    case "compensation_placement":
+      // a compensation day HR placed on a chosen date: HR's step after the Department Head's (400 not_your_turn before
+      // it); the approval gives the day
+      return { url: placementDecisionPath(item.id), method: "PATCH", body: { status, comment: note } };
     default:
       return null;
   }
@@ -88,11 +92,13 @@ export function useDecide() {
       queryClient.invalidateQueries({ queryKey: [HUB_KEY] });
       const other = OTHER_KEYS[item.kind];
       if (other) queryClient.invalidateQueries({ queryKey: [other] });
-      // Birthday Compensation lives in Compensation (the Birthdays list and the employee's placements)
-      if (item.kind === "birthday_compensation") void invalidateCompensation(queryClient);
-      // an approved attendance change (or Birthday Compensation, which pays the day) rewrites the day: every attendance
+      // Birthday Compensation and the compensation days on chosen dates live in Compensation (the Birthdays list, the
+      // claims, the balance and the employee's placements)
+      const compensation = item.kind === "birthday_compensation" || item.kind === "compensation_placement";
+      if (compensation) void invalidateCompensation(queryClient);
+      // an approved attendance change (or a compensation day, which gives the day) rewrites the day: every attendance
       // view must read it again
-      if (item.kind === "attendance_correction" || item.kind === "birthday_compensation") {
+      if (item.kind === "attendance_correction" || compensation) {
         queryClient.invalidateQueries({
           predicate: (q) => typeof q.queryKey[0] === "string" && q.queryKey[0].startsWith("/api/attendance"),
         });

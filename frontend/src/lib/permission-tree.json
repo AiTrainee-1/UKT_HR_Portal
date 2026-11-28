@@ -1095,6 +1095,13 @@
                   "enforce": "server"
                 },
                 {
+                  "key": "requests.list.compensation_placement",
+                  "label": "Compensation days (chosen dates)",
+                  "type": "subtab",
+                  "help": "Compensation days HR placed on a chosen date, after the Department Head's approval.",
+                  "enforce": "server"
+                },
+                {
                   "key": "requests.list.resignation",
                   "label": "Resignation",
                   "type": "subtab",
@@ -3191,6 +3198,14 @@
       "needsEdit": true
     },
     {
+      "key": "compensation_placement",
+      "label": "Compensation days (chosen dates)",
+      "module": "compensation.leave.holiday_work.claims",
+      "description": "Give HR's approval to a compensation day HR placed on a chosen date (after the Department Head's).",
+      "group": "compensation",
+      "needsEdit": true
+    },
+    {
       "key": "bonus_status",
       "label": "Bonus approval and payment",
       "module": "bonus",
@@ -3250,7 +3265,7 @@
       "key": "holiday_work",
       "label": "Compensation claims",
       "group": "compensation",
-      "text": "Sunday / holiday work, OT allowance and credit, birthday credit and using the balance, raised by the employee or HR. Decided by the Department Head only: HR has no approval step for them."
+      "text": "Sunday / holiday work, OT allowance and credit, birthday credit and using the balance, raised by the employee or HR. Decided by the Department Head only: HR has no approval step for them (a date HR chooses on the compensation calendar is the exception: 'Compensation days (chosen dates)')."
     }
   ],
   "assistantLocked": {

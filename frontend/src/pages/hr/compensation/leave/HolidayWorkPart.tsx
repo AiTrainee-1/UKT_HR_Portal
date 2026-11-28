@@ -22,7 +22,7 @@ import { VIEW_SAFE_ATTR } from "@/lib/view-only-lock";
 import { cn } from "@/lib/utils";
 import { FilterBar, SearchFilter } from "@/pages/hr/outpass-visitors/kit";
 import { LEAVE_NESTED, subPath } from "../routes";
-import { keepOpenNested, useCanOpen } from "../visible";
+import { keepOpenNested, useCanOpen, useClaimRight } from "../visible";
 import {
   countOf,
   dateLong,
@@ -61,6 +61,8 @@ import {
 } from "./claims-logic";
 import { idOf, useLeaveUrl, type LeaveUrl, type SetLeaveUrl } from "./leave-url";
 import { CLAIM_REASON_MAX, checkClaim, claimPayload, punchSummary, type ClaimSelection } from "./leave-logic";
+import { holidayWorkSource } from "./place-comp-logic";
+import { PlaceCompDialog, type PlaceCompTarget } from "./PlaceCompDialog";
 
 const PAUSED_MASTER = "Paused: the OT / Compensation features are switched off in Settings → Payroll";
 
@@ -231,6 +233,10 @@ function RaiseClaim({
   const [error, setError] = useState<string | null>(null);
   const [problems, setProblems] = useState<Record<number, string>>({});
   const [touched, setTouched] = useState(false);
+  // "Choose date": the day off worked placed at once on a date HR picks (the calendar), instead of a claim to the balance
+  const [placing, setPlacing] = useState<PlaceCompTarget | null>(null);
+  const { reason: rightProblem } = useClaimRight();
+  const placePaused = featuresOff || enabled?.master === false ? PAUSED_MASTER : rightProblem;
 
   const data = eligible.data;
   const deptId = idOf(lu.rdept);
@@ -328,7 +334,7 @@ function RaiseClaim({
       testId="claim-form"
       icon={Sun}
       title="Raise a claim for Sunday / holiday work"
-      description="The Sundays, declared holidays and off Saturdays of the month, week by week, with how many worked. Pick a day, then the staff who worked; the claims go to each employee's Department Head and nothing is credited until they approve. An off Saturday lists only the staff whose own day off it is."
+      description="The Sundays, declared holidays and off Saturdays of the month, week by week, with how many worked. Pick a day, then the staff who worked; the claims go to each employee's Department Head and nothing is credited until they approve. Or use Choose date on a row to give the day off on a date you pick (the Department Head, then HR). An off Saturday lists only the staff whose own day off it is."
     >
       <div className="space-y-4">
         <FilterBar label="Raise filters" testId="raise-filters" sticky={false}>
@@ -436,6 +442,9 @@ function RaiseClaim({
                       <th className="px-3 py-2.5">Employee</th>
                       <th className="px-3 py-2.5">Punches that day</th>
                       <th className="px-3 py-2.5">Shifts to claim</th>
+                      <th className="px-3 py-2.5 text-right">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -497,6 +506,33 @@ function RaiseClaim({
                               </p>
                             )}
                           </td>
+                          <td className={`${CELL} text-right`}>
+                            {p.eligible && (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-11 sm:h-8"
+                                disabled={!!placePaused}
+                                aria-label={`Choose a day off for ${p.employeeName} for this day worked`}
+                                title={
+                                  placePaused ??
+                                  `Choose date: give ${p.employeeName} a day off for this day worked on a date you pick, and send it to the Department Head, then HR`
+                                }
+                                onClick={() =>
+                                  setPlacing({
+                                    employeeId: p.employeeId,
+                                    employeeName: p.employeeName,
+                                    employeeCode: p.employeeCode,
+                                    source: holidayWorkSource(date),
+                                  })
+                                }
+                                data-testid={`claim-place-${p.employeeCode}`}
+                              >
+                                Choose date
+                              </Button>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
@@ -551,6 +587,7 @@ function RaiseClaim({
           </>
         ) : null}
       </div>
+      <PlaceCompDialog target={placing} onClose={() => setPlacing(null)} />
     </SectionCard>
   );
 }

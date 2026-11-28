@@ -19,6 +19,10 @@ import type {
   LedgerRow,
   OvertimeConfig,
   OvertimeRow,
+  PlacementCalendar,
+  PlacementDay,
+  PlacementItem,
+  PlacementSource,
   ReportPeriod,
   ReportRow,
   ReportSection,
@@ -1008,6 +1012,220 @@ export function malaEntitlement(over: Partial<BirthdayCompEntitlement> = {}): Bi
     isStaff: true,
     enabled: { master: true, birthday: true, workflow: true, canPlace: true },
     today: TODAY,
+    ...over,
+  };
+}
+
+// ── Compensation days on a chosen date (2026-11-28) ──
+
+const PLACE_AMOUNTS = [0.25, 0.5, 0.75, 1];
+const PLACE_WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const PLACE_MONTHS = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+/** The window around 14 Oct 2026: 45 days back, 90 days ahead. */
+export const PLACE_WINDOW = { from: "2026-08-30", to: "2027-01-12", backDays: 45, aheadDays: 90 };
+
+/** The `source` block of the calendar (the balance as a whole, 1.00 available, by default). */
+export const placementSource = (over: Partial<PlacementSource> = {}): PlacementSource => ({
+  type: "balance",
+  compType: "balance",
+  compTypeLabel: "Compensation balance",
+  title: "The compensation balance",
+  workDate: null,
+  claimId: null,
+  overtimeRecordId: null,
+  total: 1,
+  placed: 0,
+  left: 1,
+  creditFixed: true,
+  placesAtOnce: false,
+  canPlace: true,
+  refusal: null,
+  refusalCode: null,
+  ...over,
+});
+
+/** An open placement of the employee (the calendar's `placements`). */
+export const placementItem = (id: number, over: Partial<PlacementItem> = {}): PlacementItem => ({
+  id,
+  date: "2026-10-08",
+  shifts: 0.5,
+  status: "pending",
+  statusLabel: "Approved by the Department Head, waiting for HR",
+  stage: "hr",
+  hrStep: true,
+  kind: "use_balance",
+  compType: "sunday",
+  compTypeLabel: "Sunday compensation",
+  sourceClaimId: 3002,
+  workDate: null,
+  raisedByRole: "hr",
+  requestedBy: "Meena",
+  reason: "Family function",
+  canWithdraw: true,
+  ...over,
+});
+
+/**
+ * The days of a month (YYYY-MM) as the calendar sends them, today being 14 Oct 2026, with `left` to place: Sundays and
+ * 2 Oct (Gandhi Jayanti) off, 5 Oct absent, 6 Oct a half day (0.50 room), 7 Oct Casual Leave, every day of `placements`
+ * taken, the other past days worked in full, today and the days to come free, the days outside the window refused.
+ */
+export function placementDays(month: string, left: number, placements: PlacementItem[] = []): PlacementDay[] {
+  const [y, m] = month.split("-").map(Number);
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const out: PlacementDay[] = [];
+  for (let n = 1; n <= last; n++) {
+    const date = `${month}-${String(n).padStart(2, "0")}`;
+    const dow = new Date(Date.UTC(y, m - 1, n)).getUTCDay();
+    const placed = placements
+      .filter((p) => p.date === date)
+      .map((p) => ({
+        id: p.id,
+        shifts: p.shifts,
+        status: p.status,
+        stage: p.stage,
+        hrStep: p.hrStep,
+        compType: p.compType,
+        compTypeLabel: p.compTypeLabel,
+      }));
+    const day: PlacementDay = {
+      date,
+      weekday: PLACE_WEEKDAYS[dow],
+      status: "none",
+      label: "",
+      selectable: false,
+      room: 0,
+      amounts: [],
+      suggested: null,
+      reason: null,
+      earns: null,
+      firstPunch: null,
+      lastPunch: null,
+      manual: false,
+      placed,
+    };
+    const refuse = (status: string, label: string, reason: string) => Object.assign(day, { status, label, reason });
+    const free = (status: string, label: string, room: number, extra: Partial<PlacementDay> = {}) =>
+      Object.assign(day, { status, label, room, ...extra });
+    if (dow === 0) refuse("off_day", "Sunday", "A Sunday is already a day off: choose a working day.");
+    else if (date === "2026-10-02")
+      refuse(
+        "off_day",
+        "Gandhi Jayanti",
+        "Gandhi Jayanti is a company holiday, already a day off: choose a working day.",
+      );
+    else if (date < PLACE_WINDOW.from)
+      refuse("out_of_window", "Too far back", "Compensation can be placed at most 45 days back: choose a later day.");
+    else if (date > PLACE_WINDOW.to)
+      refuse(
+        "out_of_window",
+        "Too far ahead",
+        "Compensation can be placed at most 90 days ahead: choose an earlier day.",
+      );
+    else if (placed.length > 0)
+      refuse(
+        "placed",
+        "Compensation placed",
+        "Compensation is already placed on this day (waiting or approved): choose another day.",
+      );
+    else if (date === "2026-10-07")
+      refuse("casual_leave", "Casual Leave", "Casual Leave is already asked for or approved on this day.");
+    else if (date === "2026-10-05") free("absent", "Absent", 1, { earns: 0 });
+    else if (date === "2026-10-06")
+      free("half_shift", "Half Day", 0.5, {
+        earns: 0.5,
+        firstPunch: "09:00",
+        lastPunch: "13:00",
+        reason: "This day already earns 0.50 shift: at most 0.50 can be added.",
+      });
+    else if (date < TODAY)
+      Object.assign(day, {
+        status: "present",
+        label: "Present",
+        earns: 1,
+        firstPunch: "09:00",
+        lastPunch: "17:30",
+        reason: "This day was worked in full: there is nothing to make up.",
+      });
+    else if (date === TODAY) free("today", "Today", 1);
+    else free("future", "Still to come", 1);
+    if (day.room > 0) {
+      day.amounts = PLACE_AMOUNTS.filter((a) => a <= Math.min(day.room, left) + 1e-9);
+      day.selectable = day.amounts.length > 0;
+      day.suggested = day.selectable ? Math.max(...day.amounts) : null;
+    }
+    out.push(day);
+  }
+  return out;
+}
+
+const monthKey = (y: number, m: number) => `${y}-${String(m).padStart(2, "0")}`;
+
+/** GET /api/compensation/placements/calendar for `source` and `month` (October 2026 by default). */
+export function placementCalendar(
+  source: PlacementSource = placementSource(),
+  month = "2026-10",
+  over: Partial<PlacementCalendar> = {},
+): PlacementCalendar {
+  const [y, m] = month.split("-").map(Number);
+  const prev = m === 1 ? monthKey(y - 1, 12) : monthKey(y, m - 1);
+  const next = m === 12 ? monthKey(y + 1, 1) : monthKey(y, m + 1);
+  const placements = over.placements ?? [
+    placementItem(77),
+    placementItem(78, {
+      date: "2026-10-09",
+      shifts: 1,
+      stage: "hod",
+      statusLabel: "Waiting for the Department Head",
+      compType: "balance",
+      compTypeLabel: "Compensation balance",
+      sourceClaimId: null,
+      reason: null,
+    }),
+  ];
+  return {
+    employee: {
+      employeeId: 21,
+      employeeCode: "E21",
+      employeeName: "Fara Khan",
+      department: "Cutting",
+      departmentId: 3,
+      designation: null,
+      branch: "Head Office",
+      branchId: 2,
+    },
+    source,
+    balance: { earned: 2, used: 0.5, pending: 0.5, available: 1, balance: 1.5 },
+    window: PLACE_WINDOW,
+    today: TODAY,
+    month: {
+      key: month,
+      label: `${PLACE_MONTHS[m - 1]} ${y}`,
+      first: `${month}-01`,
+      last: `${month}-${new Date(Date.UTC(y, m, 0)).getUTCDate()}`,
+      prev: prev >= PLACE_WINDOW.from.slice(0, 7) ? prev : null,
+      next: next <= PLACE_WINDOW.to.slice(0, 7) ? next : null,
+    },
+    amounts: PLACE_AMOUNTS,
+    days: placementDays(month, source.canPlace ? source.left : 0, placements),
+    placements,
+    approvalPath: "HR → HOD → HR",
+    workflowOn: true,
+    hodProblem: null,
+    reasonMax: 500,
     ...over,
   };
 }

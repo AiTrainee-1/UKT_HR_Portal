@@ -133,6 +133,8 @@ export function decisionLine(claim: Pick<CompensationClaim, "status" | "reviewed
 export function claimEffectText(claim: CompensationClaim): string {
   if (claim.status === "rejected") return "Rejected: nothing was credited.";
   if (claim.status === "pending") {
+    // a date HR chose on the calendar: the Department Head, then HR
+    if (claim.hrStep) return "Nothing is credited or given until the Department Head and then HR approve it.";
     if (claim.kind === "use_balance") return "Nothing is taken off the balance until the Department Head approves it.";
     if (claim.kind === "ot_allowance") return "Nothing is applied until the Department Head approves it.";
     return "Nothing is credited until the Department Head approves it.";

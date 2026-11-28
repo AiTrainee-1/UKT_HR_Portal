@@ -16,6 +16,8 @@ export * from "./compensation-ot-claims";
 export * from "./compensation-claims";
 // Birthday Compensation on a chosen date (2026-11-25): a worked birthday's 1.00 day placed in the birthday month
 export * from "./birthday-compensation";
+// Compensation days on a date HR chooses (2026-11-28): Shift / OT / Sunday / Holiday work compensation or the balance
+export * from "./compensation-placement";
 export * from "./documents";
 export * from "./gate";
 // Gate Pass / Visitors / Tea Break rebuild (2026-11-18): one file per slice, the record row the gate pages share

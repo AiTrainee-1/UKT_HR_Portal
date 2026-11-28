@@ -111,6 +111,23 @@ export type CompensationClaim = HolidayWorkClaim & {
   appliesOn: string | null;
   ledger: ClaimLedgerLink | null;
   statusLabel: string | null;
+  // ── compensation days on a chosen date (2026-11-28, compensation-placement.ts): additive, an older backend sends none ──
+  /** Placed by HR on a chosen date: the Department Head decides first, then HR. */
+  hrStep?: boolean;
+  /** "hod" = waiting for the Department Head, "hr" = waiting for HR; null once decided or when not hrStep. */
+  stage?: "hod" | "hr" | null;
+  /** The day a placement gives off and how much (use_balance: its day / shifts; a credit placed at once: use_date /
+   *  use_shifts); null otherwise. */
+  useShifts?: number | null;
+  /** The approved credit a use_balance placement comes from. */
+  sourceClaimId?: number | null;
+  /** shift | overtime | sunday | holiday | birthday | balance (null for an OT allowance). */
+  compType?: string | null;
+  /** "Sunday compensation", "Shift compensation" ... */
+  compTypeLabel?: string | null;
+  /** Approved credit claims only (else null): already placed from it / still to place. */
+  placed?: number | null;
+  leftToPlace?: number | null;
 };
 
 export type ClaimsSummary = {
@@ -216,6 +233,14 @@ export function normalizeClaim(value: unknown): CompensationClaim {
     appliesOn: str(raw.appliesOn ?? raw.appliedOn),
     ledger: ledgerLinkOf(raw.ledger ?? raw.ledgerEntry),
     statusLabel: str(raw.statusLabel),
+    hrStep: raw.hrStep === true,
+    stage: raw.stage === "hod" || raw.stage === "hr" ? raw.stage : null,
+    useShifts: numOrNull(raw.useShifts),
+    sourceClaimId: numOrNull(raw.sourceClaimId),
+    compType: str(raw.compType),
+    compTypeLabel: str(raw.compTypeLabel),
+    placed: numOrNull(raw.placed),
+    leftToPlace: numOrNull(raw.leftToPlace),
   };
 }
 

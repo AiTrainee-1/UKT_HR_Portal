@@ -291,6 +291,16 @@ APPROVAL_KINDS: tuple[ApprovalKind, ...] = (
         "compensation",
         needs_edit=True,
     ),
+    # 2026-11-28: HR's step (after the Department Head's) of a compensation day HR placed on a chosen date (Shift / OT /
+    # Sunday / holiday work, or the balance). On top of Edit on the Claims tab, like the other compensation decisions.
+    ApprovalKind(
+        "compensation_placement",
+        "Compensation days (chosen dates)",
+        "compensation.leave.holiday_work.claims",
+        "Give HR's approval to a compensation day HR placed on a chosen date (after the Department Head's).",
+        "compensation",
+        needs_edit=True,
+    ),
     ApprovalKind(
         "bonus_status",
         "Bonus approval and payment",
@@ -311,7 +321,8 @@ INFO_KINDS: tuple[dict, ...] = (
         "group": "compensation",
         "text": (
             "Sunday / holiday work, OT allowance and credit, birthday credit and using the balance, raised by the "
-            "employee or HR. Decided by the Department Head only: HR has no approval step for them."
+            "employee or HR. Decided by the Department Head only: HR has no approval step for them (a date HR chooses "
+            "on the compensation calendar is the exception: 'Compensation days (chosen dates)')."
         ),
     },
 )
@@ -588,6 +599,7 @@ DECISION_ROUTES: tuple[tuple[str, str, str], ...] = (
     (r"recruitment/resignations/\d+/action", "PATCH", "resignation"),
     (r"advances/\d+", "PUT", "advance"),
     (r"compensation/birthday-compensation/uses/\d+/decision", "PATCH", "birthday_compensation"),
+    (r"compensation/placements/\d+/decision", "PATCH", "compensation_placement"),
 )
 
 

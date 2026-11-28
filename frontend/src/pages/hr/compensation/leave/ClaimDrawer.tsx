@@ -21,6 +21,7 @@ import {
   raisedByText,
 } from "./claims-logic";
 import { balanceLink, creditLink } from "./leave-url";
+import { placedDayLine, placementStageText } from "./place-comp-logic";
 
 const LINK =
   "inline-flex min-h-11 items-center gap-1 text-sm font-semibold text-indigo-700 underline-offset-2 hover:underline sm:min-h-0";
@@ -160,7 +161,11 @@ export function ClaimDrawer({
         <>
           <DrawerSection title="The claim" testId="claim-drawer-claim">
             <div className="flex flex-wrap items-center gap-2">
-              <StatusChip tone={STATUS_TONE[c.status] ?? "slate"}>{claimStatusText(c)}</StatusChip>
+              <StatusChip
+                tone={placementStageText(c) && c.stage === "hr" ? "amber" : (STATUS_TONE[c.status] ?? "slate")}
+              >
+                {placementStageText(c) ?? claimStatusText(c)}
+              </StatusChip>
               <span className="text-xs text-slate-500">Claim #{c.id}</span>
             </div>
             <DrawerFields
@@ -168,6 +173,8 @@ export function ClaimDrawer({
                 { label: "Kind", value: kindText(c) },
                 { label: DATE_LABEL[c.kind], value: dateLong(c.workDate) },
                 { label: "Claimed", value: claimAmountText(c) },
+                // a date HR chose on the calendar: the day off it gives and how much
+                ...(placedDayLine(c) ? [{ label: "Date chosen by HR", value: placedDayLine(c), wide: true }] : []),
                 { label: "Raised by", value: raisedByText(c) },
                 // the date and the exact time it was sent (India time)
                 { label: "Submitted on", value: c.createdAt ? fmtDateTime(c.createdAt, { year: true }) : null },
@@ -193,11 +200,15 @@ export function ClaimDrawer({
               </div>
             )}
             <p className="text-sm text-slate-700">
-              {c.status === "pending"
-                ? c.hodName
-                  ? `Waiting for ${c.hodName} (Department Head) to decide in Approvals.`
-                  : "No Department Head is assigned to this employee, so nobody can decide it yet (HOD Assignment)."
-                : decided}
+              {c.status === "pending" && c.hrStep
+                ? c.stage === "hr"
+                  ? "The Department Head approved it. HR decides it now: Approve or Reject in the Claims list or in Requests."
+                  : `Waiting for ${c.hodName ? `${c.hodName} (Department Head)` : "the Department Head"} to decide in Approvals, then HR.`
+                : c.status === "pending"
+                  ? c.hodName
+                    ? `Waiting for ${c.hodName} (Department Head) to decide in Approvals.`
+                    : "No Department Head is assigned to this employee, so nobody can decide it yet (HOD Assignment)."
+                  : decided}
             </p>
             {c.reviewComment && <p className="text-sm italic text-slate-600">“{c.reviewComment}”</p>}
           </DrawerSection>

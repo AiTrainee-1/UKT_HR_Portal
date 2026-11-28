@@ -277,6 +277,33 @@ DEFINITIONS: tuple[WorkflowDef, ...] = (
         ),
     ),
     WorkflowDef(
+        key="compensation_placement",
+        label="Compensation days (chosen dates)",
+        group="Leave & attendance",
+        purpose=(
+            "HR chooses, on a calendar, the date an employee's compensation is taken on: Shift (Type 2) compensation, an "
+            "OT shift credit, Sunday work or holiday work, or the balance as a whole. The Department Head approves it "
+            "first, then HR; only then is the compensation added to and taken from the balance and the day given off "
+            "with pay in the attendance."
+        ),
+        requested_by="HR",
+        default_steps=(_step(HOD), _step(HR)),
+        allowed_roles=(HOD, HR),
+        editable=False,
+        hod_flag="can_approve_compensation",
+        fixed_note=(
+            "Every compensation day HR places on a chosen date needs the Department Head first and then HR. This pipeline "
+            "cannot be edited. The employees' own claims and use requests keep the Compensation claims pipeline."
+        ),
+        note=(
+            "The Department Head uses the 'can approve compensation' switch and sees these with the other compensation "
+            "requests. An employee with no Department Head (or who is the head) cannot get one until one is assigned."
+        ),
+        on_off_effect=(
+            "HR cannot choose new compensation dates while it is off; days already waiting can still be decided."
+        ),
+    ),
+    WorkflowDef(
         key="outpass",
         label="Gate Outpass",
         group="Requests",
@@ -625,7 +652,9 @@ ADAPTERS: dict[str, Adapter] = {
     "casual_leave": Adapter("CasualLeaveRequest", **_PLAIN),
     "outpass": Adapter("OutpassRequest", extra_filter={"source": "manual"}, **_PLAIN),
     "attendance_correction": Adapter("AttendanceOverrideRequest", **_PLAIN),
-    "holiday_work": Adapter("HolidayWorkClaim", **_PLAIN),
+    # one table, two pipelines (2026-11-28): a date HR chose on the calendar (hr_step) goes to the Department Head then HR
+    "holiday_work": Adapter("HolidayWorkClaim", extra_filter={"hr_step": False}, **_PLAIN),
+    "compensation_placement": Adapter("HolidayWorkClaim", extra_filter={"hr_step": True}, **_PLAIN),
     "birthday_compensation": Adapter("BirthdayCompensationUse", **_PLAIN),
     "missing_punch": Adapter(
         "MissingPunchRequest", ("pending_hod", "pending_hr"), _project_hod_hr, _legacy_hod_hr_stamps
@@ -642,8 +671,23 @@ def adapter(key: str) -> Adapter | None:
     return ADAPTERS.get(key)
 
 
+def routed_key(key: str, obj) -> str:
+    """The pipeline one request row really follows: its table's workflow `key`, unless the row names another one of the
+    same table (`approval_workflow_key`; 2026-11-28: a compensation date HR chose on the calendar is a HolidayWorkClaim
+    decided by the Department Head THEN HR, workflow compensation_placement). Every list, count, decision and approval
+    block asks through here, so the Department Head's screens (which ask about "holiday_work") treat such a row right:
+    theirs until they approve it, HR's after."""
+    if obj is None:
+        return key
+    named = getattr(obj, "approval_workflow_key", None)
+    if not isinstance(named, str) or named == key or named not in ADAPTERS:
+        return key
+    a, b = ADAPTERS.get(key), ADAPTERS[named]
+    return named if a is None or a.model == b.model else key
+
+
 def is_pending(key: str, obj) -> bool:
-    a = adapter(key)
+    a = adapter(routed_key(key, obj))
     return a is not None and getattr(obj, "status", None) in a.pending
 
 
@@ -701,6 +745,8 @@ def decide(
     `obj.approval_trail` and works out what happens next. It does NOT save `obj` and does NOT run any side effect: the
     calling module stamps its own fields, saves, and runs its final-approval work when `outcome.final`.
     Raises ApprovalError (with a message and HTTP status) when the decision is not allowed."""
+    if (routed := routed_key(key, obj)) != key:
+        key, cfg = routed, None
     a = adapter(key)
     if a is None:
         raise ApprovalError(f"{definition(key).label} has no staged pipeline")
@@ -771,6 +817,8 @@ def can_act(
     For HR it also asks whether the HR account behind the current request may approve this kind (hr_access.py), so the
     "waiting for you" lists and counts leave out what that account can't decide. That is a no-op for accounts on the old
     "edit = approve" rule and for callers with no HR account; `for_actor=False` asks about the role alone."""
+    if (routed := routed_key(key, obj)) != key:
+        key, cfg = routed, None
     if not is_pending(key, obj):
         return False
     if role == HR and for_actor and not _hr_actor_may(key, obj):
@@ -806,6 +854,8 @@ def progress(key: str, obj, cfg: Config | None = None) -> dict:
     """The `approval` block shipped with every request: the pipeline, how far it has got, who is up next and who may act.
 
     Step states: approved | skipped | pending (the current step) | waiting (a later step) | rejected."""
+    if (routed := routed_key(key, obj)) != key:
+        key, cfg = routed, None
     cfg = cfg or get_config(key)
     a = adapter(key)
     status = getattr(obj, "status", None)

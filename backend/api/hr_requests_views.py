@@ -227,6 +227,24 @@ KINDS: tuple[Kind, ...] = (
         COMPENSATION_CLAIMS_PATH,
         "Compensation",
         ("pending",),
+        # a date HR chose on the calendar (hr_step) is its own kind below: HR decides it after the Department Head
+        extra_filter={"hr_step": False},
+        day_field="work_date",
+    ),
+    # Compensation days on a chosen date (2026-11-28, compensation_placement.py): HR placed Shift / OT / Sunday / holiday
+    # work compensation (or the balance) on a date; the Department Head decides first, then HR here (Approve / Reject call
+    # PATCH /api/compensation/placements/<id>/decision). Listed by the claim's date (the day worked / the day off).
+    Kind(
+        "compensation_placement",
+        "Compensation days (chosen dates)",
+        "compensation.leave.holiday_work.claims",
+        "HolidayWorkClaim",
+        "quick",
+        COMPENSATION_CLAIMS_PATH,
+        "Compensation",
+        ("pending",),
+        extra_filter={"hr_step": True},
+        select=("employee__department", "employee__designation", "employee__branch", "source_claim"),
         day_field="work_date",
     ),
     # Birthday Compensation days (2026-11-25): the Department Head decides first, then HR here (Approve / Reject call
@@ -625,6 +643,40 @@ def _holiday_work(r):
     }
 
 
+def _compensation_placement(r):
+    """A compensation day HR placed on a chosen date (2026-11-28): what it places, the day and how much."""
+    from . import compensation_placement as places
+
+    day, shifts = places.placed_day(r)
+    comp = places.claim_type(r)
+    label = places.TYPE_LABELS[comp]
+    details = [("Day off on", str(day) if day else "-"), ("Shifts", f"{float(shifts):.2f}")]
+    if r.kind != "use_balance":
+        details.append(("Worked on" if r.kind == "holiday_work" else "OT date", str(r.work_date)))
+        details.append(("Credit", f"{float(r.shifts):.2f}"))
+    elif r.source_claim_id and getattr(r, "source_claim", None) is not None:
+        details.append(("From the credit of", str(r.source_claim.work_date)))
+    else:
+        details.append(("From", "The compensation balance"))
+    details.append(("Placed by", r.requested_by or "HR"))
+    summary = f"{day} · {float(shifts):g} shift" if day else label
+    return {
+        "label": label,
+        "summary": summary,
+        "reason": r.reason,
+        "requested": _requested(day, note=f"{float(shifts):g} shift", label="Day off on") if day else None,
+        "date": str(day) if day else str(r.work_date),
+        "details": details,
+        "decision": (r.reviewed_by, None, r.reviewed_at, r.review_comment),
+        "extra": {
+            "claimKind": r.kind,
+            "compType": comp,
+            "useDate": str(day) if day else None,
+            "openPath": f"{COMPENSATION_CLAIMS_PATH}?hmonth=all&hemp={r.employee_id}&hclaim={r.id}",
+        },
+    }
+
+
 def _birthday_compensation(r):
     """A Birthday Compensation day placed in the birthday month (2026-11-25)."""
     part = {"full": "Full day", "first_half": "First half", "second_half": "Second half"}.get(r.portion, r.portion)
@@ -719,6 +771,7 @@ BUILDERS: dict[str, Callable] = {
     "request": _request,
     "attendance_correction": _correction,
     "holiday_work": _holiday_work,
+    "compensation_placement": _compensation_placement,
     "birthday_compensation": _birthday_compensation,
     "resignation": _resignation,
     "advance": _advance,

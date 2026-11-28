@@ -261,6 +261,7 @@ describe("a Holiday / Sunday work claim in the hub", () => {
       "request",
       "attendance_correction",
       "holiday_work",
+      "compensation_placement",
       "birthday_compensation",
       "resignation",
       "advance",

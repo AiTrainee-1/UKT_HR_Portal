@@ -48,6 +48,7 @@ ALL_KINDS = [
     "request",
     "attendance_correction",
     "holiday_work",
+    "compensation_placement",
     "birthday_compensation",
     "resignation",
     "advance",
@@ -139,6 +140,16 @@ class HubFixture(TestCase):
         )
         made["holiday_work"] = HolidayWorkClaim.objects.create(
             employee=emp, work_date=date(2026, 10, 4), shifts=Decimal("0.50"), reason="dispatch rush", approval_trail=[]
+        )
+        # a compensation day HR placed on a chosen date (2026-11-28): the Department Head, then HR
+        made["compensation_placement"] = HolidayWorkClaim.objects.create(
+            employee=emp,
+            kind="use_balance",
+            work_date=date(2026, 10, 15),
+            shifts=Decimal("0.50"),
+            reason="date chosen by HR",
+            hr_step=True,
+            approval_trail=[],
         )
         made["birthday_compensation"] = BirthdayCompensationUse.objects.create(
             employee=emp,
@@ -255,9 +266,10 @@ class PipelineTests(HubFixture):
         self.assertEqual(queues["advance"], "hr")
         self.assertEqual(queues["request"], "hr")
         stats = body["stats"]
-        self.assertEqual(stats["waiting"], 13)
-        self.assertEqual(stats["waitingHr"] + stats["waitingHod"] + stats["waitingOther"], 13)
+        self.assertEqual(stats["waiting"], 14)  # 14 with the compensation day HR placed (2026-11-28)
+        self.assertEqual(stats["waitingHr"] + stats["waitingHod"] + stats["waitingOther"], 14)
         self.assertEqual(queues["birthday_compensation"], "hod")  # the Department Head first, then HR
+        self.assertEqual(queues["compensation_placement"], "hod")  # likewise: HR's step comes second
         self.assertGreaterEqual(stats["waitingHod"], 3)
 
     def test_a_changed_pipeline_moves_the_request_to_the_other_queue(self):
@@ -479,7 +491,10 @@ class AccessTests(HubFixture):
         self.assertEqual({k["access"] for k in body["kinds"]}, {"view"})
         # every kind except the Holiday / Sunday work claims and Birthday Compensation: they belong to the Compensation
         # module (salary data), which is not one of the pages the Managing Director's portal reproduces
-        self.assertEqual({i["kind"] for i in body["items"]}, set(ALL_KINDS) - {"holiday_work", "birthday_compensation"})
+        self.assertEqual(
+            {i["kind"] for i in body["items"]},
+            set(ALL_KINDS) - {"holiday_work", "birthday_compensation", "compensation_placement"},
+        )
 
     def test_an_employee_token_is_refused(self):
         token = sign_token({"role": "employee", "employeeId": self.asha.id})

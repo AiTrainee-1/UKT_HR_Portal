@@ -588,6 +588,126 @@ One claim workflow for every kind (2026-11-19): the employee (mobile app / Emplo
 
 **Settings → Attendance → Staff: next-morning cut-off** (`GET|PUT /api/payroll-settings`, group `settings.attendance.staff`, company-wide: a branch login gets 403 `company_wide_rule`): `staffNextMorningEnabled` (bool, default true), `staffNextMorningCutoff` (`"HH:MM"`, 00:01..12:00, default `"06:00"`), `staffNextMorningFrom` (date; only moves forward: an earlier date or clearing a set one is a 400 with a sentence; switching the rule on again without a date stamps today). A staff punch on day D+1 before the cut-off (moved earlier by D+1's shift start minus `firstPunchPreShiftBufferHours` on a working day) belongs to day D when D's own punches are odd; days before the from-date keep `lastPunchPostShiftGraceHours`. A change is audited as its own line.
 
+## Compensation — Compensation days on a chosen date (compensation_placement.py, compensation_placement_views.py; migration 0196)
+
+Backend: `backend/api/compensation_placement.py` (rules), `compensation_placement_views.py` (endpoints),
+`compensation_claims.py` (a placement is a HolidayWorkClaim with `hr_step`), migration 0196.
+
+Owner decisions: Shift compensation (Type 2 OT), Overtime compensation (= the OT shift credit), Sunday compensation and
+Holiday work compensation can be placed by HR on a CHOSEN date via a calendar (like Birthday Compensation's
+"Choose date for employee"). Every date HR chooses goes to the Department Head FIRST, then HR (approval workflow
+`compensation_placement`). Dates: any working day up to 45 days back (only if it still can take part of a shift:
+Absent / Half Day) or 90 days ahead; nothing lapses (what is not placed stays in the balance). HRMS only.
+
+## Sources (what is placed)
+
+| source | means | the claim it creates |
+|---|---|---|
+| `{type:"overtime", id:<OvertimeRecord id>}` | a Type 2 OT record still **waiting** (from claims_from on, quarters credit > 0, no open claim) — "Shift compensation" | ONE `ot_shift` claim that credits the quarters credit AND places `shifts` of it on `useDate` |
+| `{type:"holiday_work", date:"YYYY-MM-DD"}` | a Sunday / holiday / off Saturday the employee worked, not claimed yet — "Sunday compensation" / "Holiday work compensation" | ONE `holiday_work` claim crediting `creditShifts` (default 1.00) AND placing `shifts` of it |
+| `{type:"claim", id:<approved credit claim id>}` | an APPROVED credit (Sunday/holiday work, OT shift credit, old birthday credit) — "Sunday/Holiday work/Overtime compensation" | a `use_balance` claim (source_claim = that claim) |
+| `{type:"balance"}` | the balance as a whole (Balance tab → Use balance) — "Compensation balance" | a `use_balance` claim, no source |
+
+Also accepted as a string: `"overtime:12"`, `"holiday_work:2026-11-22"`, `"claim:40"`, `"balance"`.
+
+## GET /api/compensation/placements/calendar?employeeId=&month=YYYY-MM&source=<string form>
+
+month defaults to the current month; allowed months are those overlapping [today-45, today+90] (400 otherwise).
+Staff only (403 code not_staff). Branch-scoped (404 for another branch's employee).
+
+```json
+{
+  "employee": {"employeeId": 5, "employeeCode": "1001", "employeeName": "Asha K", "department": "Cutting", "departmentId": 2, "designation": "...", "branch": "...", "branchId": 1},
+  "source": {
+    "type": "claim", "id": 40,                 // or {"type":"overtime","id":12} / {"type":"holiday_work","date":"2026-11-22"} / {"type":"balance"}
+    "compType": "sunday",                      // shift | overtime | sunday | holiday | birthday | balance
+    "compTypeLabel": "Sunday compensation",    // Shift compensation | Overtime compensation | Sunday compensation | Holiday work compensation | Birthday credit | Compensation balance
+    "title": "Sunday worked on Sun 22 Nov 2026",
+    "workDate": "2026-11-22",                  // null for balance
+    "claimId": 40, "overtimeRecordId": null,
+    "total": 1.0,        // what the source gives (balance: what is available)
+    "placed": 0.0,       // already placed from it (waiting or approved)
+    "left": 1.0,         // what can be placed now (capped by the available balance for claim/balance)
+    "creditFixed": true, // false only for holiday_work: HR may choose the credit (creditShifts, 0.25..1.00, default 1.00)
+    "placesAtOnce": false, // true for overtime / holiday_work (the credit and the day in one request)
+    "canPlace": true,
+    "refusal": null,     // a sentence when nothing can be placed (show it; calendar stays readable)
+    "refusalCode": null  // not_approved | nothing_left | already_claimed | not_eligible | switched_off | too_old ...
+  },
+  "balance": {"earned": 2.0, "used": 0.5, "pending": 0.25, "available": 1.25, "balance": 1.5},
+  "window": {"from": "2026-10-11", "to": "2027-02-23", "backDays": 45, "aheadDays": 90},
+  "today": "2026-11-25",
+  "month": {"key": "2026-12", "label": "December 2026", "first": "2026-12-01", "last": "2026-12-31", "prev": "2026-11", "next": "2027-01"},  // prev/next null outside the window
+  "amounts": [0.25, 0.5, 0.75, 1.0],
+  "days": [
+    {
+      "date": "2026-12-02", "weekday": "Wed",
+      "status": "future",   // future | today | absent | half_shift | present | on_leave | holiday | off_day | locked | out_of_window | not_joined | placed | casual_leave | birthday_comp | none
+      "label": "Still to come",  // "Sunday", the holiday's name, "Off Saturday", "Payroll Done", "Too far back", "Present", "Absent", "Half Day", "Compensation placed", "Casual Leave", ...
+      "selectable": true,
+      "room": 1.0,          // what the day can still take (before 'left')
+      "amounts": [0.25, 0.5, 0.75, 1.0],   // what can be placed on it now (<= room and <= left); [] when not selectable
+      "suggested": 1.0,     // the default amount (as much as fits)
+      "reason": null,       // why not selectable, or a note ("This day already earns 0.50 shift: at most 0.50 can be added.")
+      "earns": 0.0,         // shifts the day earns now / will earn (null when unknown)
+      "firstPunch": null, "lastPunch": null, "manual": false,
+      "placed": [ {"id": 77, "shifts": 0.5, "status": "pending", "stage": "hr", "hrStep": true, "compType": "sunday", "compTypeLabel": "Sunday compensation"} ]
+    }
+  ],
+  "placements": [   // the employee's OPEN placements in the window (any source, whoever placed them), soonest first
+    {"id": 77, "date": "2026-12-02", "shifts": 0.5, "status": "pending", "statusLabel": "Approved by the Department Head, waiting for HR",
+     "stage": "hr", "hrStep": true, "kind": "use_balance", "compType": "sunday", "compTypeLabel": "Sunday compensation",
+     "sourceClaimId": 40, "workDate": null, "raisedByRole": "hr", "requestedBy": "Admin", "reason": "...", "canWithdraw": true}
+  ],
+  "approvalPath": "HR → HOD → HR",
+  "workflowOn": true,
+  "hodProblem": null,     // a sentence when the employee has no Department Head who may approve compensation (then POST answers 409 no_hod)
+  "reasonMax": 500
+}
+```
+
+## POST /api/compensation/placements
+
+```json
+{"employeeId": 5, "source": {"type": "claim", "id": 40}, "useDate": "2026-12-02", "shifts": 0.5,
+ "creditShifts": 1.0,   // holiday_work source only (optional, default 1.00); shifts must be <= creditShifts
+ "reason": "optional, <= 500 chars (a default sentence is written when empty)"}
+```
+201 → `{"claim": <claim JSON, see below>, "message": "Sent to the Department Head: sunday compensation of 0.50 shift on 02 Dec 2026 for Asha K. HR approves it after the Department Head."}`
+
+Errors `{error, code}`: 400 invalid / date_not_allowed (the day cannot take it; sentence says why) / not_approved /
+not_eligible / already_claimed(409 sometimes) ; 409 nothing_left / no_hod ; 403 not_staff / switched_off ; 404 not_found.
+
+## PATCH /api/compensation/placements/<id>/decision   (HR's step, after the head)
+
+`{"status": "approved" | "rejected", "comment": "..."}` (a rejection needs >= 3 chars: 400 remark_required).
+200 → `{"claim": <claim JSON>}`. 400 not_your_turn while it waits for the Department Head; 409 claim_refused (the day can
+no longer take it — sentence); 403 approval_not_permitted (HR account lacks the "compensation_placement" approval right).
+
+Withdraw a pending placement: the existing `DELETE /api/compensation/claims/<id>` (useWithdrawCompensationClaim).
+The Department Head approves in the apps / MD portal through the existing `PATCH /api/manager/holiday-work/<id>/status`.
+
+## Claim JSON (GET /api/compensation/claims etc.) — new keys, all additive
+
+- `hrStep` (bool): placed by HR on a chosen date → Department Head then HR.
+- `stage`: "hod" | "hr" | null (decided / not hr_step).
+- `useDate` / `useShifts`: the day a placement gives off and how much (use_balance: work_date/shifts; a credit placed at
+  once: use_date/use_shifts); null otherwise. (useDate existed before for use_balance only.)
+- `sourceClaimId`: the credit a use_balance placement comes from.
+- `compType` / `compTypeLabel`: shift | overtime | sunday | holiday | birthday | balance (null for ot_allowance).
+- `placed` / `leftToPlace` (approved credit claims only, else null): already placed from it / still to place.
+- `statusLabel` now: "Waiting for the Department Head" / "Approved by the Department Head, waiting for HR" for a pending
+  hrStep claim; "Approved: given on Wed 2 Dec 2026" for an approved credit placed at once.
+- `approval` (existing block) is the two-step pipeline for hrStep rows: `approval.canAct.hr` true when HR may decide now.
+
+## Requests hub (GET /api/hr-requests)
+
+New kind `compensation_placement` (label "Compensation days (chosen dates)", mode "quick", group "Compensation"):
+HR's Approve / Reject call `PATCH /api/compensation/placements/<id>/decision` with `{status, comment}`.
+Item `extra`: `{claimKind, compType, useDate, openPath}`; `label` = the comp type label ("Sunday compensation"),
+`summary` "2026-12-02 · 0.5 shift". The `holiday_work` kind no longer lists hrStep rows.
+Permission key for the kind: requests.list.compensation_placement (permission-tree.json regenerated).
+
 ## Compensation — Birthday Compensation on a chosen date (birthday_compensation.py, birthday_compensation_service.py, birthday_compensation_views.py; migration 0186)
 
 Owner brief 2026-11-25. A birthday that is NOT worked (no punch / approved leave) is still paid birthday leave on the day, automatically (unchanged). A birthday that IS worked (present, or a half day: a half day on the birthday counts as worked and nothing is automatic) no longer gives a 1.00 credit to claim: it gives **1.00 day of Birthday Compensation** the employee (mobile app / Employee Web App) or HR places on days of the **birthday month**, as a full day or a first / second half (two halves may go on two different dates). Each placement is a **use** (`BirthdayCompensationUse`), decided by the **Department Head, then HR** (approval workflow `birthday_compensation`, fixed, both steps mandatory). The final approval pays that day (or half) in the attendance like a Casual Leave; payroll reads it as it reads any paid day. Staff only. JSON is camelCase; employee endpoints also read snake_case bodies. Dates `YYYY-MM-DD`.
@@ -2610,6 +2730,13 @@ The senders behind the Documents, Visitors and Resume Screening pages keep their
 - `raised_by_role` — TextField, choices `hr` | `employee`, default and `db_default` `hr`
 - Constraints: `uniq_open_comp_claim` (employee, kind, work_date) where status is pending or approved, replacing `uniq_open_holiday_work_claim` (employee, work_date); `uniq_open_comp_claim_per_ot` (overtime_record) where pending or approved and the record is set. A rejected claim can be raised again.
 - Model constants: `KIND_*`, `KIND_CHOICES`, `OT_KINDS`, `CREDIT_KINDS` (holiday_work, ot_shift, birthday), `OPEN_STATUSES`, `RAISED_BY_HR` / `RAISED_BY_EMPLOYEE`.
+
+**Added (migration 0196, 2026-11-28, compensation days on a chosen date):**
+- `hr_step` — BooleanField, default and `db_default` false: a date HR chose on the calendar; the row follows the approval workflow `compensation_placement` (the Department Head, then HR) instead of `holiday_work` (`approval_workflow_key` property; `approval_workflow.routed_key`).
+- `use_date` — DateField, nullable: a CREDIT claim (holiday_work / ot_shift) placed at once — the day its compensation is taken on (approval writes the credit, a debit of `use_shifts` dated `use_date`, and relaxes that day). Null on every other row (a use_balance claim's day off stays `work_date`).
+- `use_shifts` — DecimalField(3,2), nullable: how much of that credit goes on `use_date` (the rest stays in the balance).
+- `source_claim` — ForeignKey → `HolidayWorkClaim` (self), nullable, `on_delete=SET_NULL`, related_name `placements`: the approved credit a use_balance placement comes from (left to place = its shifts less the open placements naming it).
+- Properties: `approval_workflow_key`, `placed_at_once`.
 
 ### BirthdayCompensationUse
 **Table:** `birthday_compensation_uses` (migration 0186, 2026-11-25). One placement of a worked birthday's 1.00 day of Birthday Compensation: `employee` (FK, CASCADE, related_name `birthday_compensation_uses`), `birthday` (the celebrated date it comes from), `use_date` (always in the birthday's month), `portion` (`full | first_half | second_half`), `days` (1.00 | 0.50, check `bday_use_days_full_or_half`), `status` (`pending | approved | rejected | withdrawn`), `reason`, `raised_by_role` (`employee | hr`), `requested_by`, `approval_trail` (JSON, workflow `birthday_compensation`), `hod_reviewed_by / _at / hod_review_comment`, `hr_reviewed_by / _at / hr_review_comment`, `withdrawn_by / withdrawn_at`, `created_at`, `updated_at`. Indexes `bday_use_emp_birthday` (employee, birthday), `bday_use_date_status` (use_date, status). Constraints `uniq_bday_use_first_half` / `uniq_bday_use_second_half`: one open (pending / approved) use of each half of a date per employee (a full day covers both halves, so it conflicts with any other open use of that date; first + second half of one date are allowed). A pending or approved use holds its days against the birthday's 1.00; what is left when the birthday month ends lapses. The attendance engine reads the APPROVED ones (`compensation_engine.CompContext.birthday_uses`).

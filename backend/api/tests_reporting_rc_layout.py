@@ -908,6 +908,12 @@ class EveryListedReportTests(_Catalog):
     @classmethod
     def setUpTestData(cls):
         random.seed(20261119)  # seed_data draws names, punches and leave at random: the same seed every run
+        # Migration 0121 sets the shift-table rules' "Applies from" to the day the TEST DATABASE was built, and the HR
+        # reports print it, so HR_OUTPUT_AT_HEAD only matched a database built on the day it was measured (2026-11-19;
+        # a --keepdb database from another day failed). Pin it to that day: the output no longer depends on the calendar.
+        from .models import ProductionShiftConfig
+
+        ProductionShiftConfig.objects.update_or_create(pk=1, defaults={"rules_effective_from": date(2026, 11, 19)})
         call_command(
             "seed_data", confirm=True, verbosity=0, stdout=io.StringIO(), stderr=io.StringIO()
         )  # its check mark cannot be printed to a cp1252 console

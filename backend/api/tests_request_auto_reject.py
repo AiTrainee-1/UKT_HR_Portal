@@ -119,7 +119,7 @@ class EveryKindTests(AutoRejectBase):
         made = self.old_of_each()
         summary = self.go()
         # the On-Duty punch of the One-Duty request is voided with it (and listed on its own history row)
-        self.assertEqual(summary["rejected"], 12)
+        self.assertEqual(summary["rejected"], 13)  # every kind but resignation (compensation_placement since 11-28)
         self.assertEqual(summary["failed"], 0)
         self.assertEqual(set(summary["byKind"]), set(engine.AUTO_KINDS))
         remark = "Automatically rejected: no decision within 45 days of being submitted (submitted 5 Oct 2026)."
@@ -306,6 +306,11 @@ class NotificationTests(AutoRejectBase):
         self.go()
         self.assert_no_whatsapp()
         notes = {n.related_module: n for n in Notification.objects.filter(employee=self.asha)}
+        # a compensation day HR placed (2026-11-28) is told like every compensation claim (module holiday_work), so the
+        # claim's own notice is found by its dedupe key, not by the module
+        by_key = {n.dedupe_key: n for n in Notification.objects.filter(employee=self.asha)}
+        notes["holiday_work"] = by_key[f"wa:approval:holiday_work:{made['holiday_work'].pk}:rejected"]
+        self.assertIn(f"wa:approval:holiday_work:{made['compensation_placement'].pk}:rejected", by_key)
         for key in (
             "leave",
             "permission",
@@ -439,7 +444,7 @@ class SafetyTests(AutoRejectBase):
         rows = AutoRejectedRequest.objects.count()
         notes = Notification.objects.count()
         second = self.go()
-        self.assertEqual(first["rejected"], 12)
+        self.assertEqual(first["rejected"], 13)
         self.assertEqual((second["rejected"], second["skipped"], second["failed"]), (0, 0, 0))
         self.assertEqual(AutoRejectedRequest.objects.count(), rows)
         self.assertEqual(Notification.objects.count(), notes)
@@ -464,7 +469,7 @@ class SafetyTests(AutoRejectBase):
         self.assertEqual(made["permission"].status, "pending", "nothing of a failed rejection is kept")
         made["leave"].refresh_from_db()
         self.assertEqual(made["leave"].status, "rejected", "the others are still rejected")
-        self.assertEqual(summary["rejected"], 11)
+        self.assertEqual(summary["rejected"], 12)
         self.assertFalse(AutoRejectedRequest.objects.filter(kind="permission").exists())
         self.assertEqual(service.settings_row().last_run_result["failed"], 1)
 
@@ -594,7 +599,7 @@ class EndpointTests(AutoRejectBase):
         self.assertEqual((body["enabled"], body["days"], body["runAt"]), (True, 45, "01:30"))
         self.assertEqual(body["limits"], {"min": 7, "max": 365, "default": 45})
         self.assertEqual([k["key"] for k in body["neverRejected"]], ["resignation"])
-        self.assertEqual(len(body["kinds"]), 12)
+        self.assertEqual(len(body["kinds"]), 13)  # 13 with compensation_placement (2026-11-28)
         self.assertTrue(body["canChange"] and body["canRun"])
         due = body["due"]
         self.assertEqual((due["total"], due["byKind"], due["days"], due["saved"]), (1, {"leave": 1}, 45, True))
@@ -688,7 +693,7 @@ class EndpointTests(AutoRejectBase):
             age(obj, 50, today=self.today)
         self.call("post", RUN_NOW)
         first = self.call("get", HISTORY, pageSize=5).json()
-        self.assertEqual((first["total"], first["pages"], len(first["items"])), (12, 3, 5))
+        self.assertEqual((first["total"], first["pages"], len(first["items"])), (13, 3, 5))
         item = first["items"][0]
         for name in ("kind", "kindLabel", "employee", "what", "summary", "submittedAt", "rejectedAt", "remark", "by"):
             self.assertIn(name, item)

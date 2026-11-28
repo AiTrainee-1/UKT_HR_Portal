@@ -1,6 +1,7 @@
 import type { ComponentType, MouseEvent, ReactNode } from "react";
 import {
   Calendar,
+  CalendarPlus,
   Camera,
   CheckCircle,
   ClipboardCheck,
@@ -56,6 +57,7 @@ export const KIND_VISUAL: Record<KindKey, { icon: IconType; tile: string }> = {
   request: { icon: Inbox, tile: "bg-indigo-50 text-indigo-600" },
   attendance_correction: { icon: ClipboardCheck, tile: "bg-orange-50 text-orange-600" },
   holiday_work: { icon: Landmark, tile: "bg-pink-50 text-pink-600" },
+  compensation_placement: { icon: CalendarPlus, tile: "bg-purple-50 text-purple-600" },
   birthday_compensation: { icon: Gift, tile: "bg-fuchsia-50 text-fuchsia-600" },
   resignation: { icon: LogOut, tile: "bg-rose-50 text-rose-600" },
   advance: { icon: Wallet, tile: "bg-sky-50 text-sky-600" },

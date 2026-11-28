@@ -26,6 +26,8 @@ import {
 import { formatDuration } from "@/pages/hr/settings/compensation/time";
 import { compensationSettingsHref, dateShort, errorMessage, shiftsText } from "../logic";
 import { CELL, PersonCell, Pager, StatusChip, TABLE_HEAD, usePaged } from "../ui";
+import { overtimeSource } from "../leave/place-comp-logic";
+import { PlaceCompDialog, type PlaceCompTarget } from "../leave/PlaceCompDialog";
 import { AssignDialog } from "./AssignDialog";
 import { ClaimDialog } from "./ClaimDialog";
 import { ClaimCell, LastPunch } from "./parts";
@@ -103,6 +105,8 @@ export function Type2Section({
   const [assigning, setAssigning] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [claiming, setClaiming] = useState<OvertimeRow[] | null>(null);
+  // "Choose date": the record's shift compensation credited and placed at once on a date HR picks (the calendar)
+  const [placing, setPlacing] = useState<PlaceCompTarget | null>(null);
 
   // a claimed record (waiting for the HOD, or credited) cannot be paid, assigned or rejected, so it cannot be ticked
   const selectable = useMemo(() => waiting.filter((r) => !type2Lock(r)), [waiting]);
@@ -344,12 +348,12 @@ export function Type2Section({
                                 </span>
                               )}
                               {can && (
-                                <div>
+                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                   <Button
                                     type="button"
                                     size="sm"
                                     variant="outline"
-                                    className="mt-1.5 h-8"
+                                    className="h-8"
                                     disabled={!!claimPause}
                                     title={
                                       claimPause?.reason ??
@@ -359,6 +363,28 @@ export function Type2Section({
                                     data-testid={`ot2-claim-${id}`}
                                   >
                                     Claim
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8"
+                                    disabled={!!claimPause}
+                                    title={
+                                      claimPause?.reason ??
+                                      `Choose date: give ${row.employeeName} this shift compensation as a day off on a date you pick, and send it to the Department Head, then HR`
+                                    }
+                                    onClick={() =>
+                                      setPlacing({
+                                        employeeId: row.employeeId,
+                                        employeeName: row.employeeName,
+                                        employeeCode: row.employeeCode,
+                                        source: overtimeSource(row.id),
+                                      })
+                                    }
+                                    data-testid={`ot2-place-${id}`}
+                                  >
+                                    Choose date
                                   </Button>
                                 </div>
                               )}
@@ -530,6 +556,8 @@ export function Type2Section({
         modes={chosenModes}
         onAssigned={afterAssign}
       />
+
+      <PlaceCompDialog target={placing} onClose={() => setPlacing(null)} />
 
       <ClaimDialog
         open={claiming !== null}

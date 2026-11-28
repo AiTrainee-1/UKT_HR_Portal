@@ -1,5 +1,16 @@
 import { useMemo, useState } from "react";
-import { Cake, ClipboardCheck, Clock3, PiggyBank, SearchX, Sun, Timer, UserCheck, XCircle } from "lucide-react";
+import {
+  Cake,
+  ClipboardCheck,
+  Clock3,
+  Loader2,
+  PiggyBank,
+  SearchX,
+  Sun,
+  Timer,
+  UserCheck,
+  XCircle,
+} from "lucide-react";
 import { SectionCard } from "@/components/payroll/kit/parts";
 import {
   AlertDialog,
@@ -11,10 +22,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { RejectReasonDialog } from "@/components/RejectReasonDialog";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
   CLAIM_KINDS,
+  useDecidePlacement,
   useWithdrawCompensationClaim,
   type ClaimKind,
   type ClaimsListParams,
@@ -36,7 +49,8 @@ import {
   type TileTone,
 } from "@/pages/hr/outpass-visitors/kit";
 import { dateLong, dateShort, errorMessage, fmtShifts } from "../logic";
-import { Notice } from "../ui";
+import { Notice, useSingleFlight } from "../ui";
+import { useClaimRight } from "../visible";
 import { ClaimDrawer } from "./ClaimDrawer";
 import {
   CLAIM_STATUS_FILTER,
@@ -53,6 +67,15 @@ import {
 } from "./claims-logic";
 import { EmployeeChip, MonthFilter, OrgFilters } from "./LeaveFilters";
 import { idOf, monthChoice, monthChoiceLabel, pageOf, useLeaveUrl, type LeaveUrl } from "./leave-url";
+import {
+  canChooseDateFor,
+  claimSource,
+  hrMayApprovePlacement,
+  hrMayRejectPlacement,
+  placedDayLine,
+  placementChip,
+} from "./place-comp-logic";
+import { PlaceCompDialog, type PlaceCompTarget } from "./PlaceCompDialog";
 
 export const CLAIMS_PAGE_SIZE = 25;
 
@@ -120,7 +143,9 @@ const KIND_TONE: Record<ClaimKind, TileTone> = {
  * balance), whoever raised it, with where it stands in the Department Head's approval. Filtered by month (or every month),
  * kind, status, who raised it, department, branch and the employee's name or code; the tiles count them by status and by
  * kind (a click filters). A row opens its drawer: the approval trail, what the claim is based on, and what it put on the
- * balance (with links to Credits and the employee's balance). A claim still waiting can be withdrawn.
+ * balance (with links to Credits and the employee's balance). A claim still waiting can be withdrawn. An approved credit
+ * with some still to place offers Choose date (the calendar, PlaceCompDialog); a date HR chose shows its stage and day off,
+ * and HR approves or rejects it here once the Department Head has approved it.
  */
 export function ClaimsPart({
   query,
@@ -141,6 +166,12 @@ export function ClaimsPart({
   const [lu, setLu] = useLeaveUrl();
   const withdraw = useWithdrawCompensationClaim();
   const [withdrawing, setWithdrawing] = useState<CompensationClaim | null>(null);
+  const [placing, setPlacing] = useState<PlaceCompTarget | null>(null);
+  const [rejecting, setRejecting] = useState<CompensationClaim | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
+  const decide = useDecidePlacement();
+  const { reason: rightProblem } = useClaimRight();
+  const once = useSingleFlight();
   const month = monthChoice(lu.hmonth, lu.hyear, today);
   const rows = useMemo(() => query.data?.items ?? [], [query.data]);
   const summary = query.data?.summary;
@@ -173,6 +204,22 @@ export function ClaimsPart({
       setWithdrawing(null);
     }
   };
+
+  const confirmReject = (comment: string) =>
+    once(async () => {
+      if (!rejecting) return;
+      setRejectError(null);
+      try {
+        await decide.mutateAsync({ id: rejecting.id, status: "rejected", comment });
+        toast({
+          title: "Compensation day rejected",
+          description: `${rejecting.employeeName}: ${placedDayLine(rejecting) ?? kindText(rejecting)}.`,
+        });
+        setRejecting(null);
+      } catch (err) {
+        setRejectError(errorMessage(err, "It could not be rejected. Check the connection and try again."));
+      }
+    });
 
   const columns = useMemo<DataColumn<CompensationClaim>[]>(
     () => [
@@ -222,10 +269,28 @@ export function ClaimsPart({
         minWidth: 170,
         cell: (c) => {
           const decided = decisionLine(c);
+          const stage = placementChip(c);
+          const dayOff = placedDayLine(c);
           return (
             <div className="flex flex-col items-start gap-0.5">
-              <StatusChip tone={STATUS_TONE[c.status] ?? "slate"}>{claimStatusText(c)}</StatusChip>
-              {c.status === "pending" ? (
+              <StatusChip
+                tone={stage && c.stage === "hr" ? "amber" : (STATUS_TONE[c.status] ?? "slate")}
+                title={stage?.title}
+                testId={`claim-status-${c.id}`}
+              >
+                {stage?.text ?? claimStatusText(c)}
+              </StatusChip>
+              {stage?.done && (
+                <span className="text-[11px] text-slate-500" data-testid={`claim-stage-${c.id}`}>
+                  {stage.done}
+                </span>
+              )}
+              {dayOff && (
+                <span className="text-[11px] font-medium text-slate-700" data-testid={`claim-dayoff-${c.id}`}>
+                  {dayOff}
+                </span>
+              )}
+              {c.hrStep && c.status === "pending" ? null : c.status === "pending" ? (
                 <span className="text-[11px] text-slate-500" data-testid={`claim-hod-${c.id}`}>
                   {c.hodName ? `HOD: ${c.hodName}` : "No Department Head assigned"}
                 </span>
@@ -259,26 +324,57 @@ export function ClaimsPart({
             >
               Details
             </Button>
-            {c.status === "pending" && (
+            {canChooseDateFor(c) && (
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
                 className="h-11 sm:h-8"
-                disabled={!canWithdraw}
-                aria-label={`Withdraw the claim of ${c.employeeName} for ${dateShort(c.workDate)}`}
-                title={canWithdraw ? "Withdraw and remove this claim from the Department Head's queue" : pausedReason}
-                onClick={() => setWithdrawing(c)}
-                data-testid={`claim-withdraw-${c.id}`}
+                disabled={!canWithdraw || !!rightProblem}
+                aria-label={`Choose a day off for ${c.employeeName} from this credit`}
+                title={
+                  !canWithdraw
+                    ? pausedReason
+                    : (rightProblem ??
+                      `Choose date: place the ${fmtShifts(c.leftToPlace ?? 0)} left of this credit on a day off for ${c.employeeName} and send it to the Department Head, then HR`)
+                }
+                onClick={() =>
+                  setPlacing({
+                    employeeId: c.employeeId,
+                    employeeName: c.employeeName,
+                    employeeCode: c.employeeCode,
+                    source: claimSource(c.id),
+                  })
+                }
+                data-testid={`claim-place-${c.id}`}
               >
-                Withdraw
+                Choose date
               </Button>
+            )}
+            {hrMayApprovePlacement(c) || hrMayRejectPlacement(c) ? (
+              <PlacementDecision claim={c} onReject={setRejecting} onRejectOpen={() => setRejectError(null)} />
+            ) : (
+              c.status === "pending" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-11 sm:h-8"
+                  disabled={!canWithdraw}
+                  aria-label={`Withdraw the claim of ${c.employeeName} for ${dateShort(c.workDate)}`}
+                  title={canWithdraw ? "Withdraw and remove this claim from the Department Head's queue" : pausedReason}
+                  onClick={() => setWithdrawing(c)}
+                  data-testid={`claim-withdraw-${c.id}`}
+                >
+                  Withdraw
+                </Button>
+              )
             )}
           </div>
         ),
       },
     ],
-    [canWithdraw, pausedReason, setLu],
+    [canWithdraw, pausedReason, setLu, rightProblem],
   );
 
   // three tiles side by side on a tablet, two on a phone: the label and the hint wrap instead of being cut off
@@ -450,6 +546,22 @@ export function ClaimsPart({
         }}
       />
 
+      <PlaceCompDialog target={placing} onClose={() => setPlacing(null)} />
+
+      <RejectReasonDialog
+        open={rejecting !== null}
+        title="Reject this compensation day?"
+        description={
+          rejecting ? `${rejecting.employeeName}, ${placedDayLine(rejecting) ?? kindText(rejecting)}.` : undefined
+        }
+        confirmLabel="Reject"
+        busy={decide.isPending}
+        error={rejectError}
+        onCancel={() => setRejecting(null)}
+        onConfirm={(reason) => void confirmReject(reason)}
+        testIdPrefix="claim-reject"
+      />
+
       <AlertDialog
         open={withdrawing !== null}
         onOpenChange={(isOpen) => !isOpen && !withdraw.isPending && setWithdrawing(null)}
@@ -479,5 +591,73 @@ export function ClaimsPart({
         </AlertDialogContent>
       </AlertDialog>
     </SectionCard>
+  );
+}
+
+/**
+ * HR's step on a date HR chose, once the Department Head has approved it: Approve gives the day (one click), Reject asks
+ * for the reason first (the shared dialog, opened by the list).
+ */
+function PlacementDecision({
+  claim,
+  onReject,
+  onRejectOpen,
+}: {
+  claim: CompensationClaim;
+  onReject: (claim: CompensationClaim) => void;
+  onRejectOpen: () => void;
+}) {
+  const { toast } = useToast();
+  const decide = useDecidePlacement();
+  const once = useSingleFlight();
+  const approve = () =>
+    once(async () => {
+      try {
+        await decide.mutateAsync({ id: claim.id, status: "approved" });
+        toast({
+          title: "Compensation day approved",
+          description: `${claim.employeeName}: ${placedDayLine(claim) ?? kindText(claim)}.`,
+        });
+      } catch (err) {
+        toast({ title: "Could not approve it", description: errorMessage(err, "Try again."), variant: "destructive" });
+      }
+    });
+  return (
+    <>
+      {hrMayApprovePlacement(claim) && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-11 border-teal-200 text-teal-700 hover:bg-teal-50 sm:h-8"
+          disabled={decide.isPending}
+          aria-label={`Approve the compensation day of ${claim.employeeName}`}
+          title="Approve: HR's step after the Department Head; the day is given"
+          onClick={() => void approve()}
+          data-testid={`claim-approve-${claim.id}`}
+        >
+          {decide.isPending && <Loader2 size={13} className="mr-1 animate-spin" aria-hidden />}
+          Approve
+        </Button>
+      )}
+      {hrMayRejectPlacement(claim) && (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-11 text-rose-600 sm:h-8"
+          disabled={decide.isPending}
+          aria-label={`Reject the compensation day of ${claim.employeeName}`}
+          title="Reject: a reason is required; the employee sees it"
+          onClick={() => {
+            onRejectOpen();
+            onReject(claim);
+          }}
+          data-testid={`claim-reject-${claim.id}`}
+        >
+          Reject
+        </Button>
+      )}
+    </>
   );
 }

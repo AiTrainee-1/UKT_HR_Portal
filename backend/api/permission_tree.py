@@ -742,6 +742,11 @@ _REQUEST_KINDS = (
     ("attendance_correction", "Attendance correction", "Attendance edit requests in the list."),
     ("holiday_work", "Holiday / Sunday work", "Holiday / Sunday work claims in the list."),
     ("birthday_compensation", "Birthday Compensation", "Birthday Compensation days placed in the birthday month."),
+    (
+        "compensation_placement",
+        "Compensation days (chosen dates)",
+        "Compensation days HR placed on a chosen date, after the Department Head's approval.",
+    ),
     ("resignation", "Resignation", "Resignations in the list."),
     ("advance", "Advance", "Advance requests in the list."),
 )
@@ -1155,8 +1160,10 @@ COMPENSATION = N(
                 "Claims raised.",
                 routes=[_comp("compensation-leave/holiday-work/claims")],
                 # every claim kind (2026-11-19): the list, HR raising one on an employee's behalf (one path for both, so
-                # raising from the Raise / Birthdays / OT tabs needs Edit here too) and withdrawing compensation/claims/<id>
-                api=["compensation/claims"],
+                # raising from the Raise / Birthdays / OT tabs needs Edit here too) and withdrawing compensation/claims/<id>;
+                # compensation/placements: HR choosing the date a compensation is taken on, on a calendar (2026-11-28;
+                # from the OT, Raise, Claims and Balance tabs alike, so Edit here; HR's decision: compensation_placement)
+                api=["compensation/claims", "compensation/placements"],
                 # the old holiday-work claim routes (the list / raise, and one claim's GET / DELETE) are claims too: the
                 # same key, so a role with View here cannot raise or withdraw through them (security review 2026-11-19)
                 apiPatterns=[r"compensation/holiday-work(/\d+)?"],

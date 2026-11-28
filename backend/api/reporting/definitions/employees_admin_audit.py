@@ -37,6 +37,8 @@ AUDIT_MODULES = (
     ("compensation", "Compensation"),
     ("compensation_settings", "Compensation settings"),
     ("production_shift_rules", "Production shift rules"),
+    # Manage Shifts -> production special shifts (production_special_shifts_views.py, 2026-11-16)
+    ("production_special_shift", "Production special shifts"),
     ("shared_endpoints", "Endpoint sharing"),
     ("sms_control", "SMS control"),
     ("payroll", "Payroll"),
